@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import logging
 
-from . import reminders
+from . import discovery, reminders
+from .config import get_settings
 
 logger = logging.getLogger("scheduler")
 
@@ -35,6 +36,14 @@ def tick() -> int:
     return n
 
 
+def discovery_tick() -> int:
+    """Poll tracked job boards once and alert on good new matches."""
+    n = discovery.run_all()
+    if n:
+        logger.info("discovery sent %d new alert(s)", n)
+    return n
+
+
 def start_scheduler():
     """Start the background poll loop. No-op if already running or unavailable."""
     global _scheduler
@@ -50,9 +59,14 @@ def start_scheduler():
         return None
     sched = BackgroundScheduler(daemon=True)
     sched.add_job(tick, "interval", seconds=POLL_SECONDS, id="reminder_tick")
+    job_poll = get_settings().job_poll_seconds
+    sched.add_job(discovery_tick, "interval", seconds=job_poll, id="discovery_tick")
     sched.start()
     _scheduler = sched
-    logger.info("reminder scheduler started (every %ds)", POLL_SECONDS)
+    logger.info(
+        "scheduler started (reminders every %ds, discovery every %ds)",
+        POLL_SECONDS, job_poll,
+    )
     return sched
 
 

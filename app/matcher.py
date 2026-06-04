@@ -1,0 +1,176 @@
+"""Decide which new postings are worth alerting about.
+
+Two stages, cheapest first (the cost-control rule):
+
+  1. ``prefilter`` — free. Drops postings whose title/description share no term
+     with the profile's roles/keywords, so the LLM only ever sees plausible hits.
+  2. ``score`` — assigns each survivor a 0..1 fit score. Uses Claude (Haiku) when
+     a key is configured, batching every posting into ONE call; otherwise (and on
+     any API error, and in tests) a free keyword/location heuristic. The heuristic
+     is the path CI exercises, mirroring the router's design.
+
+An empty profile scores a neutral 0.5 — below the default alert threshold — so
+the user gets no spam until they say what they want.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import re
+import sqlite3
+
+from .config import get_settings
+from .jobsources import JobPosting
+from .profile import profile_text
+from .ratelimit import TokenBucket
+
+logger = logging.getLogger("matcher")
+
+_SPLIT = re.compile(r"[,/]| and ", re.IGNORECASE)
+# Description chars sent to the LLM per posting — enough signal, few tokens.
+_DESC_CHARS = 300
+
+
+def _terms(profile: sqlite3.Row | None) -> set[str]:
+    if profile is None:
+        return set()
+    raw = f"{profile['roles'] or ''},{profile['keywords'] or ''}"
+    return {t.strip().lower() for t in _SPLIT.split(raw) if t.strip()}
+
+
+def _locations(profile: sqlite3.Row | None) -> list[str]:
+    if profile is None or not (profile["locations"] or "").strip():
+        return []
+    return [t.strip().lower() for t in _SPLIT.split(profile["locations"]) if t.strip()]
+
+
+def _haystack(p: JobPosting) -> str:
+    return f"{p.title} {p.location} {p.description}".lower()
+
+
+def prefilter(postings: list[JobPosting], profile: sqlite3.Row | None) -> list[JobPosting]:
+    """Free gate: keep postings that mention any role/keyword term.
+
+    With no terms configured we can't cheaply tell signal from noise, so we pass
+    everything through to scoring (which will return a neutral score).
+    """
+    terms = _terms(profile)
+    if not terms:
+        return list(postings)
+    return [p for p in postings if any(t in _haystack(p) for t in terms)]
+
+
+# ---------------------------------------------------------------------------
+# Scoring
+# ---------------------------------------------------------------------------
+
+def _heuristic_score(p: JobPosting, terms: set[str], locations: list[str]) -> float:
+    text = _haystack(p)
+    if not terms:
+        base = 0.5
+    else:
+        matched = sum(1 for t in terms if t in text)
+        base = matched / len(terms)
+    if locations:
+        if any(loc in text for loc in locations):
+            base += 0.15
+        elif "remote" in text:
+            base += 0.05
+        else:
+            base -= 0.15
+    return round(max(0.0, min(1.0, base)), 3)
+
+
+_SCORE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "scores": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "score": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": ["id", "score"],
+            },
+        }
+    },
+    "required": ["scores"],
+}
+
+_llm_client = None
+_llm_limiter: TokenBucket | None = None
+
+
+def _get_llm():
+    global _llm_client, _llm_limiter
+    if _llm_client is None:
+        import anthropic  # lazy: offline/test paths never import it
+
+        s = get_settings()
+        _llm_client = anthropic.Anthropic(api_key=s.anthropic_api_key)
+        _llm_limiter = TokenBucket(s.llm_rate_limit_per_min)
+    return _llm_client, _llm_limiter
+
+
+def _llm_score(postings: list[JobPosting], profile_block: str) -> dict[int, float]:
+    """Score every posting in one Claude call. Returns {index: score}. Raises on failure."""
+    client, limiter = _get_llm()
+    if not limiter.allow():
+        raise RuntimeError("llm rate limited")
+    listing = "\n".join(
+        f"[{i}] {p.title} — {p.location or 'n/a'} | {p.description[:_DESC_CHARS]}"
+        for i, p in enumerate(postings)
+    )
+    system = (
+        "You rate how well each job posting fits a candidate. Return a score from "
+        "0 (irrelevant) to 1 (excellent fit) for every posting id. Weigh role/title "
+        "match most, then seniority, then location preference."
+    )
+    user = f"CANDIDATE PROFILE:\n{profile_block}\n\nPOSTINGS:\n{listing}"
+    resp = client.messages.create(
+        model=get_settings().anthropic_model,
+        max_tokens=min(1024, 40 + 12 * len(postings)),
+        system=system,
+        messages=[{"role": "user", "content": user}],
+        output_config={"format": {"type": "json_schema", "schema": _SCORE_SCHEMA}},
+    )
+    payload = next(b.text for b in resp.content if b.type == "text")
+    out: dict[int, float] = {}
+    for item in json.loads(payload).get("scores", []):
+        try:
+            out[int(item["id"])] = max(0.0, min(1.0, float(item["score"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def score(
+    postings: list[JobPosting],
+    profile: sqlite3.Row | None,
+    *,
+    llm=None,
+) -> list[tuple[JobPosting, float]]:
+    """Return [(posting, score)] for each posting.
+
+    Uses the LLM when configured; falls back to the free heuristic on no-key,
+    rate-limit, or any API error. ``llm`` injects a scorer in tests.
+    """
+    if not postings:
+        return []
+    terms, locations = _terms(profile), _locations(profile)
+    use_llm = llm is not None or get_settings().use_llm_router
+    if use_llm:
+        try:
+            scorer = llm or _llm_score
+            llm_scores = scorer(postings, profile_text(profile))
+            return [
+                (p, round(float(llm_scores[i]), 3))
+                if i in llm_scores
+                else (p, _heuristic_score(p, terms, locations))
+                for i, p in enumerate(postings)
+            ]
+        except Exception:  # noqa: BLE001 — never block discovery on the LLM
+            logger.warning("LLM scoring failed; using heuristic", exc_info=True)
+    return [(p, _heuristic_score(p, terms, locations)) for p in postings]

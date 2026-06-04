@@ -74,6 +74,17 @@ def health() -> dict:
         from . import apollo
 
         info["apollo"] = apollo.usage()
+
+    from . import discovery, jobstore
+
+    info["discovery"] = {
+        "sources_enabled": s.job_sources,
+        "tracked_boards": jobstore.tracked_count(),
+        "poll_seconds": s.job_poll_seconds,
+        "relevance_threshold": s.job_relevance_threshold,
+        "last_tick": discovery.last_tick_at,
+        "postings": jobstore.global_counts_by_status(),
+    }
     return info
 
 

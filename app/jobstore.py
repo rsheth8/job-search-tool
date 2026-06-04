@@ -142,3 +142,31 @@ def counts_by_status(user_id: str) -> dict[str, int]:
             (user_id,),
         ).fetchall()
     return {r["status"]: r["n"] for r in rows}
+
+
+# ---------------------------------------------------------------------------
+# Cross-user helpers (background loop + /health)
+# ---------------------------------------------------------------------------
+
+def all_tracked_users() -> list[str]:
+    """Distinct users with at least one tracked board (drives the poll loop)."""
+    with connect() as conn:
+        return [
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT user_id FROM tracked_companies ORDER BY user_id"
+            )
+        ]
+
+
+def tracked_count() -> int:
+    with connect() as conn:
+        return conn.execute("SELECT COUNT(*) FROM tracked_companies").fetchone()[0]
+
+
+def global_counts_by_status() -> dict[str, int]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) AS n FROM job_postings GROUP BY status"
+        ).fetchall()
+    return {r["status"]: r["n"] for r in rows}

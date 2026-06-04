@@ -22,7 +22,7 @@ def temp_db(monkeypatch):
     monkeypatch.setattr("dotenv.dotenv_values", lambda *a, **k: {})
 
     # Reset cached settings + router singleton so env changes take effect.
-    from app import apollo, config, reminders, router
+    from app import apollo, config, matcher, reminders, router
 
     config.get_settings.cache_clear()
     router._router_singleton = None
@@ -30,6 +30,8 @@ def temp_db(monkeypatch):
     apollo._client_singleton = None  # nor an Apollo client
     apollo._last_discovery_issue = None
     apollo.reset_for_tests()
+    matcher._llm_client = None  # nor a matcher LLM client/limiter
+    matcher._llm_limiter = None
 
     from app.db import init_db
 
