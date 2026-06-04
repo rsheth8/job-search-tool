@@ -89,6 +89,31 @@ def test_fetch_errors_degrade_to_empty_without_burning_budget(monkeypatch):
     assert aggregator._calls_today() == 0  # a failed call isn't counted
 
 
+def test_fetch_never_logs_the_api_key(monkeypatch, caplog):
+    """A 401 (or any HTTP error) must not leak the api_key into logs.
+
+    SerpApi puts the key in the request URL, so logging the raw exception would
+    expose it — regression guard for that.
+    """
+    import logging
+
+    import httpx
+
+    _activate(monkeypatch, AGGREGATOR_API_KEY="SUPERSECRETKEY123")
+    req = httpx.Request(
+        "GET", "https://serpapi.com/search?engine=google_jobs&api_key=SUPERSECRETKEY123"
+    )
+    resp = httpx.Response(401, json={"error": "Invalid API key."}, request=req)
+    monkeypatch.setattr("httpx.get", lambda *a, **k: resp)
+
+    with caplog.at_level(logging.WARNING, logger="jobsources"):
+        assert aggregator.fetch("software engineer") == []
+
+    assert "SUPERSECRETKEY123" not in caplog.text  # key never leaks
+    assert "401" in caplog.text and "Invalid API key" in caplog.text  # but it's diagnosable
+    assert aggregator.usage()["errors"] == 1
+
+
 def test_fetch_caps_results(monkeypatch):
     _activate(monkeypatch, AGGREGATOR_RESULTS_PER_CALL=1)
     payload = {"jobs_results": [

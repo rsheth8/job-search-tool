@@ -102,6 +102,26 @@ def usage() -> dict:
     }
 
 
+def _safe_error(exc: Exception) -> str:
+    """A log-safe description of a fetch failure that never contains the api_key.
+
+    SerpApi authenticates via an ``api_key`` query param, so the request URL (and
+    thus the raw httpx exception text) embeds the secret. We surface only the HTTP
+    status + SerpApi's JSON ``error`` message, which is descriptive but key-free.
+    """
+    import httpx
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        try:
+            body = exc.response.json()
+            detail = body.get("error") if isinstance(body, dict) else None
+        except Exception:  # noqa: BLE001
+            detail = None
+        return f"HTTP {status}" + (f" — {detail}" if detail else "")
+    return type(exc).__name__
+
+
 # ---------------------------------------------------------------------------
 # Parsing (pure — fixture-tested)
 # ---------------------------------------------------------------------------
@@ -178,9 +198,11 @@ def fetch(board_token: str) -> list[JobPosting]:
         resp = httpx.get(_API_URL, params=params, timeout=_TIMEOUT_SECONDS)
         resp.raise_for_status()
         data = resp.json()
-    except Exception:  # noqa: BLE001 — degrade to [] on any error
+    except Exception as exc:  # noqa: BLE001 — degrade to [] on any error
         _usage["errors"] += 1
-        logger.warning("aggregator fetch failed for %r", query, exc_info=True)
+        # NEVER log the raw exception/URL: SerpApi carries the api_key in the
+        # query string, so exc_info / the request URL would leak the secret.
+        logger.warning("aggregator fetch failed for %r: %s", query, _safe_error(exc))
         return []
 
     _record_call(query)  # count only billable calls that actually completed
