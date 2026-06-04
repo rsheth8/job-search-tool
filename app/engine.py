@@ -765,8 +765,11 @@ def _do_track(user_id: str, p: ParsedMessage, raw: str) -> str:
     )
     if row is None:
         return f"Already tracking {board['company_name']}."
-    return (f"✅ Tracking {board['company_name']} ({board['source']}, "
-            f"{board['count']} open roles). I'll alert you on new matches.")
+    seeded = discovery_mod.seed_board(
+        user_id, board["source"], board["board_token"], board["company_name"]
+    )
+    return (f"✅ Tracking {board['company_name']} ({board['source']}). Baselined "
+            f"{seeded} current roles — I'll alert you on NEW matches from here.")
 
 
 def _do_profile(user_id: str, p: ParsedMessage, raw: str) -> str:

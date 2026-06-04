@@ -68,6 +68,22 @@ def build_alert_body(posting: JobPosting, score: float, posting_id: int) -> str:
     return "\n".join(lines)
 
 
+def seed_board(user_id: str, source: str, board_token: str, company_name: str | None) -> int:
+    """Record a board's CURRENT postings as already-seen (status 'seeded', no
+    alerts, no scoring), so the user is only alerted on roles that appear AFTER
+    they start tracking — not the entire existing backlog. Returns count seeded.
+    """
+    n = 0
+    for p in fetch_source(source, board_token):
+        if not p.external_id or jobstore.posting_exists(user_id, p.source, p.external_id):
+            continue
+        if company_name:
+            p.company = company_name
+        if jobstore.save_posting(user_id, p, relevance_score=None, status="seeded"):
+            n += 1
+    return n
+
+
 def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
     """Run one discovery pass for ``user_id``. Returns the number of alerts sent."""
     boards = jobstore.list_tracked(user_id)

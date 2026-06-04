@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from app import jobstore, profile
+from app import discovery, jobstore, profile
 from app.engine import handle_sms
 from app.intents import Intent
 from app.jobsources import JobPosting
@@ -54,6 +54,7 @@ def test_track_add_list_remove(monkeypatch):
         lambda company: {"source": "greenhouse", "board_token": "stripe",
                          "company_name": "Stripe", "count": 5},
     )
+    monkeypatch.setattr("app.discovery.fetch_source", lambda s, t: [])  # nothing to seed
     reply = handle_sms("u", "track openings at stripe")
     assert "Tracking Stripe" in reply
     assert len(jobstore.list_tracked("u")) == 1
@@ -64,6 +65,35 @@ def test_track_add_list_remove(monkeypatch):
     removed = handle_sms("u", "stop tracking stripe")
     assert "Stopped tracking" in removed
     assert jobstore.list_tracked("u") == []
+
+
+def test_track_baselines_existing_then_alerts_only_new(monkeypatch):
+    feed = [JobPosting("greenhouse", "1", "Security Engineer", "https://x/1",
+                       company="Ramp", description="security cloud")]
+    monkeypatch.setattr(
+        "app.discovery.resolve_board",
+        lambda c: {"source": "greenhouse", "board_token": "ramp",
+                   "company_name": "Ramp", "count": 1},
+    )
+    monkeypatch.setattr("app.discovery.fetch_source", lambda s, t: feed)
+    profile.set_profile("u", roles="security engineer", keywords="security, cloud")
+
+    reply = handle_sms("u", "track openings at ramp")
+    assert "Baselined 1" in reply
+    # The existing role is seeded (seen), NOT alerted — no first-track spam.
+    assert jobstore.counts_by_status("u").get("seeded") == 1
+
+    class Cap:
+        def __init__(self): self.sent = []
+        def send(self, u, b): self.sent.append(b)
+
+    cap = Cap()
+    assert discovery.tick("u", sender=cap) == 0  # nothing new since baseline
+
+    # A genuinely new posting appears → it alerts.
+    feed.append(JobPosting("greenhouse", "2", "Cloud Security Engineer", "https://x/2",
+                           company="Ramp", description="security cloud"))
+    assert discovery.tick("u", sender=cap) == 1
 
 
 def test_track_unknown_company(monkeypatch):
