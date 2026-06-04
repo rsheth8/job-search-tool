@@ -21,6 +21,7 @@ from . import context as ctx
 from . import conversation as convo
 from . import deadlines as deadlines_mod
 from . import discovery as discovery_mod
+from . import jobs_review
 from . import jobstore
 from . import outreach
 from . import profile as profile_mod
@@ -74,9 +75,12 @@ MENU = (
     "\n"
     "▸ DISCOVER JOBS\n"
     "  \"I'm looking for new grad SWE roles, remote or NYC\" — set what to match\n"
-    "  \"track openings at stripe\" — watch a company's board (I'll alert on new fits)\n"
+    "  \"track openings at stripe\" — watch one company's board\n"
+    "  \"track feed hn-hiring\" — optional extra RSS feed\n"
     "  \"what am I tracking\" · \"stop tracking stripe\" — manage tracked boards\n"
-    "  \"any new jobs\" — browse the latest matches I've found\n"
+    "  (Set your profile once — I'll also scan RSS, job search, and many ATS boards)\n"
+    "  \"any new jobs\" — quick list of queued matches\n"
+    "  \"review jobs\" — go through new matches one by one (skip / apply / stop)\n"
     "  \"apply 2\" — get the link + a drafted blurb for posting #2 (I log it)\n"
     "  \"dismiss 2\" · \"snooze 2 for a week\" — clear a posting you're not into\n"
     "  \"only show 80%+ matches\" · \"be less picky\" — tune match strictness\n"
@@ -122,6 +126,20 @@ def handle_sms(user_id: str, text: str) -> str:
     pending = convo.get_pending(user_id)
     actions = get_router().parse_actions(text)
     primary = actions[0] if actions else None
+
+    if pending.active and pending.intent == Intent.JOBS_REVIEW.value:
+        # skip / apply / apply N / stop / dismiss all stay in the walkthrough;
+        # a confident, clearly-different command (tune, dismiss N, track, …)
+        # breaks out so the user isn't trapped mid-review.
+        breakout = (
+            primary is not None
+            and primary.intent != Intent.APPLY_JOB  # "apply N" is a review control
+            and _looks_like_new_command(primary, text, pending)
+        )
+        if not breakout:
+            return jobs_review.continue_review(user_id, pending, text)
+        convo.clear_pending(user_id)
+        pending = convo.get_pending(user_id)  # now inactive — fall through to dispatch
 
     if pending.active:
         if convo.is_cancel(text):
@@ -177,9 +195,9 @@ def _looks_like_new_command(p: ParsedMessage, text: str, pending: Pending) -> bo
         return False
     if (
         p.intent in (Intent.LIST, Intent.QUERY, Intent.STATS, Intent.DEADLINE,
-                     Intent.CHECK, Intent.UNDO, Intent.JOBS, Intent.TRACK,
-                     Intent.PROFILE, Intent.APPLY_JOB, Intent.DISMISS_JOB,
-                     Intent.SNOOZE_JOB, Intent.TUNE)
+                     Intent.CHECK, Intent.UNDO, Intent.JOBS, Intent.JOBS_REVIEW,
+                     Intent.TRACK, Intent.PROFILE, Intent.APPLY_JOB,
+                     Intent.DISMISS_JOB, Intent.SNOOZE_JOB, Intent.TUNE)
         and p.confidence >= 0.7
     ):
         return True
@@ -226,6 +244,8 @@ def _start(user_id: str, p: ParsedMessage, raw: str) -> str:
         return _do_track(user_id, p, raw)
     if p.intent == Intent.JOBS:
         return _do_jobs(user_id)
+    if p.intent == Intent.JOBS_REVIEW:
+        return jobs_review.start_review(user_id)
     if p.intent == Intent.PROFILE:
         return _do_profile(user_id, p, raw)
     if p.intent == Intent.APPLY_JOB:
@@ -733,13 +753,18 @@ def _do_query(user_id: str, p: ParsedMessage, memory: dict) -> str:
 
 def _do_jobs(user_id: str) -> str:
     jobstore.wake_snoozed(user_id, _now_utc().isoformat())  # resurface expired snoozes
-    posts = jobstore.list_postings(user_id, statuses=("alerted", "new"), limit=10)
+    posts = jobstore.list_postings(user_id, statuses=("queued", "alerted"), limit=10)
+    counts = jobstore.counts_by_status(user_id)
+    total = counts.get("queued", 0) + counts.get("alerted", 0)
     if not posts:
-        if not jobstore.list_tracked(user_id):
-            return ("You're not tracking any boards yet. Try "
-                    "'track openings at <company>', then 'show my profile' to tune matches.")
-        return "No new matching jobs yet — I'll ping you the moment one drops."
-    lines = ["🆕 Newest matching jobs:"]
+        if not jobstore.list_tracked(user_id) and not profile_mod.has_profile(user_id):
+            return ("You're not tracking anything yet. Set your profile (e.g. "
+                    "\"looking for new grad SWE roles, remote\") or "
+                    "'track openings at <company>'.")
+        return "No jobs in your queue yet — I'll send a digest when new matches land."
+    lines = [f"🆕 {total} match(es) in your queue — top {len(posts)}:"]
+    if total > len(posts):
+        lines.append("(say 'review jobs' to walk through them one by one)")
     for p in posts:
         score = p["relevance_score"]
         pct = f" · {round(score * 100)}%" if score is not None else ""
@@ -763,7 +788,7 @@ def _do_track(user_id: str, p: ParsedMessage, raw: str) -> str:
             lines.append(f"• {name} ({b['source']}) — {fresh}, {s['total']} seen")
         # Overall posting counts + the active match threshold.
         counts = jobstore.counts_by_status(user_id)
-        alerted = counts.get("alerted", 0) + counts.get("new", 0)
+        alerted = counts.get("queued", 0) + counts.get("alerted", 0)
         applied = counts.get("applied", 0)
         default = get_settings().job_relevance_threshold
         thresh = profile_mod.effective_threshold(profile_mod.get_profile(user_id), default)
@@ -773,6 +798,22 @@ def _do_track(user_id: str, p: ParsedMessage, raw: str) -> str:
         return "\n".join(lines) + tail
 
     company = p.company
+    if action == "feed":
+        if not company:
+            from .jobsources import rss as rss_mod
+            ids = ", ".join(rss_mod.list_feed_ids())
+            return f"Which feed? e.g. 'track feed hn-hiring'. Available: {ids}"
+        meta = discovery_mod.resolve_feed(company)
+        if meta is None:
+            return f"Unknown feed '{company}'. Try hn-hiring or remoteok."
+        row = jobstore.add_tracked_company(
+            user_id, "rss", meta["feed_id"], meta["label"]
+        )
+        if row is None:
+            return f"Already tracking feed {meta['label']}."
+        return (f"✅ Tracking RSS feed {meta['label']}. "
+                "Wide discovery also runs default feeds when your profile is set.")
+
     if not company:
         return "Which company should I track? e.g. 'track openings at Stripe'."
 
@@ -811,9 +852,19 @@ def _do_profile(user_id: str, p: ParsedMessage, raw: str) -> str:
         return ("Tell me the roles you want, e.g. "
                 "\"looking for new grad SWE roles, remote or NYC\".")
     profile_mod.set_profile(user_id, roles=roles, keywords=roles, locations=locations or None)
+    from . import wide_discovery
+
+    wide_discovery.ensure_default_feeds_tracked(user_id)
     saved = profile_mod.profile_text(profile_mod.get_profile(user_id))
-    return ("Got it — I'll match new jobs against:\n" + saved +
-            "\nNow track companies with 'track openings at <company>'.")
+    wide = wide_discovery.describe_wide_status()
+    msg = "Got it — I'll match new jobs against:\n" + saved
+    if wide:
+        msg += f"\n\n🔎 Wide discovery on: {wide}"
+    msg += (
+        "\n\nYou don't need a company list — I'll poll feeds and rotate through "
+        "many job boards. Optional: 'track openings at <company>' for favorites."
+    )
+    return msg
 
 
 def _resolve_posting(user_id: str, p: ParsedMessage):

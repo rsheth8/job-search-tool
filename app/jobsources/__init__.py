@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 
-from . import aggregator, ashby, greenhouse, lever, rss
+from . import aggregator, ashby, directory, greenhouse, lever, rss
 from .base import JobPosting
 
 logger = logging.getLogger("jobsources")
@@ -25,12 +25,13 @@ SOURCES = {
     "ashby": ashby.fetch,
     "rss": rss.fetch,
     "aggregator": aggregator.fetch,
+    "directory": directory.fetch,
 }
 
-# Sources whose ``board_token`` is a URL/search query, not a per-company slug.
-# ``resolve_board`` must never slug-probe these — for the paid aggregator that
-# would also burn budget on guesses.
-NON_BOARD_SOURCES = frozenset({"rss", "aggregator"})
+# Sources whose ``board_token`` is a URL/search query/cursor, not a per-company
+# slug. ``resolve_board`` must never slug-probe these — for the paid aggregator
+# that would also burn budget on guesses.
+NON_BOARD_SOURCES = frozenset({"rss", "aggregator", "directory"})
 
 
 def fetch_source(source: str, board_token: str) -> list[JobPosting]:

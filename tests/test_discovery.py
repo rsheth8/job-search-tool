@@ -31,7 +31,7 @@ def _setup(monkeypatch):
                         lambda source, token: _board_postings() if token == "acme" else [])
 
 
-def test_tick_alerts_strong_match_only(monkeypatch):
+def test_tick_digest_mode_strong_match_only(monkeypatch):
     _setup(monkeypatch)
     sender = FakeSender()
     alerts = discovery.tick("u", sender=sender)
@@ -40,12 +40,29 @@ def test_tick_alerts_strong_match_only(monkeypatch):
     assert len(sender.sent) == 1
     user, body = sender.sent[0]
     assert user == "u"
+    assert "1 new job match" in body
     assert "Software Engineer" in body and "100%" in body
+    assert "review jobs" in body
 
     statuses = {r["external_id"]: r["status"] for r in jobstore.list_postings("u")}
-    assert statuses["1"] == "alerted"      # strong match alerted
-    assert statuses["2"] == "new"          # passed prefilter, below threshold, saved
-    assert "3" not in statuses             # prefiltered out, never saved
+    assert statuses["1"] == "queued"
+    assert statuses["2"] == "new"
+    assert "3" not in statuses
+
+
+def test_tick_instant_mode_one_message_per_job(monkeypatch):
+    _setup(monkeypatch)
+    monkeypatch.setenv("JOB_ALERT_MODE", "instant")
+    from app import config
+
+    config.get_settings.cache_clear()
+    sender = FakeSender()
+    alerts = discovery.tick("u", sender=sender)
+    assert alerts == 1
+    assert len(sender.sent) == 1
+    assert "#" in sender.sent[0][1]
+    statuses = {r["external_id"]: r["status"] for r in jobstore.list_postings("u")}
+    assert statuses["1"] == "alerted"
 
 
 def test_tick_dedupes_on_second_run(monkeypatch):

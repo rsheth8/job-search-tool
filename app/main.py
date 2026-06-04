@@ -77,18 +77,22 @@ def health() -> dict:
 
     from . import discovery, jobstore
 
+    from .jobsources import directory as dir_src
+
     info["discovery"] = {
         "sources_enabled": s.job_sources,
+        "alert_mode": s.job_alert_mode_normalized,
+        "wide_rss": s.job_wide_rss_enabled,
+        "wide_directory": s.job_wide_directory_enabled,
+        "wide_aggregator": s.job_wide_aggregator_enabled,
+        "serpapi": s.serpapi_enabled,
+        "directory_boards": dir_src.board_count(),
         "tracked_boards": jobstore.tracked_count(),
         "poll_seconds": s.job_poll_seconds,
         "relevance_threshold": s.job_relevance_threshold,
         "last_tick": discovery.last_tick_at,
         "postings": jobstore.global_counts_by_status(),
     }
-    if s.aggregator_active:
-        from .jobsources import aggregator
-
-        info["aggregator"] = aggregator.usage()
     return info
 
 

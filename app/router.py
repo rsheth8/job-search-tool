@@ -95,6 +95,7 @@ _BULK_VERB = re.compile(r"\b(reject|rejected|ghost|ghosted|mark|move|set|withdra
 # QUERY.
 _TRACK_RE = re.compile(r"\b(untrack|unwatch|track|watch|monitor|tracking|tracked)\b", re.I)
 _TRACK_REMOVE_RE = re.compile(r"\b(untrack|unwatch)\b|\bstop (tracking|watching)\b", re.I)
+_TRACK_FEED_RE = re.compile(r"\btrack\s+feed\s+([\w-]+)", re.I)
 _TRACK_LIST_RE = re.compile(
     r"\b(what|which|list|show)\b[^.?!]*\btrack(?:ing|ed)\b"
     r"|\btracked (companies|boards|jobs)\b"
@@ -103,6 +104,13 @@ _TRACK_LIST_RE = re.compile(
 )
 # JOBS: browse postings discovery surfaced. Requires discovery-y phrasing so a
 # stray "job" in "applied to a job" doesn't hijack it (APPLY guard also applies).
+_JOBS_REVIEW_RE = re.compile(
+    r"\breview\b[^.?!]*\b(jobs?|matches?|queue|roles?)\b"
+    r"|\b(go through|walk through|start reviewing)\b[^.?!]*\bjobs?\b"
+    r"|\b(let'?s|start)\b[^.?!]*\b(go through|review)\b[^.?!]*\bjobs?\b"
+    r"|\bgo through (the )?(new )?(jobs?|matches?|queue)\b",
+    re.I,
+)
 _JOBS_RE = re.compile(
     r"\b(openings?|postings?)\b"
     r"|\bnew (jobs?|roles?|gigs?)\b"
@@ -509,6 +517,14 @@ class HeuristicRouter:
         if _TRACK_RE.search(low):
             if _TRACK_LIST_RE.search(low):
                 return ParsedMessage(intent=Intent.TRACK, message="list", confidence=0.85)
+            feed_m = _TRACK_FEED_RE.search(low)
+            if feed_m:
+                return ParsedMessage(
+                    intent=Intent.TRACK,
+                    company=feed_m.group(1).lower(),
+                    message="feed",
+                    confidence=0.9,
+                )
             company = _parse_track_company(low)
             remove = bool(_TRACK_REMOVE_RE.search(low))
             return ParsedMessage(
@@ -521,6 +537,9 @@ class HeuristicRouter:
             return ParsedMessage(intent=Intent.PROFILE, message=raw.strip(), confidence=0.8)
         if _PROFILE_SHOW_RE.search(low):
             return ParsedMessage(intent=Intent.PROFILE, message=None, confidence=0.8)
+
+        if _JOBS_REVIEW_RE.search(low) and not _APPLY_RE.search(low):
+            return ParsedMessage(intent=Intent.JOBS_REVIEW, confidence=0.9)
 
         if _JOBS_RE.search(low) and not _APPLY_RE.search(low):
             return ParsedMessage(intent=Intent.JOBS, confidence=0.85)
@@ -857,6 +876,8 @@ def _build_system_prompt() -> str:
         "'remove' in `message`; for 'what am I tracking' put 'list' in `message`.\n"
         "- JOBS: user wants to browse the new job postings the assistant has found "
         "(not their applications). No entities.\n"
+        "- JOBS_REVIEW: user wants to walk through queued job matches one at a time "
+        "('review jobs', 'let's go through them', 'go through the queue'). No entities.\n"
         "- PROFILE: user states what roles/locations they're after (set) or asks "
         "to see their profile (show). For a set, put the full criteria in `message`; "
         "for a show, leave `message` null.\n"
