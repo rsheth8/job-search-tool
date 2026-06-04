@@ -1,4 +1,4 @@
-# Handoff — Job Discovery (Phase 1 complete, Phase 2 next)
+# Handoff — Job Discovery (Phases 1–3 complete, Phase 4 next)
 
 > For a fresh Claude Code session rooted in `/Users/rahilsheth/Documents/job-search-tool`.
 > Companion to `handoff.md` (the pre-discovery engineering doc — still accurate for
@@ -7,9 +7,11 @@
 ## TL;DR
 
 The conversational tracker can now **discover jobs and alert you on Slack** when new
-ones drop — not just log apps you tell it about. Phase 1 is **built, tested
-(274 passing), and verified end-to-end against live job boards**. Next up: **Phase 2
-— assisted apply.**
+ones drop — not just log apps you tell it about — **assist you in applying**
+(`apply <#>` → link + drafted blurb, logged as Applied, no auto-submit), and
+optionally **search the whole web via a paid aggregator** (profile-driven, off by
+default, budget-capped). Phases 1–3 are **built and tested (298 passing)**; Phase 1
+was verified end-to-end against live job boards. Next up: **Phase 4 — LinkedIn.**
 
 ## Prereqs (read first)
 
@@ -73,31 +75,74 @@ per tick; dedupe means score/alert once; `$0` with no key (heuristic).
 # /health → "discovery" block (sources, tracked boards, last tick, posting counts).
 ```
 
-## Phase 2 — assisted apply (DO THIS NEXT)
+## Phase 2 — assisted apply (DONE, 2026-06-04)
 
-Goal: from Slack, `apply <#>` (the alert already prints `#<id>`) → reply with the apply
-link + pre-drafted answers (from the profile), and log it as Applied. **No auto-submit.**
+From Slack: `apply <#>` (the alert prints `#<id>`) or `apply to the <company> one` →
+reply with the apply link + a drafted "why I'm a fit" blurb, log it as **Applied**,
+mark the posting `applied`. **No auto-submit** — the user pastes the draft themselves.
 
-Concrete steps:
-1. **Intent:** add `APPLY_JOB` to `app/intents.py`. Heuristic in `router.py`: match
-   `apply <n>` / `apply to the <company> one` (capture the posting id in `message` or a new
-   field; simplest: put the integer id in `message`). Add a Claude few-shot.
-2. **Engine `_do_apply_job(user_id, p)`:** `jobstore.get_posting(user_id, id)` → if found,
-   draft answers with Claude reusing the `app/outreach.draft_outreach()` pattern + the
-   profile (resume_summary); reply with `posting.url` + the draft. Then
-   `store.create_application(user_id, posting.company, posting.title, source="discovery")`
-   and `jobstore.mark_posting_status(id, "applied")`. Keep a heuristic/no-key fallback that
-   still returns the link + a templated note (never block the user).
-3. **Source:** add `app/jobsources/rss.py` (RSS / HN "Who is hiring") + register in
-   `SOURCES`; pure `_parse()` + fixture test.
-4. **Tests:** mirror `tests/test_jobs_intents.py` — route `apply 2`, `_do_apply_job` logs an
-   application + flips posting to `applied`, draft present; RSS `_parse` on a fixture.
+What shipped:
+1. **Intent:** `APPLY_JOB` in `app/intents.py`.
+2. **Router** (`app/router.py`): `_APPLY_JOB_RE` matches `apply 2` / `apply to #5`
+   (numeric id → `message`) and `apply to the <company> one` (→ `company`). Checked
+   *before* the discovery block so it beats generic APPLY; present-tense only, so
+   past-tense "applied to X" stays APPLY (`\bapply\b` never matches "applied").
+   Claude few-shots + intent doc added.
+3. **Drafting** (`app/outreach.py`): `draft_application_answers(company, title,
+   description, profile_row)` — Claude when keyed, else a template built from the
+   profile. Mirrors `draft_outreach` (never hard-fails).
+4. **Engine** (`app/engine.py`): `_do_apply_job` + `_resolve_posting` (by `#id` or
+   company), dispatch in `_start`, nav-interrupt entry, MENU line. Idempotent: a
+   second `apply <#>` on an already-applied posting just re-shows the link.
+5. **Source:** `app/jobsources/rss.py` (RSS 2.0 + Atom), registered in `SOURCES`
+   as `"rss"`. URL token, so it's excluded from `resolve_board` slug auto-detect.
+6. **Tests:** `tests/test_jobs_intents.py` (routing + engine: logs app, flips posting,
+   draft present, unknown-id, by-company, idempotent) and `tests/test_jobsources.py`
+   (RSS item + Atom + garbage). **284 passing.**
 
-## Phase 3 / 4 (deferred, behind flags + budget caps — Apollo-style)
+## Phase 3 — paid aggregator (DONE, 2026-06-04)
 
-- Paid aggregator (Indeed/Google Jobs via SerpApi-style API): `app/jobsources/aggregator.py`,
-  off by default, daily cap.
-- LinkedIn: `app/jobsources/linkedin.py`, off by default.
+A SerpApi-style **Google Jobs** search across the whole web, driven by the user's
+**profile** (not a tracked company board). Off by default; gated + budget-capped
+exactly like the Apollo recruiter lookup.
+
+What shipped:
+1. **Config** (`app/config.py`): `aggregator_api_key`, `aggregator_search_enabled`
+   (off), `aggregator_max_calls_per_day` (10), `aggregator_rate_limit_per_min` (3),
+   `aggregator_results_per_call` (20), `aggregator_location`; property
+   **`aggregator_active`** = flag AND key (both required).
+2. **Source** (`app/jobsources/aggregator.py`): `fetch(query)` — never raises;
+   returns `[]` on disabled / no-key / over-daily-budget / rate-limited / error.
+   Pure `_parse()` (SerpApi `jobs_results` shape; prefers `apply_options[0].link`,
+   falls back to `share_link`; `job_id`→external_id). DB-backed daily cap via new
+   `aggregator_api_calls` table; only **successful** calls are counted. `usage()`
+   for /health, `reset_for_tests()`.
+3. **Registry** (`app/jobsources/__init__.py`): registered as `"aggregator"`, plus
+   **`NON_BOARD_SOURCES = {rss, aggregator}`** — `resolve_board` skips these so it
+   never slug-probes a paid/URL source.
+4. **Discovery** (`app/discovery.py`): `_profile_query(prof)` (roles + "remote"/
+   "in <city>"), `_aggregator_fresh()` woven into `tick` (baselines silently on the
+   user's FIRST aggregator run via `jobstore.has_postings_from_source`, then alerts
+   new). `tick` no longer early-returns when a user has no tracked boards (aggregator
+   can stand alone). `run_all` sweeps `_discovery_users` = tracked users ∪ (when
+   active) `profile.all_profile_users()`.
+5. **/health** (`app/main.py`): `aggregator` block when active.
+6. **Tests:** `tests/test_aggregator.py` (gating, daily cap, error-degrade, result
+   cap, query building, baseline-then-alert, inactive no-op, run_all union) +
+   `tests/test_jobsources.py` aggregator `_parse` cases. conftest neutralizes the
+   key/flag + resets the limiter. **298 passing.**
+
+Notes for whoever runs it live: needs a SerpApi (or compatible) key; set both
+`AGGREGATOR_SEARCH_ENABLED=true` and `AGGREGATOR_API_KEY`. Verify the live
+`jobs_results` shape against `_parse` (it's the one piece not exercised against a
+real response). Alerts reuse the `#<id>` + `apply <#>` Phase-2 path unchanged.
+
+## Phase 4 (deferred, behind flags + budget caps — Apollo-style)
+
+- LinkedIn: `app/jobsources/linkedin.py`, off by default. Same gating/budget shape
+  as the aggregator (`aggregator_active`-style `*_active` property + daily cap +
+  `NON_BOARD_SOURCES` membership). Hardest part is a sanctioned data source —
+  LinkedIn has no free public postings API; likely a paid partner/3rd-party feed.
 
 ## To go always-on (Fly)
 

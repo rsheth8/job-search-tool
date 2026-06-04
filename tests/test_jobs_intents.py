@@ -46,6 +46,25 @@ def test_apply_not_hijacked_by_jobs_keyword():
     assert R.parse("applied to a job at google").intent == Intent.APPLY
 
 
+@pytest.mark.parametrize("text,company,msg", [
+    ("apply 2", None, "2"),
+    ("apply to #5", None, "5"),
+    ("apply to the stripe one", "Stripe", None),
+])
+def test_apply_job_routes(text, company, msg):
+    p = R.parse(text)
+    assert p.intent == Intent.APPLY_JOB
+    assert p.message == msg
+    if company:
+        assert p.company == company
+
+
+def test_past_tense_applied_stays_apply():
+    # "applied …" (past tense, logging an outside job) must NOT become APPLY_JOB.
+    assert R.parse("applied stripe swe").intent == Intent.APPLY
+    assert R.parse("applied to a job at google").intent == Intent.APPLY
+
+
 # --- engine wiring ---------------------------------------------------------
 
 def test_track_add_list_remove(monkeypatch):
@@ -132,3 +151,57 @@ def test_jobs_listing_states(monkeypatch):
     )
     reply = handle_sms("u", "any new jobs")
     assert "Backend Engineer" in reply and "82%" in reply
+
+
+# --- assisted apply (Phase 2) ----------------------------------------------
+
+def test_apply_job_logs_application_and_marks_posting():
+    from app import store
+
+    row = jobstore.save_posting(
+        "u",
+        JobPosting("greenhouse", "1", "Backend Engineer", "https://x/1",
+                   company="Acme", location="Remote", description="python, apis"),
+        relevance_score=0.82, status="alerted",
+    )
+    reply = handle_sms("u", f"apply {row['id']}")
+
+    # Reply hands back the apply link + a draft, and confirms it logged.
+    assert "https://x/1" in reply
+    assert "Backend Engineer" in reply
+    assert "Applied" in reply
+
+    # The application is logged from discovery…
+    apps = store.list_applications("u")
+    assert any(a["company"] == "Acme" and a["source"] == "discovery" for a in apps)
+    # …and the posting flips to 'applied' (so it won't re-alert / re-list).
+    assert jobstore.get_posting("u", row["id"])["status"] == "applied"
+
+
+def test_apply_job_unknown_id():
+    reply = handle_sms("u", "apply 999")
+    assert "don't have job #999" in reply
+
+
+def test_apply_job_by_company():
+    from app import store
+
+    jobstore.save_posting(
+        "u",
+        JobPosting("lever", "9", "Data Engineer", "https://x/9", company="Ramp"),
+        relevance_score=0.7, status="alerted",
+    )
+    reply = handle_sms("u", "apply to the ramp one")
+    assert "https://x/9" in reply
+    assert any(a["company"] == "Ramp" for a in store.list_applications("u"))
+
+
+def test_apply_job_already_applied_is_idempotent_message():
+    row = jobstore.save_posting(
+        "u",
+        JobPosting("greenhouse", "1", "SRE", "https://x/1", company="Acme"),
+        relevance_score=0.9, status="alerted",
+    )
+    handle_sms("u", f"apply {row['id']}")
+    again = handle_sms("u", f"apply {row['id']}")
+    assert "already applied" in again.lower()

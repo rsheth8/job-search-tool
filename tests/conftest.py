@@ -12,6 +12,8 @@ def temp_db(monkeypatch):
     monkeypatch.setenv("DATABASE_PATH", path)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")  # force offline heuristic router
     monkeypatch.setenv("APOLLO_API_KEY", "")  # never hit live Apollo from .env
+    monkeypatch.setenv("AGGREGATOR_API_KEY", "")  # never hit the paid aggregator
+    monkeypatch.setenv("AGGREGATOR_SEARCH_ENABLED", "false")
     # Neutralize live Slack tokens from .env so the webhook tests post unsigned
     # (no real signing secret) and no test ever calls the Slack Web API. Tests
     # that exercise signing/outbound set these explicitly via monkeypatch.
@@ -32,6 +34,9 @@ def temp_db(monkeypatch):
     apollo.reset_for_tests()
     matcher._llm_client = None  # nor a matcher LLM client/limiter
     matcher._llm_limiter = None
+    from app.jobsources import aggregator  # reset paid-aggregator limiter/counters
+
+    aggregator.reset_for_tests()
 
     from app.db import init_db
 

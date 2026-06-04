@@ -85,6 +85,10 @@ def health() -> dict:
         "last_tick": discovery.last_tick_at,
         "postings": jobstore.global_counts_by_status(),
     }
+    if s.aggregator_active:
+        from .jobsources import aggregator
+
+        info["aggregator"] = aggregator.usage()
     return info
 
 

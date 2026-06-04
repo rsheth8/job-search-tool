@@ -64,7 +64,8 @@ code change.
 ### Intents
 
 `APPLY, UPDATE, NOTE, LIST, QUERY, STATS, DEADLINE, CHECK, DELETE, EDIT, BULK,
-UNDO, REMIND, OUTREACH, UNKNOWN` — all wired through both routers.
+UNDO, REMIND, OUTREACH, TRACK, JOBS, PROFILE, APPLY_JOB, UNKNOWN` — all wired
+through both routers.
 
 - **EDIT** is multi-turn: `change databricks` → *"What should I change about
   Databricks — its role, name, or applied date?"* → `role to SWE II`.
@@ -184,13 +185,44 @@ when new ones drop — all on free, no-auth sources:
    polls tracked boards, dedupes against everything already seen, runs a free
    keyword/location pre-filter, scores survivors 0–1 (Claude Haiku when a key is
    set, else a free heuristic), and Slack-DMs you the ones above
-   `JOB_RELEVANCE_THRESHOLD` — reusing the same sender as reminders.
+   `JOB_RELEVANCE_THRESHOLD` — reusing the same sender as reminders. Each alert
+   prints a `#<id>`.
 4. **Browse anytime:** `any new jobs`.
+5. **Assisted apply (Phase 2):** `apply 2` (or `apply to the stripe one`) hands
+   back the apply link plus a drafted *"why I'm a fit"* blurb (Claude when keyed,
+   else a template from your profile), logs the role as **Applied**, and marks the
+   posting applied. It never auto-submits — you paste the draft yourself.
+
+A generic **RSS/Atom** source (`app/jobsources/rss.py`) is also registered for
+feed-based boards (e.g. "Who is hiring" aggregations), alongside Greenhouse /
+Lever / Ashby.
+
+### Paid aggregator (Phase 3) — optional, off by default
+
+`app/jobsources/aggregator.py` adds a **SerpApi-style Google Jobs search** that
+runs against your *profile* (roles + locations), so discovery isn't limited to
+the company boards you track — it surfaces matching roles from across the web,
+which then flow through the same dedupe → pre-filter → score → alert pipeline (and
+the same `apply <#>` assisted-apply path).
+
+Because it costs money per call it's gated like the Apollo recruiter lookup:
+
+- **Two switches:** it runs only when `AGGREGATOR_SEARCH_ENABLED=true` **and**
+  `AGGREGATOR_API_KEY` is set (`Settings.aggregator_active`).
+- **Budget caps:** a DB-backed daily search cap (`AGGREGATOR_MAX_CALLS_PER_DAY`,
+  UTC day, survives restarts) + a per-minute rate limit; over budget → it skips.
+- **No first-run storm:** the first aggregator pass for a user baselines current
+  results silently (status `seeded`), so only roles appearing *after* you enable
+  it get alerted.
+- **Never blocks:** any no-key / over-budget / network / parse error returns `[]`.
+
+When active, `/health` gains an `aggregator` block (searches, today's count vs
+cap, skips, errors). LinkedIn remains deferred (Phase 4).
 
 Cost controls: free sources first; the LLM only ever sees pre-filtered postings,
 batched into one call, capped at `JOB_MAX_SCORED_PER_TICK` per tick; each posting
-is scored and alerted exactly once (dedup on `(user, source, external_id)`). Paid
-sources (Indeed/aggregators, LinkedIn) are deferred to later phases behind flags.
+is scored and alerted exactly once (dedup on `(user, source, external_id)`). The
+paid aggregator adds its own per-day budget on top.
 
 Run a one-shot pass manually: `.venv/bin/python -m app.discovery`. Discovery health
 is on `/health` under `discovery`.

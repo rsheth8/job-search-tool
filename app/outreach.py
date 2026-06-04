@@ -285,3 +285,74 @@ def _draft_via_claude(company: str, name: str, role: str | None) -> str:
     )
     text = next((b.text for b in resp.content if b.type == "text"), "").strip()
     return text or _draft_template(company, name, role)
+
+
+# ---------------------------------------------------------------------------
+# Assisted apply (Phase 2): draft a "why I'm a fit" blurb for a posting
+# ---------------------------------------------------------------------------
+
+def draft_application_answers(
+    company: str, title: str, description: str | None, profile_row=None
+) -> str:
+    """A short "why I'm a fit" blurb the user can paste into an application.
+
+    Claude when a key is configured (tailored to the posting + the user's
+    background); otherwise a clean template. Mirrors ``draft_outreach``: any LLM
+    failure falls back to the template — drafting never hard-fails.
+    """
+    background = ""
+    if profile_row is not None:
+        from .profile import profile_text
+
+        background = profile_text(profile_row)
+    if get_settings().use_llm_router:
+        try:
+            return _draft_application_via_claude(company, title, description, background)
+        except Exception:  # network/auth/parse — fall back, never block
+            logger.exception("Claude application draft failed; using template")
+    return _draft_application_template(company, title, background)
+
+
+def _draft_application_template(company: str, title: str, background: str) -> str:
+    role = title or "this role"
+    fit = ""
+    if background:
+        # profile_text lines look like "Roles: backend swe" — use the value.
+        first = background.splitlines()[0].split(":", 1)[-1].strip()
+        if first:
+            fit = f" My background in {first} maps closely to what this role needs, and"
+    return (
+        f"I'm excited to apply for {role} at {company}.{fit} I'd bring strong "
+        "ownership and a track record of shipping. I'd love the chance to "
+        "contribute and grow with the team."
+    )
+
+
+def _draft_application_via_claude(
+    company: str, title: str, description: str | None, background: str
+) -> str:
+    import anthropic
+
+    s = get_settings()
+    client = anthropic.Anthropic(api_key=s.anthropic_api_key)
+    desc = (description or "").strip()[:1200]
+    resp = client.messages.create(
+        model=s.anthropic_model,
+        max_tokens=260,
+        system=(
+            "Write a single short 'why I'm a great fit' paragraph for a job "
+            "application, in the candidate's own first-person voice. Under 600 "
+            "characters, specific to the role, no subject line, no placeholders "
+            "like [your name], no preamble — output only the paragraph."
+        ),
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Role: {title} at {company}.\n"
+                f"My background:\n{background or '(not provided)'}\n"
+                f"Job description (may be truncated):\n{desc or '(not provided)'}"
+            ),
+        }],
+    )
+    text = next((b.text for b in resp.content if b.type == "text"), "").strip()
+    return text or _draft_application_template(company, title, background)

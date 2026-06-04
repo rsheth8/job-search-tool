@@ -1,7 +1,7 @@
 """Adapter parsing tests — pure, offline, fixture JSON (no network)."""
 from __future__ import annotations
 
-from app.jobsources import ashby, fetch_source, greenhouse, lever
+from app.jobsources import aggregator, ashby, fetch_source, greenhouse, lever, rss
 
 
 def test_greenhouse_parse_normalizes_fields_and_strips_html():
@@ -72,12 +72,99 @@ def test_ashby_parse_marks_remote():
     assert p.description == "Entry level role."
 
 
+def test_rss_parse_items():
+    xml = """<?xml version="1.0"?>
+    <rss version="2.0"><channel>
+      <title>Who is hiring</title>
+      <item>
+        <title>Backend Engineer (Remote)</title>
+        <link>https://example.com/jobs/1</link>
+        <guid>job-1</guid>
+        <description>&lt;p&gt;Python &amp; APIs&lt;/p&gt;</description>
+        <pubDate>Mon, 01 Jun 2026 10:00:00 GMT</pubDate>
+      </item>
+    </channel></rss>"""
+    posts = rss._parse(xml, "https://example.com/feed")
+    assert len(posts) == 1
+    p = posts[0]
+    assert p.source == "rss"
+    assert p.external_id == "job-1"
+    assert p.title == "Backend Engineer (Remote)"
+    assert p.url == "https://example.com/jobs/1"
+    assert "Python" in p.description and "<" not in p.description
+
+
+def test_rss_parse_atom_entries():
+    xml = """<?xml version="1.0"?>
+    <feed xmlns="http://www.w3.org/2005/Atom">
+      <entry>
+        <title>Data Scientist</title>
+        <link href="https://example.com/a/2"/>
+        <id>urn:job:2</id>
+        <summary>ML role</summary>
+        <updated>2026-06-02T12:00:00Z</updated>
+      </entry>
+    </feed>"""
+    posts = rss._parse(xml, "https://example.com/atom")
+    assert len(posts) == 1
+    p = posts[0]
+    assert p.external_id == "urn:job:2"
+    assert p.title == "Data Scientist"
+    assert p.url == "https://example.com/a/2"
+    assert p.posted_at.startswith("2026-06-02")
+
+
+def test_aggregator_parse_serpapi_shape():
+    data = {
+        "jobs_results": [
+            {
+                "title": "Software Engineer, New Grad",
+                "company_name": "Acme",
+                "location": "Remote",
+                "description": "Build <b>things</b> with Python.",
+                "job_id": "eyJhYmMiOiJ4In0=",
+                "apply_options": [
+                    {"title": "Apply on Greenhouse",
+                     "link": "https://boards.greenhouse.io/acme/jobs/1"}
+                ],
+                "detected_extensions": {"posted_at": "2 days ago"},
+            }
+        ]
+    }
+    posts = aggregator._parse(data, "new grad swe")
+    assert len(posts) == 1
+    p = posts[0]
+    assert p.source == "aggregator"
+    assert p.external_id == "eyJhYmMiOiJ4In0="
+    assert p.title == "Software Engineer, New Grad"
+    assert p.company == "Acme"
+    assert p.url.endswith("/jobs/1")          # apply link preferred
+    assert p.posted_at == "2 days ago"
+    assert "<" not in p.description and "things" in p.description
+
+
+def test_aggregator_parse_falls_back_to_share_link():
+    data = {"jobs_results": [
+        {"title": "Backend Engineer", "share_link": "https://g.co/x"},
+    ]}
+    posts = aggregator._parse(data, "")
+    assert len(posts) == 1
+    assert posts[0].url == "https://g.co/x"
+    # No job_id → external_id falls back to the URL so dedupe still works.
+    assert posts[0].external_id == "https://g.co/x"
+
+
 def test_parsers_tolerate_garbage():
     assert greenhouse._parse(None, "x") == []
     assert greenhouse._parse({"jobs": [{"title": "no id"}]}, "x") == []
     assert lever._parse({"not": "a list"}, "x") == []
     assert lever._parse(["string-not-dict"], "x") == []
     assert ashby._parse({}, "x") == []
+    assert rss._parse("", "x") == []
+    assert rss._parse("<not-xml", "x") == []
+    assert aggregator._parse(None, "x") == []
+    assert aggregator._parse({"jobs_results": ["nope"]}, "x") == []
+    assert aggregator._parse({"jobs_results": [{}]}, "x") == []
 
 
 def test_fetch_source_unknown_returns_empty():
