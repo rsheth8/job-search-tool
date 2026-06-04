@@ -49,6 +49,22 @@ class Settings(BaseSettings):
 
     default_followup_days: int = 7
 
+    # --- Job discovery (Phase 1) -------------------------------------------
+    # Poll cadence for the background discovery loop (free ATS feeds tolerate
+    # frequent polls). Each new posting is deduped, so we never re-alert.
+    job_poll_seconds: int = 600
+    # A posting must score >= this (0..1) to be alerted. Tune from Slack later.
+    job_relevance_threshold: float = 0.6
+    # Cap how many *new* postings get LLM-scored per tick (token-cost guard).
+    # Survivors of the free pre-filter beyond this carry over to the next tick.
+    job_max_scored_per_tick: int = 40
+    # The user the background loop alerts (Slack user id). Empty = alert the
+    # busiest known user, mirroring dashboard.default_user().
+    job_alert_user: str = ""
+    # Free sources are on by default. Paid sources (added later) stay off until
+    # explicitly enabled with their own budget caps, mirroring the Apollo guards.
+    job_sources_enabled: str = "greenhouse,lever,ashby"
+
     @property
     def use_llm_router(self) -> bool:
         return bool(self.anthropic_api_key.strip())
@@ -56,6 +72,16 @@ class Settings(BaseSettings):
     @property
     def apollo_enabled(self) -> bool:
         return bool(self.apollo_api_key.strip())
+
+    @property
+    def job_sources(self) -> list[str]:
+        """Enabled discovery sources, normalized (lowercased, de-duped, ordered)."""
+        seen: list[str] = []
+        for raw in self.job_sources_enabled.split(","):
+            name = raw.strip().lower()
+            if name and name not in seen:
+                seen.append(name)
+        return seen
 
     @property
     def slack_enabled(self) -> bool:

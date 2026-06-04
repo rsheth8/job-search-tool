@@ -141,6 +141,59 @@ CREATE TABLE IF NOT EXISTS undo_log (
     summary     TEXT NOT NULL,   -- human description of what would be undone
     created_at  TEXT NOT NULL
 );
+
+-- Job boards we poll for new openings. (source, board_token) identifies the
+-- board to query; company_name is for display. One row per board the user
+-- tracks; deduped per (user_id, source, board_token).
+CREATE TABLE IF NOT EXISTS tracked_companies (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       TEXT NOT NULL,
+    source        TEXT NOT NULL,   -- greenhouse | lever | ashby | ...
+    board_token   TEXT NOT NULL,   -- board slug used to query the source
+    company_name  TEXT,            -- display name
+    created_at    TEXT NOT NULL
+);
+
+-- Job postings discovered from tracked boards. Deduped on
+-- (user_id, source, external_id) so a posting is scored + alerted once, ever.
+-- status walks new -> alerted -> applied (or dismissed). relevance_score is the
+-- matcher's 0..1 fit score against the user's profile.
+CREATE TABLE IF NOT EXISTS job_postings (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         TEXT NOT NULL,
+    source          TEXT NOT NULL,
+    external_id     TEXT NOT NULL,
+    company         TEXT,
+    title           TEXT,
+    location        TEXT,
+    url             TEXT,
+    description     TEXT,
+    posted_at       TEXT,
+    first_seen_at   TEXT NOT NULL,
+    relevance_score REAL,
+    status          TEXT NOT NULL DEFAULT 'new'  -- new | alerted | applied | dismissed
+);
+
+-- One job-search profile per user: target roles/keywords/locations plus a short
+-- resume summary. Drives LLM relevance scoring and (Phase 2) apply drafts.
+CREATE TABLE IF NOT EXISTS job_search_profile (
+    user_id        TEXT PRIMARY KEY,
+    roles          TEXT,            -- comma-separated target role keywords
+    keywords       TEXT,            -- comma-separated must-have/nice-to-have terms
+    locations      TEXT,            -- comma-separated preferred locations / "remote"
+    seniority      TEXT,            -- e.g. "new grad", "senior"
+    resume_summary TEXT,            -- a few lines describing the candidate
+    prefs_json     TEXT,            -- free-form JSON for future prefs
+    updated_at     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_tracked_user ON tracked_companies(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tracked_dedupe
+    ON tracked_companies(user_id, source, board_token);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_postings_dedupe
+    ON job_postings(user_id, source, external_id);
+CREATE INDEX IF NOT EXISTS idx_postings_user_status
+    ON job_postings(user_id, status);
 """
 
 
