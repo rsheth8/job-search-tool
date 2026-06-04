@@ -166,7 +166,8 @@ CREATE TABLE IF NOT EXISTS tracked_companies (
 
 -- Job postings discovered from tracked boards. Deduped on
 -- (user_id, source, external_id) so a posting is scored + alerted once, ever.
--- status walks new -> alerted -> applied (or dismissed). relevance_score is the
+-- status walks seeded -> new (weak) / queued (match) -> applied|dismissed;
+-- alerted is used only in instant alert mode. relevance_score is the
 -- matcher's 0..1 fit score against the user's profile.
 CREATE TABLE IF NOT EXISTS job_postings (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -206,6 +207,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_postings_dedupe
     ON job_postings(user_id, source, external_id);
 CREATE INDEX IF NOT EXISTS idx_postings_user_status
     ON job_postings(user_id, status);
+
+-- Rotating cursor for ATS directory wide discovery (global round-robin).
+CREATE TABLE IF NOT EXISTS discovery_cursors (
+    cursor_key    TEXT PRIMARY KEY,
+    position      INTEGER NOT NULL DEFAULT 0,
+    updated_at    TEXT NOT NULL
+);
+
+-- Paid / rate-limited wide-discovery API calls (SerpApi aggregator).
+CREATE TABLE IF NOT EXISTS job_api_calls (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    call_type   TEXT NOT NULL,
+    user_id     TEXT,
+    called_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_api_calls_at ON job_api_calls(called_at);
 """
 
 

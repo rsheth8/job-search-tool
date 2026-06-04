@@ -1,113 +1,84 @@
-"""Paid job aggregator — a SerpApi-style Google Jobs search (Phase 3).
+"""Paid job search via SerpApi Google Jobs (optional).
 
-Unlike the free ATS adapters (greenhouse/lever/ashby), this one searches the
-*whole web* for roles matching the user's profile, not a single company board.
-It costs money per call, so it is OFF by default and gated three ways, mirroring
-the Apollo credit guards in ``app/apollo.py``:
-
-  * ``AGGREGATOR_SEARCH_ENABLED=true`` AND an ``AGGREGATOR_API_KEY``
-    (the ``aggregator_active`` property) — either alone does nothing.
-  * a DB-backed daily call budget (``AGGREGATOR_MAX_CALLS_PER_DAY``, UTC day) so
-    the cap survives restarts.
-  * a per-minute token-bucket rate limit.
-
-Contract, same as every adapter and the Apollo layer: **never raise, never
-block.** ``fetch`` returns ``[]`` on no-key, disabled, over-budget, network
-error, or bad payload — discovery just gets nothing that tick.
-
-``board_token`` here is the *search query* (e.g. "new grad software engineer
-remote"), not a company slug. Because it is search-based (and paid) it lives in
-``jobsources.NON_BOARD_SOURCES`` so ``resolve_board`` never slug-probes it.
+``board_token`` is the search query string (built from the user's profile in
+``wide_discovery``). Requires ``SERPAPI_API_KEY`` and ``aggregator`` in
+``JOB_SOURCES_ENABLED``.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
-from datetime import datetime, timezone
 
-from ..config import get_settings
-from ..db import connect
-from ..ratelimit import TokenBucket
-from .base import JobPosting, strip_html
+from .base import JobPosting
 
-logger = logging.getLogger("jobsources")
+logger = logging.getLogger("jobsources.aggregator")
 
-# SerpApi Google Jobs engine. Any SerpApi-compatible host returning the same
-# ``jobs_results`` shape works; swap the URL via a fork if you self-host.
-_API_URL = "https://serpapi.com/search"
-_TIMEOUT_SECONDS = 12.0
-
-_limiter: TokenBucket | None = None
-_usage = {
-    "searches": 0,
-    "skipped_rate_limit": 0,
-    "skipped_daily_cap": 0,
-    "errors": 0,
-}
+_ENGINE = "google_jobs"
 
 
-# ---------------------------------------------------------------------------
-# Budget tracking (DB-backed daily cap + in-memory counters)
-# ---------------------------------------------------------------------------
-
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _today_start_iso() -> str:
-    now = datetime.now(timezone.utc)
-    return now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-
-
-def _calls_today() -> int:
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) AS n FROM aggregator_api_calls WHERE called_at >= ?",
-            (_today_start_iso(),),
-        ).fetchone()
-        return int(row["n"]) if row else 0
+def build_query_from_profile(roles: str | None, locations: str | None, seniority: str | None) -> str:
+    """Turn profile fields into a single Google Jobs query."""
+    parts: list[str] = []
+    if roles:
+        parts.append(roles.split(",")[0].strip())
+    elif seniority:
+        parts.append(seniority.strip())
+    else:
+        parts.append("software engineer")
+    if locations:
+        loc = locations.split(",")[0].strip()
+        if loc.lower() != "remote":
+            parts.append(f"in {loc}")
+        else:
+            parts.append("remote")
+    return " ".join(parts)[:200]
 
 
-def _record_call(query: str) -> None:
-    with connect() as conn:
-        conn.execute(
-            "INSERT INTO aggregator_api_calls (query, called_at) VALUES (?, ?)",
-            (query, _utc_now_iso()),
-        )
-    _usage["searches"] += 1
+def fetch(board_token: str) -> list[JobPosting]:
+    from ..config import get_settings
 
-
-def _get_limiter() -> TokenBucket:
-    global _limiter
-    if _limiter is None:
-        _limiter = TokenBucket(get_settings().aggregator_rate_limit_per_min)
-    return _limiter
-
-
-def reset_for_tests() -> None:
-    """Clear the cached limiter + in-memory counters (tests only)."""
-    global _limiter
-    _limiter = None
-    for k in _usage:
-        _usage[k] = 0
-
-
-def usage() -> dict:
-    """Counters for /health — today's search count vs the daily cap."""
     s = get_settings()
-    return {
-        **_usage,
-        "active": s.aggregator_active,
-        "calls_today": _calls_today(),
-        "daily_cap": s.aggregator_max_calls_per_day,
+    key = (getattr(s, "serpapi_api_key", None) or "").strip()
+    if not key:
+        return []
+
+    from .. import jobstore
+
+    if not jobstore.allow_aggregator_search():
+        logger.info("aggregator daily cap reached — skipping")
+        return []
+
+    q = (board_token or "software engineer").strip()
+    url = "https://serpapi.com/search.json"
+    params = {
+        "engine": _ENGINE,
+        "q": q,
+        "api_key": key,
+        "hl": "en",
+        "gl": "us",
     }
+    import httpx
+
+    try:
+        resp = httpx.get(url, params=params, timeout=15.0)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        # NEVER log the raw exception/URL: SerpApi carries the api_key in the
+        # query string, so exc_info / the request URL would leak the secret.
+        logger.warning("aggregator fetch failed: %s", _safe_error(exc))
+        return []
+
+    jobstore.record_aggregator_call()
+    return _parse(data, q)
 
 
 def _safe_error(exc: Exception) -> str:
-    """A log-safe description of a fetch failure that never contains the api_key.
+    """Log-safe failure description that never contains the api_key.
 
     SerpApi authenticates via an ``api_key`` query param, so the request URL (and
-    thus the raw httpx exception text) embeds the secret. We surface only the HTTP
-    status + SerpApi's JSON ``error`` message, which is descriptive but key-free.
+    raw httpx exception text) embeds the secret. Surface only the HTTP status +
+    SerpApi's JSON ``error`` message, which is descriptive but key-free.
     """
     import httpx
 
@@ -122,12 +93,7 @@ def _safe_error(exc: Exception) -> str:
     return type(exc).__name__
 
 
-# ---------------------------------------------------------------------------
-# Parsing (pure — fixture-tested)
-# ---------------------------------------------------------------------------
-
-def _parse(data, query: str = "") -> list[JobPosting]:
-    """Map a SerpApi Google-Jobs response to JobPostings. Garbage -> []."""
+def _parse(data: dict, query: str) -> list[JobPosting]:
     if not isinstance(data, dict):
         return []
     out: list[JobPosting] = []
@@ -135,75 +101,28 @@ def _parse(data, query: str = "") -> list[JobPosting]:
         if not isinstance(j, dict):
             continue
         title = (j.get("title") or "").strip()
-        job_id = j.get("job_id")
-        # Prefer a direct apply link; fall back to the shareable listing URL.
-        url = ""
-        opts = j.get("apply_options") or []
-        if opts and isinstance(opts[0], dict):
-            url = opts[0].get("link") or ""
-        url = url or j.get("share_link") or ""
-        ext = str(job_id) if job_id else (url or title)
-        if not ext or not (title or url):
+        company = (j.get("company_name") or "").strip()
+        if not title:
             continue
-        ext_info = j.get("detected_extensions") or {}
+        loc = (j.get("location") or "").strip()
+        link = (j.get("share_link") or j.get("apply_link") or "").strip()
+        desc = (j.get("description") or "").strip()
+        if len(desc) > 1500:
+            desc = desc[:1500] + "…"
+        jid = j.get("job_id") or link or f"{company}:{title}"
+        ext = hashlib.sha256(f"{query}:{jid}".encode()).hexdigest()[:32]
         out.append(
             JobPosting(
                 source="aggregator",
                 external_id=ext,
                 title=title,
-                url=url,
-                company=(j.get("company_name") or "").strip(),
-                location=(j.get("location") or "").strip(),
-                description=strip_html(j.get("description")),
-                posted_at=(ext_info.get("posted_at") or "").strip(),
+                url=link,
+                company=company or "Unknown",
+                location=loc,
+                description=desc,
+                posted_at=(j.get("detected_extensions") or {}).get("posted_at", "")
+                if isinstance(j.get("detected_extensions"), dict)
+                else "",
             )
         )
     return out
-
-
-# ---------------------------------------------------------------------------
-# Fetch (gated + budget-capped; never raises)
-# ---------------------------------------------------------------------------
-
-def fetch(board_token: str) -> list[JobPosting]:
-    """Run one aggregator search for the query ``board_token``.
-
-    Returns ``[]`` on every guard rail — disabled, no key, over daily budget,
-    rate-limited, network/parse error — so a discovery tick never blocks on it.
-    """
-    query = (board_token or "").strip()
-    if not query:
-        return []
-    s = get_settings()
-    if not s.aggregator_active:
-        return []
-    if _calls_today() >= s.aggregator_max_calls_per_day:
-        _usage["skipped_daily_cap"] += 1
-        logger.info(
-            "aggregator daily cap reached (%s/day); skipping %r",
-            s.aggregator_max_calls_per_day, query,
-        )
-        return []
-    if not _get_limiter().allow():
-        _usage["skipped_rate_limit"] += 1
-        logger.info("aggregator rate limited; skipping %r", query)
-        return []
-
-    import httpx  # lazy: offline/test paths never import it
-
-    params = {"engine": "google_jobs", "q": query, "api_key": s.aggregator_api_key}
-    if s.aggregator_location.strip():
-        params["location"] = s.aggregator_location.strip()
-    try:
-        resp = httpx.get(_API_URL, params=params, timeout=_TIMEOUT_SECONDS)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:  # noqa: BLE001 — degrade to [] on any error
-        _usage["errors"] += 1
-        # NEVER log the raw exception/URL: SerpApi carries the api_key in the
-        # query string, so exc_info / the request URL would leak the secret.
-        logger.warning("aggregator fetch failed for %r: %s", query, _safe_error(exc))
-        return []
-
-    _record_call(query)  # count only billable calls that actually completed
-    return _parse(data, query)[: s.aggregator_results_per_call]

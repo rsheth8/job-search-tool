@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Remote OK</title>
+    <item>
+      <title>Acme Corp: Backend Engineer</title>
+      <link>https://remoteok.com/jobs/123</link>
+      <guid>https://remoteok.com/jobs/123</guid>
+      <description>Python, remote, worldwide.</description>
+      <pubDate>Mon, 02 Jun 2026 12:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Beta Inc: Software Engineer</title>
+      <link>https://remoteok.com/jobs/456</link>
+      <guid>https://remoteok.com/jobs/456</guid>
+      <description>Go, kubernetes, remote.</description>
+    </item>
+  </channel>
+</rss>

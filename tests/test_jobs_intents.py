@@ -21,6 +21,8 @@ R = HeuristicRouter()
     ("what am i tracking", Intent.TRACK, "list"),
     ("any new jobs", Intent.JOBS, None),
     ("show me openings", Intent.JOBS, None),
+    ("review jobs", Intent.JOBS_REVIEW, None),
+    ("let's go through the new jobs", Intent.JOBS_REVIEW, None),
     ("show my profile", Intent.PROFILE, None),
 ])
 def test_routes(text, intent, msg):
@@ -123,7 +125,7 @@ def test_track_unknown_company(monkeypatch):
 
 def test_profile_set_then_show():
     set_reply = handle_sms("u", "looking for new grad swe roles, remote or nyc")
-    assert "match new jobs" in set_reply.lower()
+    assert "match new jobs" in set_reply.lower() or "wide discovery" in set_reply.lower()
     row = profile.get_profile("u")
     assert "swe" in (row["roles"] or "").lower()
     assert "remote" in (row["locations"] or "")
@@ -140,17 +142,18 @@ def test_jobs_listing_states(monkeypatch):
 
     # Tracking but nothing surfaced.
     jobstore.add_tracked_company("u", "greenhouse", "acme", "Acme")
-    assert "no new matching jobs" in handle_sms("u", "any new jobs").lower()
+    assert "no jobs in your queue" in handle_sms("u", "any new jobs").lower()
 
     # A surfaced posting shows up.
     jobstore.save_posting(
         "u",
         JobPosting("greenhouse", "1", "Backend Engineer", "https://x/1",
                    company="Acme", location="Remote"),
-        relevance_score=0.82, status="alerted",
+        relevance_score=0.82, status="queued",
     )
     reply = handle_sms("u", "any new jobs")
     assert "Backend Engineer" in reply and "82%" in reply
+    assert "queue" in reply.lower()
 
 
 # --- assisted apply (Phase 2) ----------------------------------------------
@@ -237,7 +240,7 @@ def test_dismiss_hides_posting_from_listing():
     reply = handle_sms("u", f"dismiss {row['id']}")
     assert "Dismissed" in reply
     assert jobstore.get_posting("u", row["id"])["status"] == "dismissed"
-    assert "no new matching jobs" in handle_sms("u", "any new jobs").lower()
+    assert "no jobs in your queue" in handle_sms("u", "any new jobs").lower()
 
 
 def test_snooze_then_resurfaces_after_expiry():
@@ -248,7 +251,7 @@ def test_snooze_then_resurfaces_after_expiry():
     assert "Snoozed" in reply
     assert jobstore.get_posting("u", row["id"])["status"] == "snoozed"
     # Hidden while snoozed.
-    assert "no new matching jobs" in handle_sms("u", "any new jobs").lower()
+    assert "no jobs in your queue" in handle_sms("u", "any new jobs").lower()
     # Force the snooze into the past → it wakes and shows again.
     past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     jobstore.snooze_posting(row["id"], past)
@@ -332,3 +335,30 @@ def test_tracking_list_shows_counts_and_threshold(monkeypatch):
     assert "Acme" in listed
     assert "seen" in listed and "new" in listed
     assert "Matching" in listed  # threshold line
+
+
+def test_review_jobs_walkthrough(monkeypatch):
+    jobstore.save_posting(
+        "u",
+        JobPosting("greenhouse", "1", "Role A", "https://x/1", company="Acme"),
+        relevance_score=0.9, status="queued",
+    )
+    jobstore.save_posting(
+        "u",
+        JobPosting("greenhouse", "2", "Role B", "https://x/2", company="Acme"),
+        relevance_score=0.8, status="queued",
+    )
+    start = handle_sms("u", "review jobs")
+    assert "1 of 2" in start and "Role A" in start
+
+    skipped = handle_sms("u", "skip")
+    assert "Role B" in skipped and "1 of 1" in skipped
+
+    applied = handle_sms("u", "apply")
+    assert "Logged" in applied and "Role B" in applied
+    assert jobstore.count_queued("u") == 0
+
+    from app import store
+
+    apps = store.list_applications("u")
+    assert any("Role B" in (a["role"] or "") for a in apps)
