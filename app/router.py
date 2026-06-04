@@ -89,6 +89,50 @@ _BULK_QUANT = re.compile(
 )
 _BULK_VERB = re.compile(r"\b(reject|rejected|ghost|ghosted|mark|move|set|withdraw|close|archive)\b", re.I)
 
+# --- Job discovery (Phase 1) -----------------------------------------------
+# TRACK: add/remove a company's job board, or list tracked boards. "watch"/
+# "monitor" included; "follow" is deliberately excluded so "follow up on" stays
+# QUERY.
+_TRACK_RE = re.compile(r"\b(untrack|unwatch|track|watch|monitor|tracking|tracked)\b", re.I)
+_TRACK_REMOVE_RE = re.compile(r"\b(untrack|unwatch)\b|\bstop (tracking|watching)\b", re.I)
+_TRACK_LIST_RE = re.compile(
+    r"\b(what|which|list|show)\b[^.?!]*\btrack(?:ing|ed)\b"
+    r"|\btracked (companies|boards|jobs)\b"
+    r"|^\s*tracking\s*\??$",
+    re.I,
+)
+# JOBS: browse postings discovery surfaced. Requires discovery-y phrasing so a
+# stray "job" in "applied to a job" doesn't hijack it (APPLY guard also applies).
+_JOBS_RE = re.compile(
+    r"\b(openings?|postings?)\b"
+    r"|\bnew (jobs?|roles?|gigs?)\b"
+    r"|\b(show|see|list|any|what'?s?|latest|recent|find|anything)\b[^.?!]*\bjobs?\b"
+    r"|^\s*jobs?\s*\??$",
+    re.I,
+)
+# PROFILE: set search criteria, or show the saved profile.
+_PROFILE_SET_RE = re.compile(
+    r"\b(looking for|i want|i'?m looking|interested in|search(?:ing)? for|"
+    r"set (?:my )?profile|update (?:my )?profile|find me)\b",
+    re.I,
+)
+_PROFILE_SHOW_RE = re.compile(
+    r"\b(show|what'?s?|see|view)\b[^.?!]*\bprofile\b|\bmy profile\b|^\s*profile\s*\??$",
+    re.I,
+)
+
+
+def _parse_track_company(low: str) -> str | None:
+    """Pull the company out of 'track openings at stripe' / 'watch figma'."""
+    s = _TRACK_RE.sub(" ", low)
+    s = re.sub(
+        r"\b(stop|watching|keep|eye|openings?|postings?|jobs?|roles?|new|at|for|"
+        r"the|company|board|on|me|please)\b",
+        " ", s, flags=re.I,
+    )
+    company, _ = _extract_company_role(s)
+    return company
+
 _TIME_RE = re.compile(
     r"\b(in \d+ \w+|today|tonight|tomorrow|next week|next month|\d+ days?|\d+ weeks?|"
     r"(?:this |next )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b",
@@ -375,6 +419,26 @@ class HeuristicRouter:
                 intent=Intent.LIST, time_reference=window, confidence=0.85
             )
 
+        # --- Job discovery (before APPLY/QUERY/LIST, which share keywords) ----
+        if _TRACK_RE.search(low):
+            if _TRACK_LIST_RE.search(low):
+                return ParsedMessage(intent=Intent.TRACK, message="list", confidence=0.85)
+            company = _parse_track_company(low)
+            remove = bool(_TRACK_REMOVE_RE.search(low))
+            return ParsedMessage(
+                intent=Intent.TRACK, company=company,
+                message="remove" if remove else None,
+                confidence=0.85 if company else 0.5,
+            )
+
+        if _PROFILE_SET_RE.search(low):
+            return ParsedMessage(intent=Intent.PROFILE, message=raw.strip(), confidence=0.8)
+        if _PROFILE_SHOW_RE.search(low):
+            return ParsedMessage(intent=Intent.PROFILE, message=None, confidence=0.8)
+
+        if _JOBS_RE.search(low) and not _APPLY_RE.search(low):
+            return ParsedMessage(intent=Intent.JOBS, confidence=0.85)
+
         if _NOTE_RE.search(low):
             body = re.sub(r"^\s*note\b", "", raw, flags=re.I).strip()
             company, _ = _extract_company_role(body)
@@ -531,6 +595,25 @@ _FEWSHOTS = [
     ("anything new since monday",
      [{"intent": "LIST", "company": None, "role": None, "status": None,
        "message": None, "time_reference": "since monday", "confidence": 0.82}]),
+    ("track openings at stripe",
+     [{"intent": "TRACK", "company": "Stripe", "role": None, "status": None,
+       "message": None, "time_reference": None, "confidence": 0.9}]),
+    ("stop tracking databricks",
+     [{"intent": "TRACK", "company": "Databricks", "role": None, "status": None,
+       "message": "remove", "time_reference": None, "confidence": 0.9}]),
+    ("what am i tracking",
+     [{"intent": "TRACK", "company": None, "role": None, "status": None,
+       "message": "list", "time_reference": None, "confidence": 0.88}]),
+    ("any new jobs",
+     [{"intent": "JOBS", "company": None, "role": None, "status": None,
+       "message": None, "time_reference": None, "confidence": 0.88}]),
+    ("i'm looking for new grad swe roles, remote or nyc",
+     [{"intent": "PROFILE", "company": None, "role": None, "status": None,
+       "message": "new grad swe roles, remote or nyc", "time_reference": None,
+       "confidence": 0.9}]),
+    ("show my profile",
+     [{"intent": "PROFILE", "company": None, "role": None, "status": None,
+       "message": None, "time_reference": None, "confidence": 0.85}]),
     ("undo that",
      [{"intent": "UNDO", "company": None, "role": None, "status": None,
        "message": None, "time_reference": None, "confidence": 0.95}]),
@@ -656,6 +739,14 @@ def _build_system_prompt() -> str:
         "- UNDO: user wants to reverse their last action ('undo', 'undo that', "
         "'revert my last change', 'put it back'). No entities.\n"
         "- OUTREACH: user wants recruiter contact / a drafted message.\n"
+        "- TRACK: user wants to start/stop watching a company's job board for new "
+        "openings, or see what they're tracking. Set `company`; for removal put "
+        "'remove' in `message`; for 'what am I tracking' put 'list' in `message`.\n"
+        "- JOBS: user wants to browse the new job postings the assistant has found "
+        "(not their applications). No entities.\n"
+        "- PROFILE: user states what roles/locations they're after (set) or asks "
+        "to see their profile (show). For a set, put the full criteria in `message`; "
+        "for a show, leave `message` null.\n"
         "- UNKNOWN: none of the above.\n\n"
         "Rules:\n"
         "- `confidence` is 0.0-1.0: your certainty about the intent + entities.\n"

@@ -20,7 +20,10 @@ import re
 from . import context as ctx
 from . import conversation as convo
 from . import deadlines as deadlines_mod
+from . import discovery as discovery_mod
+from . import jobstore
 from . import outreach
+from . import profile as profile_mod
 from . import reminders
 from . import scoring
 from . import stats as stats_mod
@@ -68,6 +71,12 @@ MENU = (
     "▸ DATES\n"
     "  \"stripe oa due friday\" — set a deadline\n"
     "  \"remind me about google in 3 days\" — set a reminder\n"
+    "\n"
+    "▸ DISCOVER JOBS\n"
+    "  \"I'm looking for new grad SWE roles, remote or NYC\" — set what to match\n"
+    "  \"track openings at stripe\" — watch a company's board (I'll alert on new fits)\n"
+    "  \"what am I tracking\" · \"stop tracking stripe\" — manage tracked boards\n"
+    "  \"any new jobs\" — browse the latest matches I've found\n"
     "\n"
     "▸ SEE YOUR SEARCH\n"
     "  \"list\" — all applications\n"
@@ -165,7 +174,8 @@ def _looks_like_new_command(p: ParsedMessage, text: str, pending: Pending) -> bo
         return False
     if (
         p.intent in (Intent.LIST, Intent.QUERY, Intent.STATS, Intent.DEADLINE,
-                     Intent.CHECK, Intent.UNDO)
+                     Intent.CHECK, Intent.UNDO, Intent.JOBS, Intent.TRACK,
+                     Intent.PROFILE)
         and p.confidence >= 0.7
     ):
         return True
@@ -208,6 +218,12 @@ def _start(user_id: str, p: ParsedMessage, raw: str) -> str:
             "age_ref": p.time_reference,
         }
         return _advance_bulk(user_id, slots, memory)
+    if p.intent == Intent.TRACK:
+        return _do_track(user_id, p, raw)
+    if p.intent == Intent.JOBS:
+        return _do_jobs(user_id)
+    if p.intent == Intent.PROFILE:
+        return _do_profile(user_id, p, raw)
     # UNKNOWN
     if convo.is_greeting(raw):
         return GREETING
@@ -701,6 +717,102 @@ def _do_query(user_id: str, p: ParsedMessage, memory: dict) -> str:
         quiet = "today" if days == 0 else f"{days}d quiet"
         lines.append(f"• {a['company']}{role} [{a['status']}] — {quiet}")
     return "\n".join(lines)
+
+
+def _do_jobs(user_id: str) -> str:
+    posts = jobstore.list_postings(user_id, statuses=("alerted", "new"), limit=10)
+    if not posts:
+        if not jobstore.list_tracked(user_id):
+            return ("You're not tracking any boards yet. Try "
+                    "'track openings at <company>', then 'show my profile' to tune matches.")
+        return "No new matching jobs yet — I'll ping you the moment one drops."
+    lines = ["🆕 Newest matching jobs:"]
+    for p in posts:
+        score = p["relevance_score"]
+        pct = f" · {round(score * 100)}%" if score is not None else ""
+        loc = f" — {p['location']}" if p["location"] else ""
+        lines.append(f"• #{p['id']} {p['title']} @ {p['company']}{loc}{pct}")
+    return "\n".join(lines)
+
+
+def _do_track(user_id: str, p: ParsedMessage, raw: str) -> str:
+    action = (p.message or "").strip().lower()
+
+    if action == "list":
+        boards = jobstore.list_tracked(user_id)
+        if not boards:
+            return "Not tracking any companies yet. Try 'track openings at <company>'."
+        lines = ["👀 Tracking:"]
+        for b in boards:
+            lines.append(f"• {b['company_name'] or b['board_token']} ({b['source']})")
+        return "\n".join(lines)
+
+    company = p.company
+    if not company:
+        return "Which company should I track? e.g. 'track openings at Stripe'."
+
+    if action == "remove":
+        n = jobstore.remove_tracked(user_id, company)
+        return (f"Stopped tracking {company}." if n
+                else f"You weren't tracking {company}.")
+
+    board = discovery_mod.resolve_board(company)
+    if board is None:
+        return (f"Couldn't find a public job board for {company} on "
+                f"{', '.join(get_settings().job_sources)}. It may use a different ATS.")
+    row = jobstore.add_tracked_company(
+        user_id, board["source"], board["board_token"], board["company_name"]
+    )
+    if row is None:
+        return f"Already tracking {board['company_name']}."
+    return (f"✅ Tracking {board['company_name']} ({board['source']}, "
+            f"{board['count']} open roles). I'll alert you on new matches.")
+
+
+def _do_profile(user_id: str, p: ParsedMessage, raw: str) -> str:
+    criteria = (p.message or "").strip()
+    if not criteria:
+        text = profile_mod.profile_text(profile_mod.get_profile(user_id))
+        if not text:
+            return ("No profile yet. Tell me what you're after, e.g. "
+                    "\"I'm looking for new grad SWE roles, remote or NYC\".")
+        return "🧭 Your job-search profile:\n" + text
+
+    roles, locations = _split_profile_criteria(criteria)
+    if not roles:
+        return ("Tell me the roles you want, e.g. "
+                "\"looking for new grad SWE roles, remote or NYC\".")
+    profile_mod.set_profile(user_id, roles=roles, keywords=roles, locations=locations or None)
+    saved = profile_mod.profile_text(profile_mod.get_profile(user_id))
+    return ("Got it — I'll match new jobs against:\n" + saved +
+            "\nNow track companies with 'track openings at <company>'.")
+
+
+_PROFILE_LEADIN = re.compile(
+    r"^\s*(i'?m looking for|i am looking for|looking for|i want|interested in|"
+    r"set (?:my )?profile(?: to)?|update (?:my )?profile(?: to)?|find me)\s*",
+    re.I,
+)
+
+
+def _split_profile_criteria(text: str) -> tuple[str, str]:
+    """Best-effort split of freeform criteria into roles + locations.
+
+    The full criteria is kept as the role/keyword string (so every term feeds
+    matching); locations are *also* pulled out for the location bonus.
+    """
+    cleaned = _PROFILE_LEADIN.sub("", text.strip()).strip()
+    locations: list[str] = []
+    if re.search(r"\bremote\b", cleaned, re.I):
+        locations.append("remote")
+    m = re.search(r"\bin\s+(.+)$", cleaned, re.I)
+    loc_clause = m.group(1) if m else (cleaned.rsplit(",", 1)[1] if "," in cleaned else "")
+    for part in re.split(r"\s+or\s+|,|/", loc_clause):
+        part = part.strip().strip(".")
+        if part and part.lower() != "remote" and len(part) <= 30:
+            locations.append(part)
+    locs = ", ".join(dict.fromkeys(loc.lower() for loc in locations))
+    return cleaned.rstrip(" ,.").strip(), locs
 
 
 def _do_delete(user_id: str, slots: dict, raw: str) -> str:

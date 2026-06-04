@@ -21,6 +21,10 @@ class Intent(str, Enum):
     BULK = "BULK"
     UNDO = "UNDO"
     OUTREACH = "OUTREACH"
+    # Job discovery (Phase 1)
+    TRACK = "TRACK"      # track / untrack / list a company's job board
+    JOBS = "JOBS"        # browse postings discovery has surfaced
+    PROFILE = "PROFILE"  # set or show the job-search profile
     UNKNOWN = "UNKNOWN"
 
 

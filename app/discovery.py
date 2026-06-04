@@ -12,6 +12,7 @@ ride the exact same channel as reminders — no new transport.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 
 from . import jobstore, matcher, profile, reminders
@@ -19,6 +20,37 @@ from .config import get_settings
 from .jobsources import JobPosting, fetch_source
 
 logger = logging.getLogger("discovery")
+
+
+def _slug_variants(name: str) -> list[str]:
+    """Plausible board tokens for a company name, most-likely first."""
+    base = name.strip().lower()
+    out = []
+    for v in (re.sub(r"[^a-z0-9]", "", base),          # "acme inc" -> "acmeinc"
+              re.sub(r"[^a-z0-9]+", "-", base).strip("-"),  # -> "acme-inc"
+              base.split()[0] if base.split() else ""):     # -> "acme"
+        if v and v not in out:
+            out.append(v)
+    return out
+
+
+def resolve_board(company_name: str) -> dict | None:
+    """Probe enabled free boards for one matching a company. All calls are free.
+
+    Tries slug variants against each enabled source; returns the first that
+    actually yields postings, or None if nothing public is found.
+    """
+    for source in get_settings().job_sources:
+        for slug in _slug_variants(company_name):
+            posts = fetch_source(source, slug)
+            if posts:
+                return {
+                    "source": source,
+                    "board_token": slug,
+                    "company_name": company_name.strip().title(),
+                    "count": len(posts),
+                }
+    return None
 
 # Set on each run_all() so /health can show liveness without a separate store.
 last_tick_at: str | None = None

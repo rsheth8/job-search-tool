@@ -50,12 +50,14 @@ def list_tracked(user_id: str) -> list[sqlite3.Row]:
         ).fetchall()
 
 
-def remove_tracked(user_id: str, board_token: str) -> int:
-    """Untrack by board token (any source). Returns rows removed."""
+def remove_tracked(user_id: str, name_or_token: str) -> int:
+    """Untrack by display name (case-insensitive) or board token. Rows removed."""
+    needle = name_or_token.strip()
     with connect() as conn:
         cur = conn.execute(
-            "DELETE FROM tracked_companies WHERE user_id = ? AND board_token = ?",
-            (user_id, board_token),
+            "DELETE FROM tracked_companies WHERE user_id = ? "
+            "AND (board_token = ? OR LOWER(company_name) = LOWER(?))",
+            (user_id, needle, needle),
         )
         return cur.rowcount
 

@@ -51,6 +51,10 @@ code change.
 | `what's coming up` | Your calendar of upcoming deadlines |
 | `remind me about google in 3 days` | Schedules a reminder |
 | `reach out to a recruiter at stripe` | Finds contacts (Apollo) + drafts an intro |
+| `I'm looking for new grad SWE roles, remote or NYC` | Sets your match profile |
+| `track openings at stripe` | Watches a company's job board; alerts on new fits |
+| `what am I tracking` / `stop tracking stripe` | Manage tracked boards |
+| `any new jobs` | Browse the latest discovered matches |
 | `change the stripe role to SWE II` | Corrects a saved entry |
 | `reject everything still in Applied` | Bulk stage change (confirms first) |
 | `delete stripe` | Removes an application (confirms first) |
@@ -167,6 +171,29 @@ relevant when deploying (keep one instance warm; see the deploy notes).
 persists/dedupes contacts, and drafts an intro with Claude. **No auto-send** —
 the draft is the product, you copy/paste. Credit guardrails (daily caps, caching,
 org-lookup off by default) live in `app/apollo.py`; see `handoff.md` §4.
+
+## Job discovery (Phase 1)
+
+Beyond tracking applications you log, the assistant can **find** jobs and alert you
+when new ones drop — all on free, no-auth sources:
+
+1. **Set a profile:** `I'm looking for new grad SWE roles, remote or NYC`.
+2. **Track companies:** `track openings at stripe`. It auto-detects the company's
+   public board across **Greenhouse / Lever / Ashby** (no API key, no cost).
+3. **Get alerted:** a background loop (`app/discovery.py`, every `JOB_POLL_SECONDS`)
+   polls tracked boards, dedupes against everything already seen, runs a free
+   keyword/location pre-filter, scores survivors 0–1 (Claude Haiku when a key is
+   set, else a free heuristic), and Slack-DMs you the ones above
+   `JOB_RELEVANCE_THRESHOLD` — reusing the same sender as reminders.
+4. **Browse anytime:** `any new jobs`.
+
+Cost controls: free sources first; the LLM only ever sees pre-filtered postings,
+batched into one call, capped at `JOB_MAX_SCORED_PER_TICK` per tick; each posting
+is scored and alerted exactly once (dedup on `(user, source, external_id)`). Paid
+sources (Indeed/aggregators, LinkedIn) are deferred to later phases behind flags.
+
+Run a one-shot pass manually: `.venv/bin/python -m app.discovery`. Discovery health
+is on `/health` under `discovery`.
 
 ## Architecture
 
