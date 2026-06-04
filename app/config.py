@@ -65,6 +65,18 @@ class Settings(BaseSettings):
     # explicitly enabled with their own budget caps, mirroring the Apollo guards.
     job_sources_enabled: str = "greenhouse,lever,ashby"
 
+    # --- Job discovery: paid aggregator (Phase 3) --------------------------
+    # A SerpApi-style Google Jobs search across the whole web, driven by the
+    # user's profile (not a single company board). OFF by default and gated on
+    # BOTH an explicit enable flag AND an API key, with a DB-backed daily call
+    # budget + a per-minute rate limit — mirrors the Apollo credit guards.
+    aggregator_api_key: str = ""
+    aggregator_search_enabled: bool = False    # explicit opt-in; off by default
+    aggregator_max_calls_per_day: int = 10     # daily budget cap (UTC day)
+    aggregator_rate_limit_per_min: int = 3     # token-bucket; over-limit skips
+    aggregator_results_per_call: int = 20      # postings kept per search
+    aggregator_location: str = ""              # optional location filter passed to the API
+
     @property
     def use_llm_router(self) -> bool:
         return bool(self.anthropic_api_key.strip())
@@ -72,6 +84,11 @@ class Settings(BaseSettings):
     @property
     def apollo_enabled(self) -> bool:
         return bool(self.apollo_api_key.strip())
+
+    @property
+    def aggregator_active(self) -> bool:
+        """Paid aggregator runs only when explicitly enabled AND keyed."""
+        return self.aggregator_search_enabled and bool(self.aggregator_api_key.strip())
 
     @property
     def job_sources(self) -> list[str]:

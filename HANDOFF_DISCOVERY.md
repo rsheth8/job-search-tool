@@ -1,4 +1,4 @@
-# Handoff — Job Discovery (Phases 1 & 2 complete, Phase 3 next)
+# Handoff — Job Discovery (Phases 1–3 complete, Phase 4 next)
 
 > For a fresh Claude Code session rooted in `/Users/rahilsheth/Documents/job-search-tool`.
 > Companion to `handoff.md` (the pre-discovery engineering doc — still accurate for
@@ -7,10 +7,11 @@
 ## TL;DR
 
 The conversational tracker can now **discover jobs and alert you on Slack** when new
-ones drop — not just log apps you tell it about — and **assist you in applying**
-(`apply <#>` → link + drafted blurb, logged as Applied, no auto-submit). Phases 1 & 2
-are **built and tested (284 passing)**; Phase 1 was verified end-to-end against live
-job boards. Next up: **Phase 3 — paid aggregators behind flags/budget caps.**
+ones drop — not just log apps you tell it about — **assist you in applying**
+(`apply <#>` → link + drafted blurb, logged as Applied, no auto-submit), and
+optionally **search the whole web via a paid aggregator** (profile-driven, off by
+default, budget-capped). Phases 1–3 are **built and tested (298 passing)**; Phase 1
+was verified end-to-end against live job boards. Next up: **Phase 4 — LinkedIn.**
 
 ## Prereqs (read first)
 
@@ -99,11 +100,49 @@ What shipped:
    draft present, unknown-id, by-company, idempotent) and `tests/test_jobsources.py`
    (RSS item + Atom + garbage). **284 passing.**
 
-## Phase 3 / 4 (deferred, behind flags + budget caps — Apollo-style)
+## Phase 3 — paid aggregator (DONE, 2026-06-04)
 
-- Paid aggregator (Indeed/Google Jobs via SerpApi-style API): `app/jobsources/aggregator.py`,
-  off by default, daily cap.
-- LinkedIn: `app/jobsources/linkedin.py`, off by default.
+A SerpApi-style **Google Jobs** search across the whole web, driven by the user's
+**profile** (not a tracked company board). Off by default; gated + budget-capped
+exactly like the Apollo recruiter lookup.
+
+What shipped:
+1. **Config** (`app/config.py`): `aggregator_api_key`, `aggregator_search_enabled`
+   (off), `aggregator_max_calls_per_day` (10), `aggregator_rate_limit_per_min` (3),
+   `aggregator_results_per_call` (20), `aggregator_location`; property
+   **`aggregator_active`** = flag AND key (both required).
+2. **Source** (`app/jobsources/aggregator.py`): `fetch(query)` — never raises;
+   returns `[]` on disabled / no-key / over-daily-budget / rate-limited / error.
+   Pure `_parse()` (SerpApi `jobs_results` shape; prefers `apply_options[0].link`,
+   falls back to `share_link`; `job_id`→external_id). DB-backed daily cap via new
+   `aggregator_api_calls` table; only **successful** calls are counted. `usage()`
+   for /health, `reset_for_tests()`.
+3. **Registry** (`app/jobsources/__init__.py`): registered as `"aggregator"`, plus
+   **`NON_BOARD_SOURCES = {rss, aggregator}`** — `resolve_board` skips these so it
+   never slug-probes a paid/URL source.
+4. **Discovery** (`app/discovery.py`): `_profile_query(prof)` (roles + "remote"/
+   "in <city>"), `_aggregator_fresh()` woven into `tick` (baselines silently on the
+   user's FIRST aggregator run via `jobstore.has_postings_from_source`, then alerts
+   new). `tick` no longer early-returns when a user has no tracked boards (aggregator
+   can stand alone). `run_all` sweeps `_discovery_users` = tracked users ∪ (when
+   active) `profile.all_profile_users()`.
+5. **/health** (`app/main.py`): `aggregator` block when active.
+6. **Tests:** `tests/test_aggregator.py` (gating, daily cap, error-degrade, result
+   cap, query building, baseline-then-alert, inactive no-op, run_all union) +
+   `tests/test_jobsources.py` aggregator `_parse` cases. conftest neutralizes the
+   key/flag + resets the limiter. **298 passing.**
+
+Notes for whoever runs it live: needs a SerpApi (or compatible) key; set both
+`AGGREGATOR_SEARCH_ENABLED=true` and `AGGREGATOR_API_KEY`. Verify the live
+`jobs_results` shape against `_parse` (it's the one piece not exercised against a
+real response). Alerts reuse the `#<id>` + `apply <#>` Phase-2 path unchanged.
+
+## Phase 4 (deferred, behind flags + budget caps — Apollo-style)
+
+- LinkedIn: `app/jobsources/linkedin.py`, off by default. Same gating/budget shape
+  as the aggregator (`aggregator_active`-style `*_active` property + daily cap +
+  `NON_BOARD_SOURCES` membership). Hardest part is a sanctioned data source —
+  LinkedIn has no free public postings API; likely a paid partner/3rd-party feed.
 
 ## To go always-on (Fly)
 

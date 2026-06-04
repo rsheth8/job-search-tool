@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 from . import jobstore, matcher, profile, reminders
 from .config import get_settings
-from .jobsources import JobPosting, fetch_source
+from .jobsources import NON_BOARD_SOURCES, JobPosting, fetch_source
 
 logger = logging.getLogger("discovery")
 
@@ -41,6 +41,8 @@ def resolve_board(company_name: str) -> dict | None:
     actually yields postings, or None if nothing public is found.
     """
     for source in get_settings().job_sources:
+        if source in NON_BOARD_SOURCES:
+            continue  # search/URL sources aren't per-company boards — never slug-probe
         for slug in _slug_variants(company_name):
             posts = fetch_source(source, slug)
             if posts:
@@ -84,15 +86,63 @@ def seed_board(user_id: str, source: str, board_token: str, company_name: str | 
     return n
 
 
+def _profile_query(prof) -> str:
+    """Build an aggregator search query from a profile (roles + locations).
+
+    Returns "" when there's nothing to search on, so we never spend a paid call
+    on an empty profile.
+    """
+    if prof is None:
+        return ""
+    roles = (prof["roles"] or "").strip()
+    if not roles:
+        return ""
+    parts = [roles]
+    locs = [s.strip() for s in re.split(r"[,/]", prof["locations"] or "") if s.strip()]
+    if any(s.lower() == "remote" for s in locs) and "remote" not in roles.lower():
+        parts.append("remote")
+    cities = [s for s in locs if s.lower() != "remote"]
+    if cities:
+        parts.append("in " + cities[0])
+    return " ".join(parts).strip()
+
+
+def _aggregator_fresh(user_id: str, prof, settings) -> list[JobPosting]:
+    """Profile-driven paid-aggregator pass. Returns NEW postings to score/alert.
+
+    Off unless ``aggregator_active``. On the user's first aggregator run we
+    baseline current results silently (status 'seeded', no alerts) — exactly like
+    ``seed_board`` — so flipping the feature on doesn't unleash a backlog storm.
+    """
+    if not settings.aggregator_active:
+        return []
+    query = _profile_query(prof)
+    if not query:
+        return []
+    posts = fetch_source("aggregator", query)
+    new = [
+        p for p in posts
+        if p.external_id and not jobstore.posting_exists(user_id, p.source, p.external_id)
+    ]
+    if not new:
+        return []
+    if not jobstore.has_postings_from_source(user_id, "aggregator"):
+        seeded = 0
+        for p in new:
+            if jobstore.save_posting(user_id, p, relevance_score=None, status="seeded"):
+                seeded += 1
+        logger.info("aggregator baselined %d posting(s) for %s", seeded, user_id)
+        return []
+    return new
+
+
 def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
     """Run one discovery pass for ``user_id``. Returns the number of alerts sent."""
     boards = jobstore.list_tracked(user_id)
-    if not boards:
-        return 0
     prof = profile.get_profile(user_id)
     settings = get_settings()
 
-    # 1. Fetch every board, keep only postings we haven't recorded before.
+    # 1. Fetch every tracked board, keep only postings we haven't recorded before.
     fresh: list[JobPosting] = []
     for b in boards:
         for p in fetch_source(b["source"], b["board_token"]):
@@ -101,6 +151,8 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
             if b["company_name"]:
                 p.company = b["company_name"]  # prefer the tracked display name
             fresh.append(p)
+    # 1b. Optional paid aggregator pass (profile-driven, off by default).
+    fresh.extend(_aggregator_fresh(user_id, prof, settings))
     if not fresh:
         return 0
 
@@ -135,11 +187,21 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
     return alerts
 
 
+def _discovery_users(settings) -> list[str]:
+    """Users to sweep: anyone tracking a board, plus (when the paid aggregator is
+    active) anyone with a profile — so web-wide search doesn't require also
+    tracking a company board."""
+    users = set(jobstore.all_tracked_users())
+    if settings.aggregator_active:
+        users.update(profile.all_profile_users())
+    return sorted(users)
+
+
 def run_all(*, sender=None) -> int:
-    """One discovery pass for every user with tracked boards. Returns total alerts."""
+    """One discovery pass for every relevant user. Returns total alerts."""
     global last_tick_at
     total = 0
-    for user_id in jobstore.all_tracked_users():
+    for user_id in _discovery_users(get_settings()):
         try:
             total += tick(user_id, sender=sender)
         except Exception:  # noqa: BLE001 — one user's failure never stops the sweep

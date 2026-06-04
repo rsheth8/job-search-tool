@@ -106,6 +106,19 @@ def save_posting(
         ).fetchone()
 
 
+def has_postings_from_source(user_id: str, source: str) -> bool:
+    """True if the user has any posting from ``source`` — used to baseline the
+    paid aggregator on its first run (so enabling it doesn't storm)."""
+    with connect() as conn:
+        return (
+            conn.execute(
+                "SELECT 1 FROM job_postings WHERE user_id = ? AND source = ? LIMIT 1",
+                (user_id, source),
+            ).fetchone()
+            is not None
+        )
+
+
 def get_posting(user_id: str, posting_id: int) -> sqlite3.Row | None:
     with connect() as conn:
         return conn.execute(

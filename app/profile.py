@@ -35,6 +35,17 @@ def has_profile(user_id: str) -> bool:
     return any((row[f] or "").strip() for f in ("roles", "keywords", "locations"))
 
 
+def all_profile_users() -> list[str]:
+    """Every user with a saved profile (drives aggregator-only discovery sweeps)."""
+    with connect() as conn:
+        return [
+            r[0]
+            for r in conn.execute(
+                "SELECT user_id FROM job_search_profile ORDER BY user_id"
+            )
+        ]
+
+
 def set_profile(user_id: str, **fields) -> sqlite3.Row:
     """Upsert the given fields. Unknown keys are ignored; unset fields untouched."""
     updates = {k: v for k, v in fields.items() if k in _FIELDS and v is not None}
