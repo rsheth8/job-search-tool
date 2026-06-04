@@ -32,7 +32,9 @@ def test_upcoming_sorted_and_excludes_past():
 
 def test_create_deadline_schedules_reminder():
     when = _now() + timedelta(days=3)
-    deadlines.create_deadline("u", "Stripe", "OA", when)  # schedule_reminder defaults True
+    # Pass the test clock so the heads-up math doesn't depend on the real date
+    # (the day-before reminder clamps to "now", which would otherwise drift).
+    deadlines.create_deadline("u", "Stripe", "OA", when, now=_now())  # schedule_reminder defaults True
     pending = reminders.list_pending("u")
     assert len(pending) == 1
     assert "Stripe" in pending[0]["body"]

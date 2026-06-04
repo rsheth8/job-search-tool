@@ -64,8 +64,9 @@ def create_deadline(
     *,
     application_id: int | None = None,
     schedule_reminder: bool = True,
+    now: datetime | None = None,
 ) -> sqlite3.Row:
-    now = _now()
+    now = now or _now()
     with connect() as conn:
         cur = conn.execute(
             """
