@@ -146,8 +146,31 @@ def list_postings(
 def mark_posting_status(posting_id: int, status: str) -> None:
     with connect() as conn:
         conn.execute(
-            "UPDATE job_postings SET status = ? WHERE id = ?", (status, posting_id)
+            "UPDATE job_postings SET status = ?, snoozed_until = NULL WHERE id = ?",
+            (status, posting_id),
         )
+
+
+def snooze_posting(posting_id: int, until_iso: str) -> None:
+    """Mute a posting until ``until_iso`` — it's hidden from listings until then,
+    when ``wake_snoozed`` resurfaces it as 'alerted'."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE job_postings SET status = 'snoozed', snoozed_until = ? WHERE id = ?",
+            (until_iso, posting_id),
+        )
+
+
+def wake_snoozed(user_id: str, now_iso: str) -> int:
+    """Flip expired snoozes back to 'alerted'. Returns how many woke."""
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE job_postings SET status = 'alerted', snoozed_until = NULL "
+            "WHERE user_id = ? AND status = 'snoozed' AND snoozed_until IS NOT NULL "
+            "AND snoozed_until <= ?",
+            (user_id, now_iso),
+        )
+        return cur.rowcount
 
 
 def counts_by_status(user_id: str) -> dict[str, int]:
@@ -162,6 +185,31 @@ def counts_by_status(user_id: str) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 # Cross-user helpers (background loop + /health)
 # ---------------------------------------------------------------------------
+
+def board_stats(user_id: str) -> list[dict]:
+    """Per-tracked-board posting counts for the richer 'what am I tracking' view.
+
+    Postings carry the board's display name (``tick`` sets it), so we match on
+    (source, company_name). ``fresh`` = currently surfaced (alerted/new).
+    """
+    out: list[dict] = []
+    with connect() as conn:
+        for b in list_tracked(user_id):
+            row = conn.execute(
+                "SELECT COUNT(*) AS total, "
+                "SUM(CASE WHEN status IN ('alerted','new') THEN 1 ELSE 0 END) AS fresh, "
+                "MAX(first_seen_at) AS last_seen "
+                "FROM job_postings WHERE user_id = ? AND source = ? AND company = ?",
+                (user_id, b["source"], b["company_name"]),
+            ).fetchone()
+            out.append({
+                "board": b,
+                "total": row["total"] or 0,
+                "fresh": row["fresh"] or 0,
+                "last_seen": row["last_seen"],
+            })
+    return out
+
 
 def all_tracked_users() -> list[str]:
     """Distinct users with at least one tracked board (drives the poll loop)."""

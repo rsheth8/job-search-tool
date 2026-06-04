@@ -181,7 +181,8 @@ CREATE TABLE IF NOT EXISTS job_postings (
     posted_at       TEXT,
     first_seen_at   TEXT NOT NULL,
     relevance_score REAL,
-    status          TEXT NOT NULL DEFAULT 'new'  -- new | alerted | applied | dismissed
+    status          TEXT NOT NULL DEFAULT 'new',  -- new|alerted|applied|dismissed|snoozed|seeded
+    snoozed_until   TEXT                          -- when a 'snoozed' posting should resurface
 );
 
 -- One job-search profile per user: target roles/keywords/locations plus a short
@@ -194,6 +195,7 @@ CREATE TABLE IF NOT EXISTS job_search_profile (
     seniority      TEXT,            -- e.g. "new grad", "senior"
     resume_summary TEXT,            -- a few lines describing the candidate
     prefs_json     TEXT,            -- free-form JSON for future prefs
+    min_relevance  REAL,            -- per-user alert threshold (NULL = use global default)
     updated_at     TEXT
 );
 
@@ -238,3 +240,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         "ON recruiters(user_id, company, apollo_person_id) "
         "WHERE apollo_person_id IS NOT NULL"
     )
+    # Discovery polish: snooze timestamp on postings + per-user alert threshold.
+    post_cols = {r[1] for r in conn.execute("PRAGMA table_info(job_postings)")}
+    if post_cols and "snoozed_until" not in post_cols:
+        conn.execute("ALTER TABLE job_postings ADD COLUMN snoozed_until TEXT")
+    prof_cols = {r[1] for r in conn.execute("PRAGMA table_info(job_search_profile)")}
+    if prof_cols and "min_relevance" not in prof_cols:
+        conn.execute("ALTER TABLE job_search_profile ADD COLUMN min_relevance REAL")

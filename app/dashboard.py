@@ -14,7 +14,9 @@ from datetime import datetime, timezone
 from html import escape
 
 from . import deadlines as deadlines_mod
+from . import jobstore, profile
 from . import reminders, scoring, stats, store
+from .config import get_settings
 from .db import connect
 from .intents import CANONICAL_STATUSES
 
@@ -99,6 +101,7 @@ def render(user_id: str | None = None, *, now: datetime | None = None) -> str:
         f"{_followups_section(ranked)}"
         f"{_deadlines_section(upcoming, now)}"
         f"{_reminders_section(pending, now)}"
+        f"{_discovery_section(user_id)}"
         f"{_applications_section(apps, now)}"
         f"{_recruiters_section(recruiters)}"
         "</main>"
@@ -241,6 +244,57 @@ def _applications_section(apps: list, now: datetime) -> str:
     )
 
 
+def _discovery_section(user_id: str) -> str:
+    """Tracked boards + the freshest matched postings discovery has surfaced."""
+    board_stats = jobstore.board_stats(user_id)
+    posts = jobstore.list_postings(
+        user_id, statuses=("alerted", "new", "applied"), limit=15
+    )
+    if not board_stats and not posts:
+        return ""
+
+    parts = ["<section><h2>🔎 Job discovery</h2>"]
+
+    if board_stats:
+        default = get_settings().job_relevance_threshold
+        thresh = profile.effective_threshold(profile.get_profile(user_id), default)
+        rows = []
+        for s in board_stats:
+            b = s["board"]
+            name = escape(b["company_name"] or b["board_token"])
+            fresh = (f"<b>{s['fresh']}</b> new" if s["fresh"]
+                     else "<span class='muted'>0 new</span>")
+            rows.append(
+                f"<tr><td>{name} <span class='muted'>({escape(b['source'])})</span></td>"
+                f"<td>{fresh}</td><td class='muted'>{s['total']} seen</td></tr>"
+            )
+        parts.append(
+            f"<p class='muted'>Matching ≥ {round(thresh * 100)}% relevance</p>"
+            f"<table>{''.join(rows)}</table>"
+        )
+
+    if posts:
+        rows = []
+        for p in posts:
+            score = p["relevance_score"]
+            pct = f"{round(score * 100)}%" if score is not None else "—"
+            loc = f" · {escape(p['location'])}" if p["location"] else ""
+            title = escape(p["title"] or "role")
+            company = escape(p["company"] or "")
+            link = (f"<a href='{escape(p['url'])}' target='_blank' rel='noopener'>{title} ↗</a>"
+                    if p["url"] else title)
+            tag = " <span class='muted'>(applied)</span>" if p["status"] == "applied" else ""
+            rows.append(
+                f"<tr><td class='muted'>#{p['id']}</td>"
+                f"<td>{link}{tag}<div class='muted'>{company}{loc}</div></td>"
+                f"<td><b>{pct}</b></td></tr>"
+            )
+        parts.append(f"<h3 class='sub'>Latest matches</h3><table>{''.join(rows)}</table>")
+
+    parts.append("</section>")
+    return "".join(parts)
+
+
 def _recruiters_section(recruiters: list) -> str:
     if not recruiters:
         return ""
@@ -271,6 +325,7 @@ _CSS = (
     "section{margin:22px 0}"
     "h2{font-size:15px;letter-spacing:.02em;text-transform:uppercase;color:#374151;"
     "border-bottom:1px solid #e5e7eb;padding-bottom:6px}"
+    "h3.sub{font-size:13px;color:#6b7280;margin:14px 0 6px;font-weight:600}"
     ".badge{color:#fff;padding:2px 8px;border-radius:10px;font-size:12px;white-space:nowrap}"
     ".cards{display:flex;gap:12px;flex-wrap:wrap}"
     ".card{background:#fff;border-radius:12px;padding:14px 18px;min-width:96px;"

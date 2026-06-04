@@ -205,3 +205,130 @@ def test_apply_job_already_applied_is_idempotent_message():
     handle_sms("u", f"apply {row['id']}")
     again = handle_sms("u", f"apply {row['id']}")
     assert "already applied" in again.lower()
+
+
+# --- dismiss / snooze (polish) ---------------------------------------------
+
+@pytest.mark.parametrize("text,intent,msg", [
+    ("dismiss 3", Intent.DISMISS_JOB, "3"),
+    ("not interested in #4", Intent.DISMISS_JOB, "4"),
+    ("hide the stripe one", Intent.DISMISS_JOB, None),
+    ("snooze 5", Intent.SNOOZE_JOB, "5"),
+    ("snooze 5 for a week", Intent.SNOOZE_JOB, "5"),
+])
+def test_dismiss_snooze_routes(text, intent, msg):
+    p = R.parse(text)
+    assert p.intent == intent
+    assert p.message == msg
+
+
+def _alerted(uid="u", ext="1", title="Backend Engineer", company="Acme"):
+    # Track the board too, so an emptied listing says "no new matching jobs"
+    # (the "not tracking anything" branch only fires with zero boards).
+    jobstore.add_tracked_company(uid, "greenhouse", company.lower(), company)
+    return jobstore.save_posting(
+        uid, JobPosting("greenhouse", ext, title, f"https://x/{ext}", company=company),
+        relevance_score=0.8, status="alerted",
+    )
+
+
+def test_dismiss_hides_posting_from_listing():
+    row = _alerted()
+    reply = handle_sms("u", f"dismiss {row['id']}")
+    assert "Dismissed" in reply
+    assert jobstore.get_posting("u", row["id"])["status"] == "dismissed"
+    assert "no new matching jobs" in handle_sms("u", "any new jobs").lower()
+
+
+def test_snooze_then_resurfaces_after_expiry():
+    from datetime import datetime, timedelta, timezone
+
+    row = _alerted()
+    reply = handle_sms("u", f"snooze {row['id']} for a week")
+    assert "Snoozed" in reply
+    assert jobstore.get_posting("u", row["id"])["status"] == "snoozed"
+    # Hidden while snoozed.
+    assert "no new matching jobs" in handle_sms("u", "any new jobs").lower()
+    # Force the snooze into the past → it wakes and shows again.
+    past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    jobstore.snooze_posting(row["id"], past)
+    assert "Backend Engineer" in handle_sms("u", "any new jobs")
+
+
+def test_dismiss_unknown_id():
+    assert "don't have job #42" in handle_sms("u", "dismiss 42")
+
+
+# --- tune matching (polish) ------------------------------------------------
+
+@pytest.mark.parametrize("text,msg", [
+    ("only show me 80%+ matches", "set:0.8"),
+    ("be less picky about matches", "loosen"),
+    ("be more selective with jobs", "tighten"),
+    ("reset my match threshold", "reset"),
+])
+def test_tune_routes(text, msg):
+    p = R.parse(text)
+    assert p.intent == Intent.TUNE
+    assert p.message == msg
+
+
+def test_tune_sets_threshold_value():
+    profile.set_profile("u", roles="swe", keywords="swe")
+    reply = handle_sms("u", "only show me 80%+ matches")
+    assert "80%" in reply
+    assert profile.get_profile("u")["min_relevance"] == 0.8
+
+
+def test_tune_threshold_is_honored_in_tick(monkeypatch):
+    # Two-term profile so a single-term hit scores ~0.5 (below an 0.8 bar).
+    profile.set_profile("u", roles="swe, backend", keywords="swe, backend")
+    profile.set_min_relevance("u", 0.8)
+    jobstore.add_tracked_company("u", "greenhouse", "acme", "Acme")
+
+    feed = [JobPosting("greenhouse", "1", "SWE", "https://x/1",
+                       company="Acme", description="swe role")]
+    monkeypatch.setattr("app.discovery.fetch_source", lambda s, t: feed)
+
+    class Cap:
+        def __init__(self): self.sent = []
+        def send(self, u, b): self.sent.append(b)
+
+    cap = Cap()
+    # ~0.5 < 0.8 → stored but not alerted.
+    assert discovery.tick("u", sender=cap) == 0
+    assert cap.sent == []
+    assert jobstore.get_posting("u", 1)["status"] == "new"
+
+    # Drop the bar; a fresh full-match posting now alerts.
+    profile.set_min_relevance("u", 0.4)
+    feed.append(JobPosting("greenhouse", "2", "Backend SWE", "https://x/2",
+                           company="Acme", description="swe backend"))
+    assert discovery.tick("u", sender=cap) == 1
+
+
+def test_tune_reset_clears_to_default():
+    profile.set_min_relevance("u", 0.9)
+    reply = handle_sms("u", "reset matching")
+    assert "default" in reply.lower()
+    assert profile.get_profile("u")["min_relevance"] is None
+
+
+# --- richer tracked list (polish) ------------------------------------------
+
+def test_tracking_list_shows_counts_and_threshold(monkeypatch):
+    monkeypatch.setattr(
+        "app.discovery.resolve_board",
+        lambda c: {"source": "greenhouse", "board_token": "acme",
+                   "company_name": "Acme", "count": 0},
+    )
+    monkeypatch.setattr("app.discovery.fetch_source", lambda s, t: [])
+    handle_sms("u", "track openings at acme")
+    jobstore.save_posting(
+        "u", JobPosting("greenhouse", "1", "SWE", "https://x/1", company="Acme"),
+        relevance_score=0.8, status="alerted",
+    )
+    listed = handle_sms("u", "what am i tracking")
+    assert "Acme" in listed
+    assert "seen" in listed and "new" in listed
+    assert "Matching" in listed  # threshold line

@@ -137,6 +137,30 @@ Notes for whoever runs it live: needs a SerpApi (or compatible) key; set both
 `jobs_results` shape against `_parse` (it's the one piece not exercised against a
 real response). Alerts reuse the `#<id>` + `apply <#>` Phase-2 path unchanged.
 
+## Polish pass (DONE, 2026-06-04) — post-deploy
+
+Live on Fly (`https://job-search-tool.fly.dev`); these landed after the first deploy.
+
+1. **Dismiss / snooze postings.** Intents `DISMISS_JOB` / `SNOOZE_JOB`; router
+   `_DISMISS_JOB_RE` / `_SNOOZE_JOB_RE` (numeric `#` or "the <company> one").
+   `engine._do_dismiss_job` → status `dismissed`; `_do_snooze_job` → status
+   `snoozed` + `snoozed_until` (default 7d, or parsed duration). `jobstore`:
+   `snooze_posting`, `wake_snoozed` (resurfaces expired snoozes — called in
+   `tick` and `_do_jobs`). New `job_postings.snoozed_until` column (+ migration).
+2. **Per-user match threshold.** Intent `TUNE`; router `_parse_tune` →
+   `message` ∈ {`set:<0..1>`, `loosen`, `tighten`, `all`, `reset`}.
+   `engine._do_tune`; `profile.set_min_relevance` (explicit NULL clear) +
+   `effective_threshold`. New `job_search_profile.min_relevance` column (+
+   migration). `discovery.tick` uses `effective_threshold(prof, default)`.
+3. **Discovered-jobs dashboard.** `dashboard._discovery_section` — tracked boards
+   (via `jobstore.board_stats`) + latest matched postings with score/link.
+4. **Richer `what am I tracking`.** `_do_track` list branch uses `board_stats`
+   (per-board "N new, M seen") + overall counts + active threshold line.
+
+Tests: 16 added in `tests/test_jobs_intents.py` (routing + engine for all four).
+**314 passing.** Migrations are idempotent ALTERs (the prod SQLite on the Fly
+volume picks them up on next `flyctl deploy`).
+
 ## Phase 4 (deferred, behind flags + budget caps — Apollo-style)
 
 - LinkedIn: `app/jobsources/linkedin.py`, off by default. Same gating/budget shape

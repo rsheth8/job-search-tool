@@ -78,6 +78,8 @@ MENU = (
     "  \"what am I tracking\" · \"stop tracking stripe\" — manage tracked boards\n"
     "  \"any new jobs\" — browse the latest matches I've found\n"
     "  \"apply 2\" — get the link + a drafted blurb for posting #2 (I log it)\n"
+    "  \"dismiss 2\" · \"snooze 2 for a week\" — clear a posting you're not into\n"
+    "  \"only show 80%+ matches\" · \"be less picky\" — tune match strictness\n"
     "\n"
     "▸ SEE YOUR SEARCH\n"
     "  \"list\" — all applications\n"
@@ -176,7 +178,8 @@ def _looks_like_new_command(p: ParsedMessage, text: str, pending: Pending) -> bo
     if (
         p.intent in (Intent.LIST, Intent.QUERY, Intent.STATS, Intent.DEADLINE,
                      Intent.CHECK, Intent.UNDO, Intent.JOBS, Intent.TRACK,
-                     Intent.PROFILE, Intent.APPLY_JOB)
+                     Intent.PROFILE, Intent.APPLY_JOB, Intent.DISMISS_JOB,
+                     Intent.SNOOZE_JOB, Intent.TUNE)
         and p.confidence >= 0.7
     ):
         return True
@@ -227,6 +230,12 @@ def _start(user_id: str, p: ParsedMessage, raw: str) -> str:
         return _do_profile(user_id, p, raw)
     if p.intent == Intent.APPLY_JOB:
         return _do_apply_job(user_id, p, raw)
+    if p.intent == Intent.DISMISS_JOB:
+        return _do_dismiss_job(user_id, p)
+    if p.intent == Intent.SNOOZE_JOB:
+        return _do_snooze_job(user_id, p)
+    if p.intent == Intent.TUNE:
+        return _do_tune(user_id, p)
     # UNKNOWN
     if convo.is_greeting(raw):
         return GREETING
@@ -723,6 +732,7 @@ def _do_query(user_id: str, p: ParsedMessage, memory: dict) -> str:
 
 
 def _do_jobs(user_id: str) -> str:
+    jobstore.wake_snoozed(user_id, _now_utc().isoformat())  # resurface expired snoozes
     posts = jobstore.list_postings(user_id, statuses=("alerted", "new"), limit=10)
     if not posts:
         if not jobstore.list_tracked(user_id):
@@ -742,13 +752,25 @@ def _do_track(user_id: str, p: ParsedMessage, raw: str) -> str:
     action = (p.message or "").strip().lower()
 
     if action == "list":
-        boards = jobstore.list_tracked(user_id)
-        if not boards:
+        stats = jobstore.board_stats(user_id)
+        if not stats:
             return "Not tracking any companies yet. Try 'track openings at <company>'."
-        lines = ["👀 Tracking:"]
-        for b in boards:
-            lines.append(f"• {b['company_name'] or b['board_token']} ({b['source']})")
-        return "\n".join(lines)
+        lines = [f"👀 Tracking {len(stats)} board(s):"]
+        for s in stats:
+            b = s["board"]
+            name = b["company_name"] or b["board_token"]
+            fresh = f"{s['fresh']} new" if s["fresh"] else "0 new"
+            lines.append(f"• {name} ({b['source']}) — {fresh}, {s['total']} seen")
+        # Overall posting counts + the active match threshold.
+        counts = jobstore.counts_by_status(user_id)
+        alerted = counts.get("alerted", 0) + counts.get("new", 0)
+        applied = counts.get("applied", 0)
+        default = get_settings().job_relevance_threshold
+        thresh = profile_mod.effective_threshold(profile_mod.get_profile(user_id), default)
+        tail = f"\n🎚️ Matching ≥ {round(thresh * 100)}%"
+        if alerted or applied:
+            tail += f" · {alerted} to review, {applied} applied"
+        return "\n".join(lines) + tail
 
     company = p.company
     if not company:
@@ -861,6 +883,73 @@ def _do_apply_job(user_id: str, p: ParsedMessage, raw: str) -> str:
         "Logged as Applied. I won't submit anything for you — paste the draft "
         "into the application yourself."
     )
+
+
+def _posting_label(posting) -> str:
+    title = posting["title"] or "role"
+    company = posting["company"] or "?"
+    return f"{title} @ {company}"
+
+
+def _posting_not_found(p: ParsedMessage, verb: str) -> str:
+    pid = (p.message or "").strip()
+    if pid.isdigit():
+        return f"I don't have job #{pid}. Text 'any new jobs' to see the current matches."
+    if p.company:
+        return f"I don't have an open posting from {p.company} to {verb}."
+    return (f"Which posting should I {verb}? Reply '{verb} <#>' with a number "
+            "from a job alert.")
+
+
+def _do_dismiss_job(user_id: str, p: ParsedMessage) -> str:
+    posting = _resolve_posting(user_id, p)
+    if posting is None:
+        return _posting_not_found(p, "dismiss")
+    jobstore.mark_posting_status(posting["id"], "dismissed")
+    return f"👍 Dismissed #{posting['id']} ({_posting_label(posting)}) — won't surface it again."
+
+
+def _do_snooze_job(user_id: str, p: ParsedMessage) -> str:
+    posting = _resolve_posting(user_id, p)
+    if posting is None:
+        return _posting_not_found(p, "snooze")
+    when = reminders.parse_time_reference(p.time_reference) if p.time_reference else None
+    if when is None:
+        from datetime import timedelta
+        when = _now_utc() + timedelta(days=7)
+    jobstore.snooze_posting(posting["id"], when.isoformat())
+    return (f"😴 Snoozed #{posting['id']} ({_posting_label(posting)}) until "
+            f"{when.date().isoformat()} — it'll resurface in 'any new jobs' then.")
+
+
+def _do_tune(user_id: str, p: ParsedMessage) -> str:
+    spec = (p.message or "").strip().lower()
+    default = get_settings().job_relevance_threshold
+    prof = profile_mod.get_profile(user_id)
+    current = profile_mod.effective_threshold(prof, default)
+
+    if spec == "reset":
+        profile_mod.set_min_relevance(user_id, None)
+        return f"🎚️ Match threshold reset to the default ({round(default * 100)}%)."
+    if spec == "all":
+        new = 0.0
+    elif spec.startswith("set:"):
+        try:
+            new = max(0.0, min(0.95, float(spec.split(":", 1)[1])))
+        except ValueError:
+            new = current
+    elif spec == "loosen":
+        new = round(max(0.0, current - 0.1), 2)
+    elif spec == "tighten":
+        new = round(min(0.95, current + 0.1), 2)
+    else:
+        return ("Tell me how to tune matching — e.g. \"only show 80%+ matches\", "
+                "\"be less picky\", or \"reset matching\".")
+
+    profile_mod.set_min_relevance(user_id, new)
+    if new <= 0:
+        return "🎚️ Showing every match now — I'll alert on all new postings."
+    return f"🎚️ Match threshold set to {round(new * 100)}%. I'll alert on jobs scoring ≥ {new:.2f}."
 
 
 _PROFILE_LEADIN = re.compile(
