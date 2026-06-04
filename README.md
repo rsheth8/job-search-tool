@@ -64,8 +64,8 @@ code change.
 ### Intents
 
 `APPLY, UPDATE, NOTE, LIST, QUERY, STATS, DEADLINE, CHECK, DELETE, EDIT, BULK,
-UNDO, REMIND, OUTREACH, TRACK, JOBS, PROFILE, APPLY_JOB, UNKNOWN` — all wired
-through both routers.
+UNDO, REMIND, OUTREACH, TRACK, JOBS, PROFILE, APPLY_JOB, DISMISS_JOB, SNOOZE_JOB,
+TUNE, UNKNOWN` — all wired through both routers.
 
 - **EDIT** is multi-turn: `change databricks` → *"What should I change about
   Databricks — its role, name, or applied date?"* → `role to SWE II`.
@@ -192,6 +192,11 @@ when new ones drop — all on free, no-auth sources:
    back the apply link plus a drafted *"why I'm a fit"* blurb (Claude when keyed,
    else a template from your profile), logs the role as **Applied**, and marks the
    posting applied. It never auto-submits — you paste the draft yourself.
+6. **Manage the feed:** `dismiss 2` hides a posting for good; `snooze 2 for a
+   week` mutes it until it resurfaces; `only show 80%+ matches` / `be less picky`
+   / `reset matching` tune your per-user alert threshold; `what am I tracking`
+   shows per-board counts + the active threshold. The web dashboard (`GET /`) has
+   a **Job discovery** section listing tracked boards and the latest matches.
 
 A generic **RSS/Atom** source (`app/jobsources/rss.py`) is also registered for
 feed-based boards (e.g. "Who is hiring" aggregations), alongside Greenhouse /

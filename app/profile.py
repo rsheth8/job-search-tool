@@ -13,7 +13,10 @@ from datetime import datetime, timezone
 from .db import connect
 
 # Columns a caller may set; user_id/updated_at are managed here.
-_FIELDS = ("roles", "keywords", "locations", "seniority", "resume_summary", "prefs_json")
+_FIELDS = (
+    "roles", "keywords", "locations", "seniority", "resume_summary",
+    "prefs_json", "min_relevance",
+)
 
 
 def _now() -> str:
@@ -75,6 +78,42 @@ def set_profile(user_id: str, **fields) -> sqlite3.Row:
         return conn.execute(
             "SELECT * FROM job_search_profile WHERE user_id = ?", (user_id,)
         ).fetchone()
+
+
+def set_min_relevance(user_id: str, value: float | None) -> None:
+    """Set (or clear, with None) the per-user alert threshold.
+
+    ``set_profile`` skips None values, so clearing back to the global default
+    needs this explicit NULL write. Upserts so a threshold can be set before any
+    roles are saved.
+    """
+    with connect() as conn:
+        exists = conn.execute(
+            "SELECT 1 FROM job_search_profile WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        if exists is None:
+            conn.execute(
+                "INSERT INTO job_search_profile (user_id, min_relevance, updated_at) "
+                "VALUES (?, ?, ?)",
+                (user_id, value, _now()),
+            )
+        else:
+            conn.execute(
+                "UPDATE job_search_profile SET min_relevance = ?, updated_at = ? "
+                "WHERE user_id = ?",
+                (value, _now(), user_id),
+            )
+
+
+def effective_threshold(row: sqlite3.Row | None, default: float) -> float:
+    """The alert threshold for a user: their saved ``min_relevance`` or ``default``."""
+    if row is None:
+        return default
+    try:
+        val = row["min_relevance"]
+    except (IndexError, KeyError):
+        return default
+    return float(val) if val is not None else default
 
 
 def profile_text(row: sqlite3.Row | None) -> str:

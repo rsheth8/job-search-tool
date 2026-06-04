@@ -142,6 +142,9 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
     prof = profile.get_profile(user_id)
     settings = get_settings()
 
+    # 0. Resurface any snoozed postings whose snooze has expired.
+    jobstore.wake_snoozed(user_id, (now or datetime.now(timezone.utc)).isoformat())
+
     # 1. Fetch every tracked board, keep only postings we haven't recorded before.
     fresh: list[JobPosting] = []
     for b in boards:
@@ -168,7 +171,7 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
     # 4. Persist every scored posting (so it's never re-scored) and alert the
     #    ones above threshold.
     sender = sender or reminders.get_sender()
-    threshold = settings.job_relevance_threshold
+    threshold = profile.effective_threshold(prof, settings.job_relevance_threshold)
     alerts = 0
     for posting, sc in scored:
         good = sc >= threshold

@@ -121,6 +121,18 @@ _APPLY_JOB_RE = re.compile(
     re.I,
 )
 
+# DISMISS_JOB / SNOOZE_JOB: manage a surfaced posting by # (or company ref).
+_DISMISS_JOB_RE = re.compile(
+    r"\b(?:dismiss|hide|ignore|not interested(?: in)?)\b\s*#?(\d+)\b"
+    r"|\b(?:dismiss|hide|ignore|not interested(?: in)?)\b\s+the\s+(.+?)\s+(?:one|posting|role|job|opening)\b",
+    re.I,
+)
+_SNOOZE_JOB_RE = re.compile(
+    r"\bsnooze\b\s*#?(\d+)\b"
+    r"|\bsnooze\b\s+the\s+(.+?)\s+(?:one|posting|role|job|opening)\b",
+    re.I,
+)
+
 # PROFILE: set search criteria, or show the saved profile.
 _PROFILE_SET_RE = re.compile(
     r"\b(looking for|i want|i'?m looking|interested in|search(?:ing)? for|"
@@ -131,6 +143,31 @@ _PROFILE_SHOW_RE = re.compile(
     r"\b(show|what'?s?|see|view)\b[^.?!]*\bprofile\b|\bmy profile\b|^\s*profile\s*\??$",
     re.I,
 )
+
+
+# TUNE: adjust how picky the matcher is. Encodes the request in `message`:
+#   "set:<0..1>" (explicit), "loosen", "tighten", "all", or "reset".
+def _parse_tune(low: str) -> ParsedMessage | None:
+    """Detect a request to change the alert threshold; None if it isn't one."""
+    pct = re.search(r"(\d{1,3})\s*%", low)
+    talks_match = bool(re.search(
+        r"\b(match|matches|matching|picky|selective|strict|threshold|bar|filter|"
+        r"alerts?|jobs?|relevant|relevance)\b", low
+    ))
+    if re.search(r"\b(reset|default)\b", low) and talks_match:
+        return ParsedMessage(intent=Intent.TUNE, message="reset", confidence=0.85)
+    if re.search(r"\bshow me everything\b|\bno (filter|threshold)\b|\b(everything|all jobs)\b", low) and talks_match:
+        return ParsedMessage(intent=Intent.TUNE, message="all", confidence=0.8)
+    if pct and (talks_match or re.search(r"\b(only|at least|and up|or (higher|better|more)|\+)\b", low)):
+        val = max(0.0, min(1.0, int(pct.group(1)) / 100))
+        return ParsedMessage(intent=Intent.TUNE, message=f"set:{val}", confidence=0.85)
+    if re.search(r"\b(less (picky|selective|strict)|lower the (bar|threshold)|"
+                 r"show me more|more jobs|be less picky|loosen)\b", low):
+        return ParsedMessage(intent=Intent.TUNE, message="loosen", confidence=0.8)
+    if re.search(r"\b(more (picky|selective|strict)|stricter|raise the (bar|threshold)|"
+                 r"only (the )?(best|top|high(est)?)|be more picky|tighten)\b", low):
+        return ParsedMessage(intent=Intent.TUNE, message="tighten", confidence=0.8)
+    return None
 
 
 def _parse_track_company(low: str) -> str | None:
@@ -445,6 +482,30 @@ class HeuristicRouter:
                 confidence=0.85 if company else 0.5,
             )
 
+        m = _DISMISS_JOB_RE.search(low)
+        if m:
+            pid = m.group(1)
+            if pid:
+                return ParsedMessage(intent=Intent.DISMISS_JOB, message=str(int(pid)),
+                                     confidence=0.9)
+            return ParsedMessage(intent=Intent.DISMISS_JOB,
+                                 company=_company_from(m.group(2)), confidence=0.8)
+
+        m = _SNOOZE_JOB_RE.search(low)
+        if m:
+            pid = m.group(1)
+            company = None if pid else _company_from(m.group(2))
+            return ParsedMessage(
+                intent=Intent.SNOOZE_JOB,
+                message=str(int(pid)) if pid else None,
+                company=company, time_reference=time_ref,
+                confidence=0.9 if pid else 0.8,
+            )
+
+        tuned = _parse_tune(low)
+        if tuned is not None:
+            return tuned
+
         if _TRACK_RE.search(low):
             if _TRACK_LIST_RE.search(low):
                 return ParsedMessage(intent=Intent.TRACK, message="list", confidence=0.85)
@@ -648,6 +709,24 @@ _FEWSHOTS = [
     ("apply to the stripe one",
      [{"intent": "APPLY_JOB", "company": "Stripe", "role": None, "status": None,
        "message": None, "time_reference": None, "confidence": 0.85}]),
+    ("dismiss 3",
+     [{"intent": "DISMISS_JOB", "company": None, "role": None, "status": None,
+       "message": "3", "time_reference": None, "confidence": 0.9}]),
+    ("not interested in #4",
+     [{"intent": "DISMISS_JOB", "company": None, "role": None, "status": None,
+       "message": "4", "time_reference": None, "confidence": 0.88}]),
+    ("snooze 5 for a week",
+     [{"intent": "SNOOZE_JOB", "company": None, "role": None, "status": None,
+       "message": "5", "time_reference": "a week", "confidence": 0.9}]),
+    ("only show me 80%+ matches",
+     [{"intent": "TUNE", "company": None, "role": None, "status": None,
+       "message": "set:0.8", "time_reference": None, "confidence": 0.88}]),
+    ("be less picky about job matches",
+     [{"intent": "TUNE", "company": None, "role": None, "status": None,
+       "message": "loosen", "time_reference": None, "confidence": 0.82}]),
+    ("reset my match threshold",
+     [{"intent": "TUNE", "company": None, "role": None, "status": None,
+       "message": "reset", "time_reference": None, "confidence": 0.85}]),
     ("undo that",
      [{"intent": "UNDO", "company": None, "role": None, "status": None,
        "message": None, "time_reference": None, "confidence": 0.95}]),
@@ -786,6 +865,17 @@ def _build_system_prompt() -> str:
         "#5') put just the number in `message`. For a company reference ('apply to "
         "the stripe one') set `company` and leave `message` null. NOTE: past-tense "
         "'applied to X' is APPLY (logging a job they found elsewhere), not APPLY_JOB.\n"
+        "- DISMISS_JOB: user wants to permanently hide a surfaced posting ('dismiss "
+        "3', 'not interested in #4', 'hide the stripe one'). Put the number in "
+        "`message`, or set `company` for a company reference.\n"
+        "- SNOOZE_JOB: user wants to mute a posting for a while ('snooze 5', 'snooze "
+        "5 for a week'). Put the number in `message` and any duration in "
+        "`time_reference`.\n"
+        "- TUNE: user wants to change how strict job matching/alerting is. Put one "
+        "of these in `message`: 'set:<0..1>' for an explicit threshold ('only 80%+ "
+        "matches' -> 'set:0.8'), 'loosen' (less picky / show more), 'tighten' (more "
+        "picky / only the best), 'all' (show everything), or 'reset' (back to "
+        "default).\n"
         "- UNKNOWN: none of the above.\n\n"
         "Rules:\n"
         "- `confidence` is 0.0-1.0: your certainty about the intent + entities.\n"
