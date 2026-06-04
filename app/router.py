@@ -110,6 +110,17 @@ _JOBS_RE = re.compile(
     r"|^\s*jobs?\s*\??$",
     re.I,
 )
+# APPLY_JOB: apply to a posting discovery surfaced (the alert prints "#<id>" and
+# "reply apply <id>"). Matches a numeric id ("apply 2", "apply to #2") or a
+# company reference ("apply to the stripe one"). Present-tense "apply" only —
+# "applied to a job at google" stays APPLY (\bapply\b never matches "applied").
+_APPLY_JOB_RE = re.compile(
+    r"\bapply\b\s+(?:to\s+)?#(\d+)\b"                              # apply #2 / apply to #2
+    r"|\bapply\s+(\d+)\b"                                          # apply 2
+    r"|\bapply\s+to\s+the\s+(.+?)\s+(?:one|posting|role|job|opening)\b",  # apply to the stripe one
+    re.I,
+)
+
 # PROFILE: set search criteria, or show the saved profile.
 _PROFILE_SET_RE = re.compile(
     r"\b(looking for|i want|i'?m looking|interested in|search(?:ing)? for|"
@@ -420,6 +431,20 @@ class HeuristicRouter:
             )
 
         # --- Job discovery (before APPLY/QUERY/LIST, which share keywords) ----
+        # APPLY_JOB first: "apply 2" must beat the generic APPLY ("applied …").
+        m = _APPLY_JOB_RE.search(low)
+        if m:
+            pid = m.group(1) or m.group(2)
+            if pid:
+                return ParsedMessage(
+                    intent=Intent.APPLY_JOB, message=str(int(pid)), confidence=0.9
+                )
+            company = _company_from(m.group(3))
+            return ParsedMessage(
+                intent=Intent.APPLY_JOB, company=company,
+                confidence=0.85 if company else 0.5,
+            )
+
         if _TRACK_RE.search(low):
             if _TRACK_LIST_RE.search(low):
                 return ParsedMessage(intent=Intent.TRACK, message="list", confidence=0.85)
@@ -614,6 +639,15 @@ _FEWSHOTS = [
     ("show my profile",
      [{"intent": "PROFILE", "company": None, "role": None, "status": None,
        "message": None, "time_reference": None, "confidence": 0.85}]),
+    ("apply 2",
+     [{"intent": "APPLY_JOB", "company": None, "role": None, "status": None,
+       "message": "2", "time_reference": None, "confidence": 0.92}]),
+    ("apply to #5",
+     [{"intent": "APPLY_JOB", "company": None, "role": None, "status": None,
+       "message": "5", "time_reference": None, "confidence": 0.92}]),
+    ("apply to the stripe one",
+     [{"intent": "APPLY_JOB", "company": "Stripe", "role": None, "status": None,
+       "message": None, "time_reference": None, "confidence": 0.85}]),
     ("undo that",
      [{"intent": "UNDO", "company": None, "role": None, "status": None,
        "message": None, "time_reference": None, "confidence": 0.95}]),
@@ -747,6 +781,11 @@ def _build_system_prompt() -> str:
         "- PROFILE: user states what roles/locations they're after (set) or asks "
         "to see their profile (show). For a set, put the full criteria in `message`; "
         "for a show, leave `message` null.\n"
+        "- APPLY_JOB: user wants to apply to a posting the assistant surfaced (job "
+        "alerts print a '#<id>'). For a numeric reference ('apply 2', 'apply to "
+        "#5') put just the number in `message`. For a company reference ('apply to "
+        "the stripe one') set `company` and leave `message` null. NOTE: past-tense "
+        "'applied to X' is APPLY (logging a job they found elsewhere), not APPLY_JOB.\n"
         "- UNKNOWN: none of the above.\n\n"
         "Rules:\n"
         "- `confidence` is 0.0-1.0: your certainty about the intent + entities.\n"

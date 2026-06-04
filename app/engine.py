@@ -77,6 +77,7 @@ MENU = (
     "  \"track openings at stripe\" — watch a company's board (I'll alert on new fits)\n"
     "  \"what am I tracking\" · \"stop tracking stripe\" — manage tracked boards\n"
     "  \"any new jobs\" — browse the latest matches I've found\n"
+    "  \"apply 2\" — get the link + a drafted blurb for posting #2 (I log it)\n"
     "\n"
     "▸ SEE YOUR SEARCH\n"
     "  \"list\" — all applications\n"
@@ -175,7 +176,7 @@ def _looks_like_new_command(p: ParsedMessage, text: str, pending: Pending) -> bo
     if (
         p.intent in (Intent.LIST, Intent.QUERY, Intent.STATS, Intent.DEADLINE,
                      Intent.CHECK, Intent.UNDO, Intent.JOBS, Intent.TRACK,
-                     Intent.PROFILE)
+                     Intent.PROFILE, Intent.APPLY_JOB)
         and p.confidence >= 0.7
     ):
         return True
@@ -224,6 +225,8 @@ def _start(user_id: str, p: ParsedMessage, raw: str) -> str:
         return _do_jobs(user_id)
     if p.intent == Intent.PROFILE:
         return _do_profile(user_id, p, raw)
+    if p.intent == Intent.APPLY_JOB:
+        return _do_apply_job(user_id, p, raw)
     # UNKNOWN
     if convo.is_greeting(raw):
         return GREETING
@@ -789,6 +792,75 @@ def _do_profile(user_id: str, p: ParsedMessage, raw: str) -> str:
     saved = profile_mod.profile_text(profile_mod.get_profile(user_id))
     return ("Got it — I'll match new jobs against:\n" + saved +
             "\nNow track companies with 'track openings at <company>'.")
+
+
+def _resolve_posting(user_id: str, p: ParsedMessage):
+    """Find the posting an APPLY_JOB refers to — by '#<id>' or by company name."""
+    pid = (p.message or "").strip()
+    if pid.isdigit():
+        return jobstore.get_posting(user_id, int(pid))
+    if p.company:
+        # Most relevant un-applied posting for that company (alerted/new only).
+        for row in jobstore.list_postings(
+            user_id, statuses=("alerted", "new"), limit=25
+        ):
+            if (row["company"] or "").lower() == p.company.lower():
+                return row
+    return None
+
+
+def _do_apply_job(user_id: str, p: ParsedMessage, raw: str) -> str:
+    """Assisted apply: hand back the apply link + a drafted blurb, log it as
+    Applied, and mark the posting applied. We never auto-submit anything."""
+    posting = _resolve_posting(user_id, p)
+    if posting is None:
+        pid = (p.message or "").strip()
+        if pid.isdigit():
+            return (
+                f"I don't have job #{pid} on file. Text 'any new jobs' to see "
+                "the latest matches and their numbers."
+            )
+        if p.company:
+            return (
+                f"I don't have an open posting from {p.company} to apply to. "
+                "Text 'any new jobs' to see what I've found."
+            )
+        return (
+            "Which posting? Reply 'apply <#>' with a number from an alert, "
+            "or 'any new jobs' to see them."
+        )
+
+    if posting["status"] == "applied":
+        return (
+            f"You've already applied to #{posting['id']} "
+            f"({posting['title']} @ {posting['company']}).\n{posting['url'] or ''}".strip()
+        )
+
+    company = posting["company"] or "the company"
+    title = posting["title"] or None
+    prof = profile_mod.get_profile(user_id)
+    draft = outreach.draft_application_answers(
+        company, title or "", posting["description"], prof
+    )
+
+    app = store.create_application(
+        user_id, company, title, status="Applied", source="discovery", raw_sms=raw
+    )
+    jobstore.mark_posting_status(posting["id"], "applied")
+    ctx.set_context(user_id, company=company, role=title, application_id=app["id"])
+    store.record_undo(
+        user_id, "apply", {"app_id": app["id"], "company": company},
+        f"applying to {title or company}",
+    )
+
+    role_line = f"{title} @ {company}" if title else company
+    link_line = f"\n🔗 Apply here: {posting['url']}" if posting["url"] else ""
+    return (
+        f"📝 {role_line}{link_line}\n\n"
+        f"Draft \"why I'm a fit\" — tweak before you send:\n“{draft}”\n\n"
+        "Logged as Applied. I won't submit anything for you — paste the draft "
+        "into the application yourself."
+    )
 
 
 _PROFILE_LEADIN = re.compile(

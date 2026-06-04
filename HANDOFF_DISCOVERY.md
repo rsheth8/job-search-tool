@@ -1,4 +1,4 @@
-# Handoff — Job Discovery (Phase 1 complete, Phase 2 next)
+# Handoff — Job Discovery (Phases 1 & 2 complete, Phase 3 next)
 
 > For a fresh Claude Code session rooted in `/Users/rahilsheth/Documents/job-search-tool`.
 > Companion to `handoff.md` (the pre-discovery engineering doc — still accurate for
@@ -7,9 +7,10 @@
 ## TL;DR
 
 The conversational tracker can now **discover jobs and alert you on Slack** when new
-ones drop — not just log apps you tell it about. Phase 1 is **built, tested
-(274 passing), and verified end-to-end against live job boards**. Next up: **Phase 2
-— assisted apply.**
+ones drop — not just log apps you tell it about — and **assist you in applying**
+(`apply <#>` → link + drafted blurb, logged as Applied, no auto-submit). Phases 1 & 2
+are **built and tested (284 passing)**; Phase 1 was verified end-to-end against live
+job boards. Next up: **Phase 3 — paid aggregators behind flags/budget caps.**
 
 ## Prereqs (read first)
 
@@ -73,25 +74,30 @@ per tick; dedupe means score/alert once; `$0` with no key (heuristic).
 # /health → "discovery" block (sources, tracked boards, last tick, posting counts).
 ```
 
-## Phase 2 — assisted apply (DO THIS NEXT)
+## Phase 2 — assisted apply (DONE, 2026-06-04)
 
-Goal: from Slack, `apply <#>` (the alert already prints `#<id>`) → reply with the apply
-link + pre-drafted answers (from the profile), and log it as Applied. **No auto-submit.**
+From Slack: `apply <#>` (the alert prints `#<id>`) or `apply to the <company> one` →
+reply with the apply link + a drafted "why I'm a fit" blurb, log it as **Applied**,
+mark the posting `applied`. **No auto-submit** — the user pastes the draft themselves.
 
-Concrete steps:
-1. **Intent:** add `APPLY_JOB` to `app/intents.py`. Heuristic in `router.py`: match
-   `apply <n>` / `apply to the <company> one` (capture the posting id in `message` or a new
-   field; simplest: put the integer id in `message`). Add a Claude few-shot.
-2. **Engine `_do_apply_job(user_id, p)`:** `jobstore.get_posting(user_id, id)` → if found,
-   draft answers with Claude reusing the `app/outreach.draft_outreach()` pattern + the
-   profile (resume_summary); reply with `posting.url` + the draft. Then
-   `store.create_application(user_id, posting.company, posting.title, source="discovery")`
-   and `jobstore.mark_posting_status(id, "applied")`. Keep a heuristic/no-key fallback that
-   still returns the link + a templated note (never block the user).
-3. **Source:** add `app/jobsources/rss.py` (RSS / HN "Who is hiring") + register in
-   `SOURCES`; pure `_parse()` + fixture test.
-4. **Tests:** mirror `tests/test_jobs_intents.py` — route `apply 2`, `_do_apply_job` logs an
-   application + flips posting to `applied`, draft present; RSS `_parse` on a fixture.
+What shipped:
+1. **Intent:** `APPLY_JOB` in `app/intents.py`.
+2. **Router** (`app/router.py`): `_APPLY_JOB_RE` matches `apply 2` / `apply to #5`
+   (numeric id → `message`) and `apply to the <company> one` (→ `company`). Checked
+   *before* the discovery block so it beats generic APPLY; present-tense only, so
+   past-tense "applied to X" stays APPLY (`\bapply\b` never matches "applied").
+   Claude few-shots + intent doc added.
+3. **Drafting** (`app/outreach.py`): `draft_application_answers(company, title,
+   description, profile_row)` — Claude when keyed, else a template built from the
+   profile. Mirrors `draft_outreach` (never hard-fails).
+4. **Engine** (`app/engine.py`): `_do_apply_job` + `_resolve_posting` (by `#id` or
+   company), dispatch in `_start`, nav-interrupt entry, MENU line. Idempotent: a
+   second `apply <#>` on an already-applied posting just re-shows the link.
+5. **Source:** `app/jobsources/rss.py` (RSS 2.0 + Atom), registered in `SOURCES`
+   as `"rss"`. URL token, so it's excluded from `resolve_board` slug auto-detect.
+6. **Tests:** `tests/test_jobs_intents.py` (routing + engine: logs app, flips posting,
+   draft present, unknown-id, by-company, idempotent) and `tests/test_jobsources.py`
+   (RSS item + Atom + garbage). **284 passing.**
 
 ## Phase 3 / 4 (deferred, behind flags + budget caps — Apollo-style)
 

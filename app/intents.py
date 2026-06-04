@@ -25,6 +25,8 @@ class Intent(str, Enum):
     TRACK = "TRACK"      # track / untrack / list a company's job board
     JOBS = "JOBS"        # browse postings discovery has surfaced
     PROFILE = "PROFILE"  # set or show the job-search profile
+    # Assisted apply (Phase 2)
+    APPLY_JOB = "APPLY_JOB"  # apply to a discovered posting (by # or company)
     UNKNOWN = "UNKNOWN"
 
 

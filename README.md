@@ -64,7 +64,8 @@ code change.
 ### Intents
 
 `APPLY, UPDATE, NOTE, LIST, QUERY, STATS, DEADLINE, CHECK, DELETE, EDIT, BULK,
-UNDO, REMIND, OUTREACH, UNKNOWN` — all wired through both routers.
+UNDO, REMIND, OUTREACH, TRACK, JOBS, PROFILE, APPLY_JOB, UNKNOWN` — all wired
+through both routers.
 
 - **EDIT** is multi-turn: `change databricks` → *"What should I change about
   Databricks — its role, name, or applied date?"* → `role to SWE II`.
@@ -184,8 +185,17 @@ when new ones drop — all on free, no-auth sources:
    polls tracked boards, dedupes against everything already seen, runs a free
    keyword/location pre-filter, scores survivors 0–1 (Claude Haiku when a key is
    set, else a free heuristic), and Slack-DMs you the ones above
-   `JOB_RELEVANCE_THRESHOLD` — reusing the same sender as reminders.
+   `JOB_RELEVANCE_THRESHOLD` — reusing the same sender as reminders. Each alert
+   prints a `#<id>`.
 4. **Browse anytime:** `any new jobs`.
+5. **Assisted apply (Phase 2):** `apply 2` (or `apply to the stripe one`) hands
+   back the apply link plus a drafted *"why I'm a fit"* blurb (Claude when keyed,
+   else a template from your profile), logs the role as **Applied**, and marks the
+   posting applied. It never auto-submits — you paste the draft yourself.
+
+A generic **RSS/Atom** source (`app/jobsources/rss.py`) is also registered for
+feed-based boards (e.g. "Who is hiring" aggregations), alongside Greenhouse /
+Lever / Ashby.
 
 Cost controls: free sources first; the LLM only ever sees pre-filtered postings,
 batched into one call, capped at `JOB_MAX_SCORED_PER_TICK` per tick; each posting
