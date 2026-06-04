@@ -1,0 +1,14 @@
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.git
+.gitignore
+# Never bake secrets or the local DB into the image — secrets go through
+# `fly secrets`, and the DB lives on the mounted volume.
+.env
+*.db
+tests
+handoff.md
+README.md
+deploy

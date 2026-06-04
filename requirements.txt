@@ -1,0 +1,13 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+apscheduler==3.11.0   # background reminder delivery loop (Phase 2)
+# Optional real backends (stubs work without these installed)
+anthropic>=0.105.0   # needs output_config structured outputs (Haiku 4.5)
+twilio==9.4.1
+httpx==0.28.1
+# Dev/test
+pytest==8.3.4
