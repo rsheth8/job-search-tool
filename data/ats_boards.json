@@ -1,0 +1,16 @@
+{
+  "greenhouse": [
+    "stripe", "airbnb", "discord", "figma", "notion", "cloudflare", "datadog",
+    "hashicorp", "gitlab", "doordash", "instacart", "coinbase", "plaid", "gusto",
+    "brex", "scale", "anduril", "databricks", "snowflake", "mongodb", "elastic",
+    "asana", "dropbox", "lyft", "pinterest", "reddit", "robinhood", "sofi"
+  ],
+  "lever": [
+    "palantir", "netflix", "spotify", "atlassian", "canva", "rippling",
+    "vercel", "loom", "flexport", "affirm", "chime", "glossier", "faire"
+  ],
+  "ashby": [
+    "ramp", "notion", "linear", "anthropic", "openai", "vercel", "retool",
+    "deel", "mercury", "vanta", "cognition", "harvey", "sierra"
+  ]
+}

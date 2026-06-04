@@ -114,6 +114,28 @@ def get_posting(user_id: str, posting_id: int) -> sqlite3.Row | None:
         ).fetchone()
 
 
+def list_review_queue(user_id: str, *, limit: int = 50) -> list[sqlite3.Row]:
+    """Queued matches awaiting interactive review, best score first."""
+    with connect() as conn:
+        return conn.execute(
+            """
+            SELECT * FROM job_postings
+            WHERE user_id = ? AND status = 'queued'
+            ORDER BY relevance_score DESC, first_seen_at ASC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+
+
+def count_queued(user_id: str) -> int:
+    with connect() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM job_postings WHERE user_id = ? AND status = 'queued'",
+            (user_id,),
+        ).fetchone()[0]
+
+
 def list_postings(
     user_id: str, *, statuses: tuple[str, ...] | None = None, limit: int = 20
 ) -> list[sqlite3.Row]:
@@ -135,6 +157,17 @@ def mark_posting_status(posting_id: int, status: str) -> None:
         conn.execute(
             "UPDATE job_postings SET status = ? WHERE id = ?", (status, posting_id)
         )
+
+
+def dismiss_all_queued(user_id: str) -> int:
+    """Mark every queued posting dismissed. Returns rows updated."""
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE job_postings SET status = 'dismissed' "
+            "WHERE user_id = ? AND status = 'queued'",
+            (user_id,),
+        )
+        return cur.rowcount
 
 
 def counts_by_status(user_id: str) -> dict[str, int]:
@@ -159,6 +192,81 @@ def all_tracked_users() -> list[str]:
                 "SELECT DISTINCT user_id FROM tracked_companies ORDER BY user_id"
             )
         ]
+
+
+def all_discovery_users() -> list[str]:
+    """Users who should receive discovery ticks (tracked boards and/or profile)."""
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT user_id FROM tracked_companies
+            UNION
+            SELECT user_id FROM job_search_profile
+            WHERE COALESCE(roles, '') != ''
+               OR COALESCE(keywords, '') != ''
+               OR COALESCE(locations, '') != ''
+            ORDER BY user_id
+            """
+        ).fetchall()
+    return [r[0] for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Directory cursor + aggregator caps
+# ---------------------------------------------------------------------------
+
+_DIRECTORY_CURSOR_KEY = "directory:global"
+
+
+def get_directory_cursor() -> int:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT position FROM discovery_cursors WHERE cursor_key = ?",
+            (_DIRECTORY_CURSOR_KEY,),
+        ).fetchone()
+    return int(row["position"]) if row else 0
+
+
+def set_directory_cursor(position: int) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO discovery_cursors (cursor_key, position, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(cursor_key) DO UPDATE SET
+                position = excluded.position,
+                updated_at = excluded.updated_at
+            """,
+            (_DIRECTORY_CURSOR_KEY, position, _now()),
+        )
+
+
+def _utc_day_start() -> str:
+    from datetime import datetime, timezone
+
+    d = datetime.now(timezone.utc).date()
+    return datetime(d.year, d.month, d.day, tzinfo=timezone.utc).isoformat()
+
+
+def allow_aggregator_search() -> bool:
+    from .config import get_settings
+
+    cap = get_settings().job_aggregator_max_per_day
+    with connect() as conn:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM job_api_calls WHERE call_type = 'aggregator' "
+            "AND called_at >= ?",
+            (_utc_day_start(),),
+        ).fetchone()[0]
+    return n < cap
+
+
+def record_aggregator_call(user_id: str | None = None) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO job_api_calls (call_type, user_id, called_at) VALUES (?, ?, ?)",
+            ("aggregator", user_id, _now()),
+        )
 
 
 def tracked_count() -> int:

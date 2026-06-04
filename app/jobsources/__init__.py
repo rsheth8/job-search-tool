@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 
-from . import ashby, greenhouse, lever
+from . import ashby, aggregator, directory, greenhouse, lever, rss
 from .base import JobPosting
 
 logger = logging.getLogger("jobsources")
@@ -23,6 +23,9 @@ SOURCES = {
     "greenhouse": greenhouse.fetch,
     "lever": lever.fetch,
     "ashby": ashby.fetch,
+    "rss": rss.fetch,
+    "aggregator": aggregator.fetch,
+    "directory": directory.fetch,
 }
 
 

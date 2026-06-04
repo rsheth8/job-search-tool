@@ -58,12 +58,32 @@ class Settings(BaseSettings):
     # Cap how many *new* postings get LLM-scored per tick (token-cost guard).
     # Survivors of the free pre-filter beyond this carry over to the next tick.
     job_max_scored_per_tick: int = 40
+    # How to notify on new matches: digest (one summary per tick), instant
+    # (one message per job, legacy), or silent (store only).
+    job_alert_mode: str = "digest"
+    # How many top matches to show in a digest body (rest summarized as "+N more").
+    job_digest_top_n: int = 3
     # The user the background loop alerts (Slack user id). Empty = alert the
     # busiest known user, mirroring dashboard.default_user().
     job_alert_user: str = ""
     # Free sources are on by default. Paid sources (added later) stay off until
     # explicitly enabled with their own budget caps, mirroring the Apollo guards.
-    job_sources_enabled: str = "greenhouse,lever,ashby"
+    job_sources_enabled: str = "greenhouse,lever,ashby,rss,directory"
+
+    # --- Wide discovery (A/B/C) — profile-driven, no company list required ---
+    job_wide_rss_enabled: bool = True
+    job_wide_rss_feeds: str = "hn-hiring,remoteok"
+    job_wide_directory_enabled: bool = True
+    job_directory_boards_per_tick: int = 12
+    job_directory_max_jobs_per_board: int = 25
+    job_directory_data_path: str = "data/ats_boards.json"
+    job_wide_aggregator_enabled: bool = False
+    serpapi_api_key: str = ""
+    job_aggregator_max_per_day: int = 5
+
+    @property
+    def serpapi_enabled(self) -> bool:
+        return bool(self.serpapi_api_key.strip())
 
     @property
     def use_llm_router(self) -> bool:
@@ -72,6 +92,13 @@ class Settings(BaseSettings):
     @property
     def apollo_enabled(self) -> bool:
         return bool(self.apollo_api_key.strip())
+
+    @property
+    def job_alert_mode_normalized(self) -> str:
+        mode = (self.job_alert_mode or "digest").strip().lower()
+        if mode not in ("digest", "instant", "silent"):
+            return "digest"
+        return mode
 
     @property
     def job_sources(self) -> list[str]:

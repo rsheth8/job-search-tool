@@ -175,17 +175,23 @@ org-lookup off by default) live in `app/apollo.py`; see `handoff.md` §4.
 ## Job discovery (Phase 1)
 
 Beyond tracking applications you log, the assistant can **find** jobs and alert you
-when new ones drop — all on free, no-auth sources:
+when new ones drop:
 
-1. **Set a profile:** `I'm looking for new grad SWE roles, remote or NYC`.
-2. **Track companies:** `track openings at stripe`. It auto-detects the company's
-   public board across **Greenhouse / Lever / Ashby** (no API key, no cost).
+1. **Set a profile:** `I'm looking for new grad SWE roles, remote or NYC`. This turns on
+   **wide discovery** — you do **not** need a list of companies:
+   - **RSS feeds** (HN Who's Hiring, Remote OK) — companies appear through roles
+   - **ATS directory** — rotates through ~60+ public Greenhouse/Lever/Ashby boards
+   - **Google Jobs search** (optional SerpApi key) — query built from your profile
+2. **Optional:** `track openings at stripe` for a specific company's board, or
+   `track feed hn-hiring` for an extra RSS feed.
 3. **Get alerted:** a background loop (`app/discovery.py`, every `JOB_POLL_SECONDS`)
    polls tracked boards, dedupes against everything already seen, runs a free
    keyword/location pre-filter, scores survivors 0–1 (Claude Haiku when a key is
-   set, else a free heuristic), and Slack-DMs you the ones above
-   `JOB_RELEVANCE_THRESHOLD` — reusing the same sender as reminders.
-4. **Browse anytime:** `any new jobs`.
+   set, else a free heuristic), and queues matches above `JOB_RELEVANCE_THRESHOLD`.
+   By default (`JOB_ALERT_MODE=digest`) you get **one summary DM per poll** (not
+   one message per job). Say **`review jobs`** to walk the queue one-by-one
+   (skip / apply / stop). Set `JOB_ALERT_MODE=instant` for the old per-job pings.
+4. **Browse anytime:** `any new jobs` (quick list) or `review jobs` (interactive).
 
 Cost controls: free sources first; the LLM only ever sees pre-filtered postings,
 batched into one call, capped at `JOB_MAX_SCORED_PER_TICK` per tick; each posting

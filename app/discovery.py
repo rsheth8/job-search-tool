@@ -15,9 +15,10 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from . import jobstore, matcher, profile, reminders
+from . import job_alerts, jobstore, matcher, profile, reminders, wide_discovery
 from .config import get_settings
 from .jobsources import JobPosting, fetch_source
+from .jobsources import rss as rss_src
 
 logger = logging.getLogger("discovery")
 
@@ -68,11 +69,20 @@ def build_alert_body(posting: JobPosting, score: float, posting_id: int) -> str:
     return "\n".join(lines)
 
 
+def resolve_feed(feed_id: str) -> dict | None:
+    """Resolve an RSS feed id for ``track feed <id>``."""
+    return rss_src.resolve_feed(feed_id)
+
+
 def seed_board(user_id: str, source: str, board_token: str, company_name: str | None) -> int:
     """Record a board's CURRENT postings as already-seen (status 'seeded', no
     alerts, no scoring), so the user is only alerted on roles that appear AFTER
     they start tracking — not the entire existing backlog. Returns count seeded.
+
+    Wide sources (rss, directory, aggregator) are not seeded — too noisy.
     """
+    if wide_discovery.is_wide_source(source):
+        return 0
     n = 0
     for p in fetch_source(source, board_token):
         if not p.external_id or jobstore.posting_exists(user_id, p.source, p.external_id):
@@ -86,21 +96,36 @@ def seed_board(user_id: str, source: str, board_token: str, company_name: str | 
 
 def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
     """Run one discovery pass for ``user_id``. Returns the number of alerts sent."""
-    boards = jobstore.list_tracked(user_id)
-    if not boards:
-        return 0
     prof = profile.get_profile(user_id)
+    boards = jobstore.list_tracked(user_id)
+    if not boards and not profile.has_profile(user_id):
+        return 0
     settings = get_settings()
 
-    # 1. Fetch every board, keep only postings we haven't recorded before.
+    # 1. Tracked boards + wide discovery (RSS, directory, aggregator).
     fresh: list[JobPosting] = []
+    seen: set[tuple[str, str]] = set()
     for b in boards:
         for p in fetch_source(b["source"], b["board_token"]):
-            if not p.external_id or jobstore.posting_exists(user_id, p.source, p.external_id):
+            if not p.external_id:
                 continue
+            key = (p.source, p.external_id)
+            if key in seen or jobstore.posting_exists(user_id, p.source, p.external_id):
+                continue
+            seen.add(key)
             if b["company_name"]:
-                p.company = b["company_name"]  # prefer the tracked display name
+                p.company = b["company_name"]
             fresh.append(p)
+    fresh.extend(wide_discovery.collect_fresh(user_id, prof, existing_keys=seen))
+    for p in fresh:
+        if p.external_id:
+            seen.add((p.source, p.external_id))
+    # Drop any wide items that raced into seen via posting_exists
+    fresh = [
+        p for p in fresh
+        if p.external_id
+        and not jobstore.posting_exists(user_id, p.source, p.external_id)
+    ]
     if not fresh:
         return 0
 
@@ -113,33 +138,54 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
     # 3. Score (LLM when configured, else heuristic; never raises).
     scored = matcher.score(candidates, prof)
 
-    # 4. Persist every scored posting (so it's never re-scored) and alert the
-    #    ones above threshold.
+    # 4. Persist every scored posting (never re-scored) and notify per alert mode.
     sender = sender or reminders.get_sender()
     threshold = settings.job_relevance_threshold
-    alerts = 0
+    mode = settings.job_alert_mode_normalized
+    notify_batch: list[tuple[JobPosting, float, int]] = []
+    messages_sent = 0
+
     for posting, sc in scored:
         good = sc >= threshold
+        if good:
+            status = "alerted" if mode == "instant" else "queued"
+        else:
+            status = "new"
         row = jobstore.save_posting(
-            user_id, posting, relevance_score=sc, status="alerted" if good else "new"
+            user_id, posting, relevance_score=sc, status=status
         )
         if row is None or not good:
             continue
+        notify_batch.append((posting, sc, row["id"]))
+
+    if notify_batch and mode == "instant":
+        for posting, sc, pid in notify_batch:
+            try:
+                sender.send(user_id, build_alert_body(posting, sc, pid))
+                messages_sent += 1
+            except Exception:  # noqa: BLE001
+                logger.exception("alert send failed for posting %s", pid)
+    elif notify_batch and mode == "digest":
         try:
-            sender.send(user_id, build_alert_body(posting, sc, row["id"]))
-            alerts += 1
-        except Exception:  # noqa: BLE001 — one bad send never stops the batch
-            logger.exception("alert send failed for posting %s", row["id"])
-    if alerts:
-        logger.info("discovery: %d new alert(s) for %s", alerts, user_id)
-    return alerts
+            sender.send(user_id, job_alerts.build_digest(notify_batch))
+            messages_sent = 1
+        except Exception:  # noqa: BLE001
+            logger.exception("digest send failed for %s", user_id)
+    # silent: queued rows only, no outbound message
+
+    if messages_sent:
+        logger.info(
+            "discovery: %d message(s), %d match(es) for %s (mode=%s)",
+            messages_sent, len(notify_batch), user_id, mode,
+        )
+    return messages_sent
 
 
 def run_all(*, sender=None) -> int:
-    """One discovery pass for every user with tracked boards. Returns total alerts."""
+    """One discovery pass per user with a profile and/or tracked boards."""
     global last_tick_at
     total = 0
-    for user_id in jobstore.all_tracked_users():
+    for user_id in jobstore.all_discovery_users():
         try:
             total += tick(user_id, sender=sender)
         except Exception:  # noqa: BLE001 — one user's failure never stops the sweep
