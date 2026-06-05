@@ -32,6 +32,21 @@ def test_aggregator_parse_fixture():
     assert posts[0].source == "aggregator"
 
 
+def test_aggregator_prefers_real_apply_link_over_share_link():
+    data = {"jobs_results": [{
+        "title": "Backend Engineer",
+        "company_name": "Stripe",
+        "job_id": "abc",
+        "share_link": "https://www.google.com/search?q=...",
+        "apply_options": [
+            {"title": "Apply on Greenhouse", "link": "https://boards.greenhouse.io/stripe/jobs/1"},
+            {"title": "LinkedIn", "link": "https://linkedin.com/jobs/1"},
+        ],
+    }]}
+    posts = aggregator._parse(data, "backend")
+    assert posts[0].url == "https://boards.greenhouse.io/stripe/jobs/1"  # not the google link
+
+
 def test_directory_batch_rotates(monkeypatch):
     monkeypatch.setattr(
         "app.jobsources.directory._load_boards",

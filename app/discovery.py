@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from . import job_alerts, jobstore, matcher, profile, reminders, wide_discovery
 from .config import get_settings
 from .jobsources import NON_BOARD_SOURCES, JobPosting, fetch_source
+from .jobsources import quality
 from .jobsources import rss as rss_src
 
 logger = logging.getLogger("discovery")
@@ -130,6 +131,11 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
         if p.external_id
         and not jobstore.posting_exists(user_id, p.source, p.external_id)
     ]
+    # Reputability gate: keep first-party ATS results; drop placeholder/spam from
+    # the aggregator + RSS feeds before spending scoring tokens on them.
+    fresh, dropped = quality.filter_reputable(fresh)
+    if dropped:
+        logger.info("discovery: dropped %d low-reputation posting(s) for %s", dropped, user_id)
     if not fresh:
         return 0
 

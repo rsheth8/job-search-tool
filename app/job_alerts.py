@@ -11,6 +11,19 @@ _REVIEW_HELP = (
     "Reply: skip · apply · stop (or dismiss all to clear the queue)"
 )
 
+# Friendly provenance labels so the user can judge a posting's source.
+_SOURCE_LABELS = {
+    "greenhouse": "company board (Greenhouse)",
+    "lever": "company board (Lever)",
+    "ashby": "company board (Ashby)",
+    "rss": "RSS feed",
+    "aggregator": "Google Jobs",
+}
+
+
+def _source_label(source: str) -> str:
+    return _SOURCE_LABELS.get((source or "").lower(), source or "unknown")
+
 
 def build_digest(
     matches: list[tuple[JobPosting, float, int]],
@@ -73,6 +86,7 @@ def build_review_card(
     ]
     if posting.location:
         lines.append(f"📍 {posting.location}")
+    lines.append(f"🔎 via {_source_label(posting.source)}")
     if posting.url:
         lines.append(f"🔗 {posting.url}")
     lines.append("")
