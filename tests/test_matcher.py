@@ -29,6 +29,25 @@ def test_prefilter_passes_all_when_no_terms():
     assert len(matcher.prefilter(posts, None)) == 2
 
 
+def test_prefilter_expands_abbreviations_and_drops_filler():
+    # Regression: a phrasey profile must still surface real roles. "swe" should
+    # match "Software Engineer", and filler words ("new grad roles") must not gate.
+    prof = _profile(roles="new grad swe roles, remote or nyc",
+                    keywords="new grad swe roles, remote or nyc")
+    posts = [_p("Senior Software Engineer", desc="backend"),
+             _p("Marketing Manager", desc="brand")]
+    kept = {p.title for p in matcher.prefilter(posts, prof)}
+    assert "Senior Software Engineer" in kept
+    assert "Marketing Manager" not in kept
+
+
+def test_match_terms_vs_score_terms():
+    prof = _profile(roles="swe", keywords="swe")
+    # Match terms expand the abbreviation; scoring terms stay literal.
+    assert "software engineer" in matcher._match_terms(prof)
+    assert matcher._terms(prof) == {"swe"}
+
+
 def test_heuristic_scores_match_higher_than_nonmatch():
     prof = _profile(roles="software engineer", keywords="python, distributed systems")
     scored = dict(

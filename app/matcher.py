@@ -27,15 +27,73 @@ from .ratelimit import TokenBucket
 logger = logging.getLogger("matcher")
 
 _SPLIT = re.compile(r"[,/]| and ", re.IGNORECASE)
+_WORD = re.compile(r"[a-z0-9+#.]+")
 # Description chars sent to the LLM per posting — enough signal, few tokens.
 _DESC_CHARS = 300
 
+# Seniority / format / generic filler that shouldn't gate matching — these words
+# appear in (or are absent from) postings independent of fit, so matching on them
+# would either over- or under-filter.
+_STOPWORDS = {
+    "new", "grad", "graduate", "entry", "level", "junior", "senior", "staff",
+    "lead", "principal", "role", "roles", "job", "jobs", "position", "positions",
+    "opening", "openings", "remote", "hybrid", "onsite", "or", "and", "the", "a",
+    "an", "for", "in", "at", "of", "to", "with", "looking", "want", "seeking",
+    "near", "based",
+}
+# Abbreviations → extra substrings to also match on, since a bare "swe" never
+# substring-matches "Software Engineer". Keeps the free pre-filter from starving
+# the scorer on common shorthand.
+_SYNONYMS = {
+    "swe": ("software engineer", "software"),
+    "sde": ("software engineer", "software"),
+    "sdet": ("software engineer in test", "software"),
+    "ml": ("machine learning",),
+    "ai": ("machine learning", "artificial intelligence"),
+    "nlp": ("natural language",),
+    "pm": ("product manager", "product management"),
+    "tpm": ("technical program manager",),
+    "frontend": ("front end", "front-end"),
+    "backend": ("back end", "back-end"),
+    "fullstack": ("full stack", "full-stack"),
+    "devops": ("devops", "site reliability"),
+    "sre": ("site reliability",),
+    "qa": ("quality assurance",),
+    "ux": ("user experience",),
+    "ui": ("user interface",),
+    "ds": ("data scientist", "data science"),
+}
+
 
 def _terms(profile: sqlite3.Row | None) -> set[str]:
+    """Profile keyword *concepts* for relevance scoring (the heuristic ratio uses
+    this as the denominator, so it stays close to what the user actually typed —
+    one entry per comma/'and'-separated clause)."""
     if profile is None:
         return set()
     raw = f"{profile['roles'] or ''},{profile['keywords'] or ''}"
     return {t.strip().lower() for t in _SPLIT.split(raw) if t.strip()}
+
+
+def _match_terms(profile: sqlite3.Row | None) -> set[str]:
+    """Broad term set for the free pre-filter gate: clause phrases + individual
+    word tokens + expanded abbreviations (so a bare "swe" still surfaces
+    "Software Engineer"). Deliberately looser than ``_terms`` — its only job is to
+    avoid starving the scorer; the scorer makes the real call."""
+    if profile is None:
+        return set()
+    raw = f"{profile['roles'] or ''} , {profile['keywords'] or ''}"
+    terms: set[str] = set()
+    for clause in _SPLIT.split(raw):
+        words = _WORD.findall(clause.lower())
+        sig = [w for w in words if w not in _STOPWORDS and len(w) >= 2]
+        if len(sig) >= 2:
+            terms.add(" ".join(sig))  # e.g. "software engineer", "data scientist"
+        for w in sig:
+            if len(w) >= 3 or w in _SYNONYMS:
+                terms.add(w)
+            terms.update(_SYNONYMS.get(w, ()))
+    return terms
 
 
 def _locations(profile: sqlite3.Row | None) -> list[str]:
@@ -54,7 +112,7 @@ def prefilter(postings: list[JobPosting], profile: sqlite3.Row | None) -> list[J
     With no terms configured we can't cheaply tell signal from noise, so we pass
     everything through to scoring (which will return a neutral score).
     """
-    terms = _terms(profile)
+    terms = _match_terms(profile)
     if not terms:
         return list(postings)
     return [p for p in postings if any(t in _haystack(p) for t in terms)]

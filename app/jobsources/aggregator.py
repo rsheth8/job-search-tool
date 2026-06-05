@@ -105,7 +105,14 @@ def _parse(data: dict, query: str) -> list[JobPosting]:
         if not title:
             continue
         loc = (j.get("location") or "").strip()
-        link = (j.get("share_link") or j.get("apply_link") or "").strip()
+        # Prefer a real apply destination (greenhouse/lever/company/LinkedIn/…)
+        # over the google.com share link, so the user gets a direct apply URL and
+        # the destination domain is a usable reputability signal.
+        link = ""
+        opts = j.get("apply_options")
+        if isinstance(opts, list) and opts and isinstance(opts[0], dict):
+            link = (opts[0].get("link") or "").strip()
+        link = link or (j.get("share_link") or j.get("apply_link") or "").strip()
         desc = (j.get("description") or "").strip()
         if len(desc) > 1500:
             desc = desc[:1500] + "…"
