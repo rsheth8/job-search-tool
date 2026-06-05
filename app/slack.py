@@ -34,6 +34,9 @@ import time
 logger = logging.getLogger("slack")
 
 _API_POST_MESSAGE = "https://slack.com/api/chat.postMessage"
+_API_GET_UPLOAD_URL = "https://slack.com/api/files.getUploadURLExternal"
+_API_COMPLETE_UPLOAD = "https://slack.com/api/files.completeUploadExternal"
+_API_CONVERSATIONS_OPEN = "https://slack.com/api/conversations.open"
 
 # Replay window for inbound request signatures (Slack's own recommendation).
 _MAX_SIGNATURE_AGE_S = 60 * 5
@@ -80,13 +83,8 @@ def _mark_seen(event_id: str) -> bool:
     return True
 
 
-def post_message(token: str, channel: str, text: str) -> None:
-    """Post ``text`` to ``channel`` via the Slack Web API. Never raises.
-
-    A failure is logged and swallowed so one bad send can't take down the
-    request handler or the reminder batch — same contract as the rest of the
-    delivery path (``deliver_due_reminders`` leaves failed rows pending).
-    """
+def post_message(token: str, channel: str, text: str) -> bool:
+    """Post ``text`` to ``channel`` via the Slack Web API. Never raises."""
     import httpx
 
     try:
@@ -99,9 +97,134 @@ def post_message(token: str, channel: str, text: str) -> None:
         data = resp.json()
     except Exception:  # noqa: BLE001 — network/JSON errors must not propagate
         logger.exception("slack chat.postMessage request failed")
-        return
+        return False
     if not data.get("ok"):
         logger.warning("slack chat.postMessage error: %s", data.get("error"))
+        return False
+    return True
+
+
+def upload_file(
+    token: str,
+    channel: str,
+    filename: str,
+    content: bytes,
+    *,
+    comment: str = "",
+) -> bool:
+    """Upload a PDF to a channel/DM via Slack's external upload flow. Never raises.
+
+    ``channel`` may be a channel id (C/D...) or a user id (U...) for a DM.
+    """
+    import httpx
+
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        url_resp = httpx.post(
+            _API_GET_UPLOAD_URL,
+            headers=headers,
+            data={
+                "filename": filename,
+                "length": str(len(content)),
+            },
+            timeout=30.0,
+        )
+        url_data = url_resp.json()
+    except Exception:  # noqa: BLE001
+        logger.exception("slack files.getUploadURLExternal request failed")
+        return False
+
+    if not url_data.get("ok"):
+        logger.warning(
+            "slack files.getUploadURLExternal error: %s", url_data.get("error")
+        )
+        return False
+
+    upload_url = url_data["upload_url"]
+    file_id = url_data["file_id"]
+
+    try:
+        put_resp = httpx.post(
+            upload_url,
+            content=content,
+            headers={"Content-Type": "application/pdf"},
+            timeout=60.0,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("slack external file upload request failed")
+        return False
+
+    if put_resp.status_code != 200:
+        logger.warning(
+            "slack external file upload HTTP %s", put_resp.status_code
+        )
+        return False
+
+    complete_payload: dict = {
+        "files": [{"id": file_id, "title": filename}],
+    }
+    # User ids (U...) go in ``channels``; conversation ids (C/D...) in ``channel_id``.
+    if channel.startswith("U"):
+        complete_payload["channels"] = channel
+    else:
+        complete_payload["channel_id"] = channel
+    if comment:
+        complete_payload["initial_comment"] = comment
+
+    try:
+        complete_resp = httpx.post(
+            _API_COMPLETE_UPLOAD,
+            headers={**headers, "Content-Type": "application/json; charset=utf-8"},
+            json=complete_payload,
+            timeout=30.0,
+        )
+        complete_data = complete_resp.json()
+    except Exception:  # noqa: BLE001
+        logger.exception("slack files.completeUploadExternal request failed")
+        return False
+
+    if not complete_data.get("ok"):
+        logger.warning(
+            "slack files.completeUploadExternal error: %s",
+            complete_data.get("error"),
+        )
+        return False
+    return True
+
+
+def post_reply_with_attachments(
+    token: str, channel: str, user_id: str, reply: str
+) -> bool:
+    """Post a text reply plus any queued PDF attachments. Returns True if all sends ok."""
+    from .engine import consume_attachments
+
+    ok = post_message(token, channel, reply)
+    for filename, data in consume_attachments(user_id):
+        if not upload_file(token, channel, filename, data):
+            ok = False
+    return ok
+
+
+def open_dm_channel(token: str, user_id: str) -> str | None:
+    """Open (or reuse) a DM channel with ``user_id``; return channel id or None."""
+    import httpx
+
+    try:
+        resp = httpx.post(
+            _API_CONVERSATIONS_OPEN,
+            headers={"Authorization": f"Bearer {token}"},
+            json={"users": user_id},
+            timeout=10.0,
+        )
+        data = resp.json()
+    except Exception:  # noqa: BLE001
+        logger.exception("slack conversations.open request failed")
+        return None
+    if not data.get("ok"):
+        logger.warning("slack conversations.open error: %s", data.get("error"))
+        return None
+    channel = data.get("channel") or {}
+    return channel.get("id")
 
 
 class SlackSender:
@@ -153,4 +276,4 @@ def handle_event(payload: dict) -> None:
     reply = handle_sms(user, text)
     token = get_settings().slack_bot_token
     if token:
-        post_message(token, channel, reply)
+        post_reply_with_attachments(token, channel, user, reply)

@@ -12,6 +12,7 @@ primary_region = "iad"
 [env]
   # Point SQLite at the mounted volume so data survives restarts/redeploys.
   DATABASE_PATH = "/data/job_search.db"
+  RESUME_TEX_DIR = "/data/resumes"
 
 # The reminder scheduler is an in-process APScheduler loop, so the machine must
 # stay warm — never auto-stop to zero, or reminders won't fire.
@@ -37,4 +38,4 @@ primary_region = "iad"
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "512mb"  # wide discovery (RSS + directory + aggregator) + LLM scoring needs headroom; 256mb OOM'd
+  memory = "512mb"  # wide discovery + resume compile (Tectonic); 256mb OOM'd

@@ -9,5 +9,6 @@ apscheduler==3.11.0   # background reminder delivery loop (Phase 2)
 anthropic>=0.105.0   # needs output_config structured outputs (Haiku 4.5)
 twilio==9.4.1
 httpx==0.28.1
+pypdf>=5.1.0        # accurate page count for tectonic PDFs (flate-compressed)
 # Dev/test
 pytest==8.3.4

@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     serpapi_api_key: str = ""
     job_aggregator_max_per_day: int = 5
 
+    # --- Resume tailoring (assisted apply) ---------------------------------
+    # Base .tex files live on the Fly volume, not in git (personal info).
+    resume_tex_dir: str = "/data/resumes"
+    resume_tailor_enabled: bool = True
+    tectonic_bin: str = "tectonic"
+
     @property
     def serpapi_enabled(self) -> bool:
         return bool(self.serpapi_api_key.strip())

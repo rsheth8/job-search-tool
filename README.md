@@ -195,9 +195,10 @@ when new ones drop:
 4. **Browse / review:** `any new jobs` (quick list) or **`review jobs`** to walk
    the queue one-by-one (skip / apply / stop · `dismiss all` clears it).
 5. **Assisted apply:** `apply 2` (or `apply to the stripe one`) hands back the
-   apply link plus a drafted *"why I'm a fit"* blurb (Claude when keyed, else a
-   template from your profile), logs the role as **Applied**, marks the posting
-   applied. Never auto-submits — you paste the draft yourself.
+   apply link, a drafted *"why I'm a fit"* blurb, and a **one-page tailored resume
+   PDF** (Slack attachment). Claude edits your base `.tex`, Tectonic compiles it,
+   trims to one page if needed, and caches the result for reuse. Never
+   auto-submits — you paste the draft and upload the resume yourself.
 6. **Manage the feed:** `dismiss 2` hides a posting for good; `snooze 2 for a week`
    mutes it until it resurfaces; `only show 80%+ matches` / `be less picky` /
    `reset matching` tune your per-user threshold; `what am I tracking` shows
@@ -227,6 +228,22 @@ paid aggregator adds its own per-day budget on top.
 Run a one-shot pass manually: `.venv/bin/python -m app.discovery`. Discovery health
 is on `/health` under `discovery`.
 
+## Resume tailoring
+
+Two base resumes (`swe.tex`, `aiml.tex`) live in `resumes/` locally and on the Fly
+volume in production — **not in git** (personal info). See [`resumes/README.md`](resumes/README.md).
+
+| Step | What happens |
+|---|---|
+| `apply <#>` | Picks SWE vs AI/ML base → Claude edits → Tectonic compile → trim to 1 page |
+| Cache hit | Reuses a saved PDF for the same company/role (no re-generation) |
+| Slack | Text reply + PDF attachment via `files:write` |
+
+**Fly setup:** copy base `.tex` to `/data/resumes/` on the volume (see
+[`deploy/README.md`](deploy/README.md)). The Docker image includes Tectonic.
+
+**Smoke test:** `.venv/bin/python3 scripts/test_slack_upload.py --scopes-only`
+
 ## Architecture
 
 ```
@@ -239,13 +256,13 @@ Slack DM ──> POST /slack/events (FastAPI)        # Twilio /sms wired, dorman
                             ├─ engine slot-filling       # ask / confirm / execute
                             ├─ outreach.discover_for_company()  # cached Apollo
                             └─ store.*                   # SQLite
-                  <─ slack.post_message() (Web API)
+                  <─ slack.post_reply_with_attachments()  # text + PDF
 ```
 
 | File | Role |
 |---|---|
 | `app/main.py` | FastAPI app; dashboard, Slack/Twilio/JSON webhooks, `/health`; scheduler on startup. |
-| `app/slack.py` | Slack transport: signature verify, `SlackSender`, `post_message`, `handle_event`. |
+| `app/slack.py` | Slack transport: signature verify, `SlackSender`, file upload, `handle_event`. |
 | `app/engine.py` | The brain: slot filling, confirmations, corrections, multi-action, undo, all `_do_*` actions. |
 | `app/router.py` | Intent extraction: `HeuristicRouter` + `AnthropicRouter` (Claude Haiku 4.5). |
 | `app/conversation.py` | Pending-exchange state + yes/no/cancel/correction/greeting/help/smalltalk. |
@@ -258,6 +275,8 @@ Slack DM ──> POST /slack/events (FastAPI)        # Twilio /sms wired, dorman
 | `app/scheduler.py` | APScheduler poll loop. |
 | `app/apollo.py` | The only file that calls Apollo HTTP. |
 | `app/outreach.py` | Recruiter persistence + draft generation. |
+| `app/resume_tailor.py` | Resume pick/edit/compile/trim for assisted apply. |
+| `app/resume_store.py` | Tailored resume cache (volume + SQLite). |
 | `app/importer.py` | Bulk backfill (brain-dump or CSV). |
 | `app/stats.py` | Pipeline analytics. |
 | `app/deadlines.py` | Dated events + agenda. |
@@ -279,7 +298,7 @@ Rejected, Ghosted.
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q     # 234 tests, fully offline (~3s)
+.venv/bin/python -m pytest -q     # fully offline (~350 tests)
 ```
 
 `conftest.py` forces the offline heuristic router, neutralizes live API keys

@@ -39,6 +39,20 @@ fly secrets set \
 Only `ANTHROPIC_API_KEY` and the two `SLACK_*` values are needed for the core
 experience; `APOLLO_API_KEY` is optional (recruiter discovery).
 
+Slack bot scopes: `chat:write`, `files:write` (for resume PDF attachments on
+`apply <#>`). After adding scopes, **Reinstall App** and update `SLACK_BOT_TOKEN`.
+
+## Resume base files (one-time)
+
+Tailored resumes need `swe.tex` and `aiml.tex` on the volume (not in git):
+
+```bash
+fly ssh console -C "mkdir -p /data/resumes"
+scp resumes/swe.tex resumes/aiml.tex root@<app>.fly.dev:/data/resumes/
+```
+
+Tailored outputs cache under `/data/resumes/tailored/`. Tectonic is in the Docker image.
+
 ## Deploy
 
 ```bash
@@ -63,9 +77,9 @@ have to do this again.
 
 1. DM the bot: `applied notion swe ii` → expect a "Logged" reply.
 2. `what should I follow up on` → expect a ranked list.
-3. `GET /` in a browser → the dashboard.
-4. Set a near-term reminder and confirm delivery once it's due (the scheduler
-   ticks on the warm machine).
+3. `apply <#>` on a discovered job → link + draft + **PDF resume** attached.
+4. `GET /` in a browser → the dashboard.
+5. Set a near-term reminder and confirm delivery once it's due.
 
 ## Updating
 

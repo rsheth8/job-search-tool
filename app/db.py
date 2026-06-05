@@ -224,6 +224,27 @@ CREATE TABLE IF NOT EXISTS job_api_calls (
 );
 
 CREATE INDEX IF NOT EXISTS idx_job_api_calls_at ON job_api_calls(called_at);
+
+-- Tailored resume cache: PDF + .tex on the Fly volume, indexed here for reuse.
+CREATE TABLE IF NOT EXISTS tailored_resumes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT NOT NULL,
+    cache_key   TEXT NOT NULL,
+    company     TEXT,
+    title       TEXT,
+    variant     TEXT NOT NULL,
+    pdf_path    TEXT NOT NULL,
+    tex_path    TEXT NOT NULL,
+    posting_id  INTEGER,            -- optional link to job_postings.id when known
+    pages       INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT NOT NULL,
+    UNIQUE(user_id, cache_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tailored_user_company
+    ON tailored_resumes(user_id, variant, company);
+CREATE INDEX IF NOT EXISTS idx_tailored_posting
+    ON tailored_resumes(user_id, posting_id);
 """
 
 

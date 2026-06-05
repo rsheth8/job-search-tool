@@ -10,6 +10,19 @@ ENV PYTHONUNBUFFERED=1 \
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
+# Tectonic — single-binary LaTeX engine for resume compile + page check.
+ARG TECTONIC_VERSION=0.15.0
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && curl -fsSL \
+       "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40${TECTONIC_VERSION}/tectonic-${TECTONIC_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+       -o /tmp/tectonic.tgz \
+    && tar -xzf /tmp/tectonic.tgz -C /usr/local/bin \
+    && rm /tmp/tectonic.tgz \
+    && apt-get purge -y curl \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY . .
 
 # SQLite lives on a persistent volume in production (see fly.toml mounts), so it

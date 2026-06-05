@@ -8,7 +8,9 @@ __pycache__
 # `fly secrets`, and the DB lives on the mounted volume.
 .env
 *.db
-tests
+resumes/
+.cache/
 handoff.md
 README.md
 deploy
+scripts

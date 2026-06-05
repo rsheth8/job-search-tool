@@ -4,6 +4,13 @@ import tempfile
 import pytest
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "live_slack: live Slack API smoke test (needs SLACK_BOT_TOKEN in .env)",
+    )
+
+
 @pytest.fixture(autouse=True)
 def temp_db(monkeypatch):
     """Give every test a fresh SQLite file and force the heuristic router."""
@@ -23,6 +30,7 @@ def temp_db(monkeypatch):
     # that exercise signing/outbound set these explicitly via monkeypatch.
     monkeypatch.setenv("SLACK_SIGNING_SECRET", "")
     monkeypatch.setenv("SLACK_BOT_TOKEN", "")
+    monkeypatch.setenv("RESUME_TAILOR_ENABLED", "false")
     # Neutralize the .env fallback in get_settings so a real key in .env can't
     # pull tests onto the live (paid) API — tests must stay offline.
     monkeypatch.setattr("dotenv.dotenv_values", lambda *a, **k: {})

@@ -40,6 +40,18 @@ from .router import (
     parse_edit_change,
 )
 
+# Slack file attachments queued by the last reply (e.g. tailored resume PDF).
+_pending_attachments: dict[str, list[tuple[str, bytes]]] = {}
+
+
+def consume_attachments(user_id: str) -> list[tuple[str, bytes]]:
+    """Pop file attachments for ``user_id`` (filename, bytes)."""
+    return _pending_attachments.pop(user_id, [])
+
+
+def _queue_attachment(user_id: str, filename: str, data: bytes) -> None:
+    _pending_attachments.setdefault(user_id, []).append((filename, data))
+
 # Intents that collect slots before they can run.
 SLOT_INTENTS = {
     Intent.APPLY, Intent.UPDATE, Intent.NOTE, Intent.REMIND, Intent.OUTREACH,
@@ -928,11 +940,40 @@ def _do_apply_job(user_id: str, p: ParsedMessage, raw: str) -> str:
 
     role_line = f"{title} @ {company}" if title else company
     link_line = f"\n🔗 Apply here: {posting['url']}" if posting["url"] else ""
+
+    resume_line = ""
+    try:
+        from . import resume_tailor
+
+        tailored = resume_tailor.tailor_for_posting(
+            user_id,
+            company,
+            title or "",
+            posting["description"],
+            posting_id=posting["id"],
+        )
+        if tailored:
+            _queue_attachment(user_id, tailored.filename, tailored.pdf_bytes)
+            assert tailored.pages == 1
+            if tailored.from_cache:
+                resume_line = (
+                    f"\n📎 Reusing saved resume ({tailored.variant.upper()}, "
+                    f"1 page — already tailored for this role)."
+                )
+            else:
+                resume_line = (
+                    f"\n📎 Tailored resume attached ({tailored.variant.upper()}, "
+                    "1 page — saved for next time)."
+                )
+    except Exception:
+        import logging
+        logging.getLogger("engine").exception("resume tailor failed; continuing without PDF")
+
     return (
         f"📝 {role_line}{link_line}\n\n"
         f"Draft \"why I'm a fit\" — tweak before you send:\n“{draft}”\n\n"
-        "Logged as Applied. I won't submit anything for you — paste the draft "
-        "into the application yourself."
+        f"Logged as Applied. I won't submit anything for you — paste the draft "
+        f"into the application yourself.{resume_line}"
     )
 
 
