@@ -65,6 +65,15 @@ def test_generic_words_only_match_inside_phrases():
     assert swe in matcher.prefilter([swe], prof)
 
 
+def test_short_terms_match_whole_words_not_substrings():
+    # "ai" must match an "AI Engineer" role but NOT words like email/training.
+    prof = _profile(roles="ai engineer", keywords="ml")
+    junk = _p("Digital Marketing Manager", desc="email campaigns and training")
+    real = _p("AI Engineer", desc="build ML systems")
+    kept = matcher.prefilter([junk, real], prof)
+    assert real in kept and junk not in kept
+
+
 def test_swe_does_not_expand_to_bare_software():
     # Regression: bare "software" matched every software-company posting (incl.
     # their sales roles), flooding the scoring cap. Only the precise phrase.

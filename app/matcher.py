@@ -119,8 +119,14 @@ def _haystack(p: JobPosting) -> str:
     return f"{p.title} {p.location} {p.description}".lower()
 
 
+def _term_in(term: str, text: str) -> bool:
+    """Whole-token/phrase match — NOT a raw substring. Stops short terms like
+    "ai"/"ml"/"swe" from matching inside unrelated words (email, html, answered)."""
+    return re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", text) is not None
+
+
 def prefilter(postings: list[JobPosting], profile: sqlite3.Row | None) -> list[JobPosting]:
-    """Free gate: keep postings that mention any role/keyword term.
+    """Free gate: keep postings that mention any role/keyword term (whole-word).
 
     With no terms configured we can't cheaply tell signal from noise, so we pass
     everything through to scoring (which will return a neutral score).
@@ -128,7 +134,7 @@ def prefilter(postings: list[JobPosting], profile: sqlite3.Row | None) -> list[J
     terms = _match_terms(profile)
     if not terms:
         return list(postings)
-    return [p for p in postings if any(t in _haystack(p) for t in terms)]
+    return [p for p in postings if any(_term_in(t, _haystack(p)) for t in terms)]
 
 
 # ---------------------------------------------------------------------------
