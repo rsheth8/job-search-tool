@@ -151,13 +151,20 @@ _SCORE_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "id": {"type": "string"},
-                    "score": {"type": "number", "minimum": 0, "maximum": 1},
+                    # No minimum/maximum: Anthropic structured outputs reject
+                    # numeric bounds. _llm_score clamps to [0,1] after parsing.
+                    "score": {"type": "number"},
                 },
                 "required": ["id", "score"],
+                # Anthropic structured outputs require this on every object,
+                # else the request 400s and scoring silently falls back to
+                # the heuristic (everything ends up ~0.15).
+                "additionalProperties": False,
             },
         }
     },
     "required": ["scores"],
+    "additionalProperties": False,
 }
 
 _llm_client = None
