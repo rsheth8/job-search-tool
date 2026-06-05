@@ -66,6 +66,14 @@ _SYNONYMS = {
     "ui": ("user interface",),
     "ds": ("data scientist", "data science"),
 }
+# Words too generic to gate matching ON THEIR OWN (they appear across unrelated
+# roles, e.g. "software"/"engineer" in a software company's sales posting). They
+# still count inside a precise multi-word phrase like "software engineer".
+_GENERIC_TOKENS = {
+    "software", "engineer", "engineering", "developer", "development", "manager",
+    "management", "analyst", "specialist", "associate", "intern", "data", "tech",
+    "technical", "applications", "systems", "platform",
+}
 
 
 def _terms(profile: sqlite3.Row | None) -> set[str]:
@@ -93,7 +101,9 @@ def _match_terms(profile: sqlite3.Row | None) -> set[str]:
         if len(sig) >= 2:
             terms.add(" ".join(sig))  # e.g. "software engineer", "data scientist"
         for w in sig:
-            if len(w) >= 3 or w in _SYNONYMS:
+            # Generic words only gate inside a phrase, never standalone (else
+            # "software" matches every software-company posting incl. sales).
+            if w not in _GENERIC_TOKENS and (len(w) >= 3 or w in _SYNONYMS):
                 terms.add(w)
             terms.update(_SYNONYMS.get(w, ()))
     return terms
