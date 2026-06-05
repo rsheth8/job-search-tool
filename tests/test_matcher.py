@@ -48,6 +48,23 @@ def test_match_terms_vs_score_terms():
     assert matcher._terms(prof) == {"swe"}
 
 
+def test_generic_words_only_match_inside_phrases():
+    # Literal "software engineer" in a profile must NOT reintroduce the bare
+    # "software"/"engineer" tokens that matched software-company sales roles.
+    prof = _profile(roles="software engineer, machine learning engineer",
+                    keywords="python")
+    terms = matcher._match_terms(prof)
+    assert "software engineer" in terms and "machine learning engineer" in terms
+    assert "software" not in terms and "engineer" not in terms
+    assert "python" in terms
+    # A software-company sales role still must not pass.
+    sales = _p("Enterprise Account Executive", desc="sell our software")
+    assert sales not in matcher.prefilter([sales], prof)
+    # A real SWE role still passes (via the phrase).
+    swe = _p("Software Engineer, Backend")
+    assert swe in matcher.prefilter([swe], prof)
+
+
 def test_swe_does_not_expand_to_bare_software():
     # Regression: bare "software" matched every software-company posting (incl.
     # their sales roles), flooding the scoring cap. Only the precise phrase.
