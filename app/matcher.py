@@ -45,9 +45,12 @@ _STOPWORDS = {
 # substring-matches "Software Engineer". Keeps the free pre-filter from starving
 # the scorer on common shorthand.
 _SYNONYMS = {
-    "swe": ("software engineer", "software"),
-    "sde": ("software engineer", "software"),
-    "sdet": ("software engineer in test", "software"),
+    # Map abbreviations to PRECISE phrases only — never a bare generic word like
+    # "software" (it matches every software-company posting, incl. their sales
+    # roles, and floods the per-tick scoring cap with false positives).
+    "swe": ("software engineer",),
+    "sde": ("software engineer",),
+    "sdet": ("software engineer in test",),
     "ml": ("machine learning",),
     "ai": ("machine learning", "artificial intelligence"),
     "nlp": ("natural language",),

@@ -37,4 +37,4 @@ primary_region = "iad"
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "256mb"
+  memory = "512mb"  # wide discovery (RSS + directory + aggregator) + LLM scoring needs headroom; 256mb OOM'd

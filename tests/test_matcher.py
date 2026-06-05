@@ -48,6 +48,16 @@ def test_match_terms_vs_score_terms():
     assert matcher._terms(prof) == {"swe"}
 
 
+def test_swe_does_not_expand_to_bare_software():
+    # Regression: bare "software" matched every software-company posting (incl.
+    # their sales roles), flooding the scoring cap. Only the precise phrase.
+    prof = _profile(roles="swe", keywords="swe")
+    assert "software" not in matcher._match_terms(prof)
+    # A software-company SALES role must NOT pass the prefilter.
+    sales = _p("Commercial Account Executive", desc="Sell our software platform")
+    assert sales not in matcher.prefilter([sales], prof)
+
+
 def test_heuristic_scores_match_higher_than_nonmatch():
     prof = _profile(roles="software engineer", keywords="python, distributed systems")
     scored = dict(
