@@ -73,9 +73,13 @@ def create_application(
             (app_id, f"Applied to {company}" + (f" — {role}" if role else ""),
              _iso(applied), raw_sms),
         )
-        return conn.execute(
+        app = conn.execute(
             "SELECT * FROM applications WHERE id = ?", (app_id,)
         ).fetchone()
+    from . import jobstore
+
+    jobstore.mark_matching_postings_applied(user_id, company, role)
+    return app
 
 
 def find_application(

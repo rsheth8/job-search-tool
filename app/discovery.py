@@ -16,7 +16,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from . import job_alerts, jobstore, matcher, profile, reminders, wide_discovery
+from . import job_alerts, jobstore, matcher, posting_match, profile, reminders, wide_discovery
 from .config import get_settings
 from .jobsources import NON_BOARD_SOURCES, JobPosting, fetch_source
 from .jobsources import quality
@@ -94,6 +94,9 @@ def seed_board(user_id: str, source: str, board_token: str, company_name: str | 
             continue
         if company_name:
             p.company = company_name
+        p.external_id = posting_match.normalize_external_id(
+            p.source, board_token, p.external_id
+        )
         if jobstore.save_posting(user_id, p, relevance_score=None, status="seeded"):
             n += 1
     return n
@@ -123,6 +126,9 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
             seen.add(key)
             if b["company_name"]:
                 p.company = b["company_name"]
+            p.external_id = posting_match.normalize_external_id(
+                p.source, b["board_token"], p.external_id
+            )
             fresh.append(p)
     fresh.extend(wide_discovery.collect_fresh(user_id, prof, existing_keys=seen))
     # Drop any wide items that raced into seen via posting_exists.
@@ -157,6 +163,13 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
     messages_sent = 0
 
     for posting, sc in scored:
+        if posting_match.user_already_applied_to(
+            user_id, posting.company, posting.title
+        ):
+            jobstore.save_posting(
+                user_id, posting, relevance_score=sc, status="applied"
+            )
+            continue
         good = sc >= threshold
         if good:
             status = "alerted" if mode == "instant" else "queued"

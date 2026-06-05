@@ -13,6 +13,19 @@ primary_region = "iad"
   # Point SQLite at the mounted volume so data survives restarts/redeploys.
   DATABASE_PATH = "/data/job_search.db"
   RESUME_TEX_DIR = "/data/resumes"
+  # Wide job discovery (needs a profile set via Slack + JOB_ALERT_USER secret).
+  JOB_SOURCES_ENABLED = "greenhouse,lever,ashby,rss,directory"
+  JOB_WIDE_RSS_ENABLED = "true"
+  JOB_WIDE_RSS_FEEDS = "hn-hiring,remoteok,weworkremotely"
+  JOB_WIDE_DIRECTORY_ENABLED = "true"
+  JOB_DIRECTORY_BOARDS_PER_TICK = "24"
+  JOB_DIRECTORY_MAX_JOBS_PER_BOARD = "25"
+  JOB_DIRECTORY_DATA_PATH = "data/ats_boards.json"
+  JOB_POLL_SECONDS = "600"
+  JOB_RELEVANCE_THRESHOLD = "0.6"
+  JOB_MAX_SCORED_PER_TICK = "60"
+  JOB_ALERT_MODE = "digest"
+  JOB_DIGEST_TOP_N = "5"
 
 # The reminder scheduler is an in-process APScheduler loop, so the machine must
 # stay warm — never auto-stop to zero, or reminders won't fire.

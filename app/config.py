@@ -57,12 +57,12 @@ class Settings(BaseSettings):
     job_relevance_threshold: float = 0.6
     # Cap how many *new* postings get LLM-scored per tick (token-cost guard).
     # Survivors of the free pre-filter beyond this carry over to the next tick.
-    job_max_scored_per_tick: int = 40
+    job_max_scored_per_tick: int = 60
     # How to notify on new matches: digest (one summary per tick), instant
     # (one message per job, legacy), or silent (store only).
     job_alert_mode: str = "digest"
     # How many top matches to show in a digest body (rest summarized as "+N more").
-    job_digest_top_n: int = 3
+    job_digest_top_n: int = 5
     # The user the background loop alerts (Slack user id). Empty = alert the
     # busiest known user, mirroring dashboard.default_user().
     job_alert_user: str = ""
@@ -72,9 +72,9 @@ class Settings(BaseSettings):
 
     # --- Wide discovery (A/B/C) — profile-driven, no company list required ---
     job_wide_rss_enabled: bool = True
-    job_wide_rss_feeds: str = "hn-hiring,remoteok"
+    job_wide_rss_feeds: str = "hn-hiring,remoteok,weworkremotely"
     job_wide_directory_enabled: bool = True
-    job_directory_boards_per_tick: int = 12
+    job_directory_boards_per_tick: int = 24
     job_directory_max_jobs_per_board: int = 25
     job_directory_data_path: str = "data/ats_boards.json"
     job_wide_aggregator_enabled: bool = False

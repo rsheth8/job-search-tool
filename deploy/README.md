@@ -33,11 +33,19 @@ fly secrets set \
   ANTHROPIC_API_KEY=sk-ant-... \
   SLACK_BOT_TOKEN=xoxb-... \
   SLACK_SIGNING_SECRET=... \
-  APOLLO_API_KEY=...
+  APOLLO_API_KEY=... \
+  JOB_ALERT_USER=U0123456789
 ```
 
 Only `ANTHROPIC_API_KEY` and the two `SLACK_*` values are needed for the core
-experience; `APOLLO_API_KEY` is optional (recruiter discovery).
+experience; `APOLLO_API_KEY` is optional (recruiter discovery). `JOB_ALERT_USER`
+is your Slack user id — required for job-discovery digests (find it in Slack →
+profile → ⋯ → Copy member ID).
+
+Wide discovery (RSS + ATS directory rotation) is configured in `fly.toml` `[env]`.
+Set your match criteria once in Slack, e.g. `"I'm looking for new grad SWE roles,
+remote or NYC"`. Optional paid broad search: add `SERPAPI_API_KEY`, set
+`JOB_WIDE_AGGREGATOR_ENABLED=true`, and append `aggregator` to `JOB_SOURCES_ENABLED`.
 
 Slack bot scopes: `chat:write`, `files:write` (for resume PDF attachments on
 `apply <#>`). After adding scopes, **Reinstall App** and update `SLACK_BOT_TOKEN`.
@@ -47,9 +55,13 @@ Slack bot scopes: `chat:write`, `files:write` (for resume PDF attachments on
 Tailored resumes need `swe.tex` and `aiml.tex` on the volume (not in git):
 
 ```bash
-fly ssh console -C "mkdir -p /data/resumes"
-scp resumes/swe.tex resumes/aiml.tex root@<app>.fly.dev:/data/resumes/
+fly ssh console -a job-search-tool -C "mkdir -p /data/resumes"
+fly ssh sftp put -a job-search-tool resumes/swe.tex /data/resumes/swe.tex
+fly ssh sftp put -a job-search-tool resumes/aiml.tex /data/resumes/aiml.tex
+fly ssh console -a job-search-tool -C "ls -la /data/resumes/"
 ```
+
+Do **not** use `scp root@*.fly.dev` — Fly closes that connection. Use `fly ssh sftp put` instead.
 
 Tailored outputs cache under `/data/resumes/tailored/`. Tectonic is in the Docker image.
 

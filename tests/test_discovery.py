@@ -45,9 +45,9 @@ def test_tick_digest_mode_strong_match_only(monkeypatch):
     assert "review jobs" in body
 
     statuses = {r["external_id"]: r["status"] for r in jobstore.list_postings("u")}
-    assert statuses["1"] == "queued"
-    assert statuses["2"] == "new"
-    assert "3" not in statuses
+    assert statuses["greenhouse:acme:1"] == "queued"
+    assert statuses["greenhouse:acme:2"] == "new"
+    assert "greenhouse:acme:3" not in statuses
 
 
 def test_tick_instant_mode_one_message_per_job(monkeypatch):
@@ -62,7 +62,7 @@ def test_tick_instant_mode_one_message_per_job(monkeypatch):
     assert len(sender.sent) == 1
     assert "#" in sender.sent[0][1]
     statuses = {r["external_id"]: r["status"] for r in jobstore.list_postings("u")}
-    assert statuses["1"] == "alerted"
+    assert statuses["greenhouse:acme:1"] == "alerted"
 
 
 def test_tick_dedupes_on_second_run(monkeypatch):

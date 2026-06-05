@@ -14,8 +14,9 @@ Reference PDFs (`*.pdf`) are fine to keep locally for comparison; they are not c
 Base `.tex` files live on the **persistent volume**, not in the Docker image:
 
 ```bash
-fly ssh console -C "mkdir -p /data/resumes"
-scp resumes/swe.tex resumes/aiml.tex root@<app>.fly.dev:/data/resumes/
+fly ssh console -a job-search-tool -C "mkdir -p /data/resumes"
+fly ssh sftp put -a job-search-tool resumes/swe.tex /data/resumes/swe.tex
+fly ssh sftp put -a job-search-tool resumes/aiml.tex /data/resumes/aiml.tex
 ```
 
 Set `RESUME_TEX_DIR=/data/resumes` on Fly (already in `fly.toml`).

@@ -24,6 +24,10 @@ FEEDS: dict[str, dict[str, str]] = {
         "url": "https://remoteok.com/remote-jobs.rss",
         "label": "Remote OK",
     },
+    "weworkremotely": {
+        "url": "https://weworkremotely.com/categories/remote-programming-jobs.rss",
+        "label": "We Work Remotely (Programming)",
+    },
 }
 
 _ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
@@ -134,8 +138,8 @@ def _parse_atom(root, feed_id: str, label: str) -> list[JobPosting]:
 
 
 def _company_from_item(title: str, body: str, feed_id: str) -> str:
-    if feed_id == "remoteok":
-        # Titles often "Company: Role" on Remote OK.
+    if feed_id in ("remoteok", "weworkremotely"):
+        # Titles often "Company: Role" on these aggregators.
         if ":" in title:
             return title.split(":", 1)[0].strip()
     m = _HN_COMPANY.match(title.strip())
@@ -152,7 +156,7 @@ def _company_from_item(title: str, body: str, feed_id: str) -> str:
 
 
 def _location_hint(body: str, feed_id: str) -> str:
-    if feed_id == "remoteok" or re.search(r"\bremote\b", body, re.I):
+    if feed_id == "remoteok" or feed_id == "weworkremotely" or re.search(r"\bremote\b", body, re.I):
         return "Remote"
     m = re.search(r"\b(?:location|based in|office)[:\s]+([^\n|]{3,60})", body, re.I)
     return m.group(1).strip() if m else ""

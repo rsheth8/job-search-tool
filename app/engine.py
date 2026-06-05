@@ -765,7 +765,12 @@ def _do_query(user_id: str, p: ParsedMessage, memory: dict) -> str:
 
 def _do_jobs(user_id: str) -> str:
     jobstore.wake_snoozed(user_id, _now_utc().isoformat())  # resurface expired snoozes
-    posts = jobstore.list_postings(user_id, statuses=("queued", "alerted"), limit=10)
+    posts = jobstore.list_postings(
+        user_id,
+        statuses=("queued", "alerted"),
+        limit=10,
+        exclude_already_applied=True,
+    )
     counts = jobstore.counts_by_status(user_id)
     total = counts.get("queued", 0) + counts.get("alerted", 0)
     if not posts:
@@ -887,7 +892,10 @@ def _resolve_posting(user_id: str, p: ParsedMessage):
     if p.company:
         # Most relevant un-applied posting for that company (alerted/new only).
         for row in jobstore.list_postings(
-            user_id, statuses=("alerted", "new"), limit=25
+            user_id,
+            statuses=("alerted", "new"),
+            limit=25,
+            exclude_already_applied=True,
         ):
             if (row["company"] or "").lower() == p.company.lower():
                 return row

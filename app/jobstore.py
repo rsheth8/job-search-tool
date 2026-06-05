@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 
 from .db import connect
 from .jobsources import JobPosting
+from . import posting_match
 
 
 def _now() -> str:
@@ -127,10 +128,46 @@ def get_posting(user_id: str, posting_id: int) -> sqlite3.Row | None:
         ).fetchone()
 
 
+def _filter_already_applied(
+    user_id: str, rows: list[sqlite3.Row]
+) -> list[sqlite3.Row]:
+    """Drop postings the user already logged an application for."""
+    return [
+        r for r in rows
+        if not posting_match.user_already_applied_to(
+            user_id, r["company"], r["title"]
+        )
+    ]
+
+
+def mark_matching_postings_applied(
+    user_id: str, company: str, role: str | None
+) -> int:
+    """Mark open postings that match a newly logged application. Returns count."""
+    if not role:
+        return 0
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, company, title FROM job_postings
+            WHERE user_id = ? AND status IN ('queued', 'alerted', 'new')
+            """,
+            (user_id,),
+        ).fetchall()
+    n = 0
+    for row in rows:
+        if posting_match.matches_application(
+            company, role, row["company"], row["title"]
+        ):
+            mark_posting_status(row["id"], "applied")
+            n += 1
+    return n
+
+
 def list_review_queue(user_id: str, *, limit: int = 50) -> list[sqlite3.Row]:
     """Queued matches awaiting interactive review, best score first."""
     with connect() as conn:
-        return conn.execute(
+        rows = conn.execute(
             """
             SELECT * FROM job_postings
             WHERE user_id = ? AND status = 'queued'
@@ -139,6 +176,7 @@ def list_review_queue(user_id: str, *, limit: int = 50) -> list[sqlite3.Row]:
             """,
             (user_id, limit),
         ).fetchall()
+    return _filter_already_applied(user_id, rows)[:limit]
 
 
 def count_queued(user_id: str) -> int:
@@ -150,7 +188,11 @@ def count_queued(user_id: str) -> int:
 
 
 def list_postings(
-    user_id: str, *, statuses: tuple[str, ...] | None = None, limit: int = 20
+    user_id: str,
+    *,
+    statuses: tuple[str, ...] | None = None,
+    limit: int = 20,
+    exclude_already_applied: bool = False,
 ) -> list[sqlite3.Row]:
     """Most recently seen postings, optionally filtered to given statuses."""
     sql = "SELECT * FROM job_postings WHERE user_id = ? "
@@ -160,9 +202,13 @@ def list_postings(
         params.extend(statuses)
     # SQLite sorts NULLs last under DESC, so unscored postings sink naturally.
     sql += "ORDER BY relevance_score DESC, first_seen_at DESC LIMIT ?"
-    params.append(limit)
+    fetch_limit = limit * 3 if exclude_already_applied else limit
+    params.append(fetch_limit)
     with connect() as conn:
-        return conn.execute(sql, params).fetchall()
+        rows = conn.execute(sql, params).fetchall()
+    if exclude_already_applied:
+        rows = _filter_already_applied(user_id, rows)
+    return rows[:limit]
 
 
 def mark_posting_status(posting_id: int, status: str) -> None:
