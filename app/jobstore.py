@@ -112,6 +112,26 @@ def save_posting(
         ).fetchone()
 
 
+def seen_similar_count(user_id: str, company: str | None, title: str | None) -> int:
+    """How many postings the user has already seen for the same company + a similar
+    title — the repost signal for the ghost-job filter. Reuses ``posting_match``
+    similarity so e.g. "SWE" and "Software Engineer" count as the same role."""
+    if not company or not title:
+        return 0
+    target = posting_match.normalize_company(company)
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT company, title FROM job_postings WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+    return sum(
+        1
+        for r in rows
+        if posting_match.normalize_company(r["company"]) == target
+        and posting_match.titles_similar(title, r["title"])
+    )
+
+
 def has_postings_from_source(user_id: str, source: str) -> bool:
     """True if the user has any posting from ``source`` — used to baseline the
     paid aggregator on its first run (so enabling it doesn't storm)."""

@@ -134,7 +134,25 @@ model persist/load; "don't promote a worse model" guard.
 
 ---
 
-## Phase 3 — Ghost-job / fake-listing filter (independent, ship anytime)
+## Phase 3 — Ghost-job / fake-listing filter — DONE (2026-06-08)
+
+Shipped on branch `matching-v2`:
+- `app/jobsources/ghost.py` — weighted, conservative content rules
+  (`ghost_signals` / `ghost_score` / `is_ghost`, threshold 0.6): evergreen/
+  pipeline language, personal-email contact, comp hype, staleness (ISO + "30+
+  days ago"), thin description, plus a caller-supplied repost signal. First-party
+  ATS always trusted (`quality.is_first_party`).
+- `app/jobstore.py` — `seen_similar_count` (repost count via `posting_match`
+  company+title similarity).
+- `app/discovery.py` — ghost gate after the reputability gate, before scoring.
+- `app/config.py` — `ghost_filter_enabled` (default on). `app/main.py` — `/health`.
+- `tests/test_ghost.py` (11). Full suite **368 passing**.
+
+Each signal is sub-threshold on its own except the high-precision ones (evergreen,
+personal email, 3+ reposts) — so a single real posting is never dropped without
+strong evidence. LLM-on-borderline still deferred.
+
+### Original design notes
 
 **Goal:** beyond current spam rules in `quality.py`, catch ghost jobs (reposted,
 never-filled, staffing churn) and scams.

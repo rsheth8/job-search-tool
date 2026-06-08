@@ -81,6 +81,11 @@ class Settings(BaseSettings):
     serpapi_api_key: str = ""
     job_aggregator_max_per_day: int = 5
 
+    # Ghost-job filter (Matching v2, Phase 3): drop never-really-hiring reqs
+    # (evergreen language, reposts, stale, scam contact) beyond quality.py's spam
+    # gate. Conservative + free (rules only). On by default; flip off to disable.
+    ghost_filter_enabled: bool = True
+
     # --- Resume tailoring (assisted apply) ---------------------------------
     # Base .tex files live on the Fly volume, not in git (personal info).
     resume_tex_dir: str = "/data/resumes"
