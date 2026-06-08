@@ -58,11 +58,13 @@ def train_page(user: str | None = None) -> HTMLResponse:
 @app.get("/train/deck")
 def train_deck(user: str | None = None, n: int = 15) -> dict:
     from . import dashboard as dash
-    from . import trainer
+    from . import insights, profile as prof, trainer
 
     uid = user or dash.default_user()
-    return {"user": uid, "cards": trainer.build_deck(uid, limit=n),
-            "stats": trainer.stats(uid)}
+    cards = trainer.build_deck(uid, limit=n)
+    # Plain-language TL;DR per card (batched + cached; no-op unless enabled).
+    cards = insights.enrich(cards, prof.profile_text(prof.get_profile(uid)))
+    return {"user": uid, "cards": cards, "stats": trainer.stats(uid)}
 
 
 @app.post("/train/label")
@@ -124,6 +126,7 @@ def health() -> dict:
         "ghost_filter": s.ghost_filter_enabled,
         "eligibility_filter": s.eligibility_filter_enabled,
         "eligibility_llm": s.eligibility_llm_enabled,
+        "deck_tldr": s.deck_tldr_enabled,
         "reranker": s.reranker_enabled,
         "directory_boards": dir_src.board_count(),
         "tracked_boards": jobstore.tracked_count(),

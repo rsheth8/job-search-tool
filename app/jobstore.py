@@ -455,6 +455,28 @@ def record_eligibility_call(user_id: str | None = None) -> None:
         )
 
 
+def allow_summary_call() -> bool:
+    """True while today's batched deck-TLDR calls are under the cap."""
+    from .config import get_settings
+
+    cap = get_settings().deck_tldr_max_calls_per_day
+    with connect() as conn:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM job_api_calls WHERE call_type = 'summary' "
+            "AND called_at >= ?",
+            (_utc_day_start(),),
+        ).fetchone()[0]
+    return n < cap
+
+
+def record_summary_call(user_id: str | None = None) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO job_api_calls (call_type, user_id, called_at) VALUES (?, ?, ?)",
+            ("summary", user_id, _now()),
+        )
+
+
 def tracked_count() -> int:
     with connect() as conn:
         return conn.execute("SELECT COUNT(*) FROM tracked_companies").fetchone()[0]

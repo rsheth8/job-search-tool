@@ -96,6 +96,22 @@ graceful fallback when backend returns nothing, migration idempotency.
 
 ---
 
+## Deck TL;DR insights — DONE (2026-06-08)
+
+Plain-language "what is this role + is it for me" on each swipe card, credit-
+efficient by design.
+- `app/insights.py` — `enrich(cards, profile_block)`: cache-first, ONE batched
+  Haiku call for misses, fail-open. `summarize_batch` (schema: per-id tldr ≤22w +
+  fit ≤12w); injectable `summarize=` in tests.
+- `app/db.py` — `posting_summaries` cache table (summarize once ever).
+- `app/jobstore.py` — `allow/record_summary_call` (daily cap in decks/day).
+- `app/main.py` — `/train/deck` enriches cards; `/health` `deck_tldr` flag.
+- `app/trainer.py` — card UI shows TL;DR + FIT blocks.
+- `app/config.py` — `deck_tldr_enabled` (off) / `deck_tldr_max_calls_per_day`.
+- `tests/test_insights.py` (5). Full suite **405 passing**.
+Efficiency: batched (1 call/deck), cached by posting, Haiku, ~320-char inputs,
+gated + capped. Enable: `DECK_TLDR_ENABLED=true` (reuses ANTHROPIC_API_KEY).
+
 ## Eligibility / qualification gate — DONE (2026-06-08)
 
 Answers "could this candidate realistically *do / be considered for* this role?",

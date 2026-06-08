@@ -277,6 +277,15 @@ CREATE TABLE IF NOT EXISTS training_labels (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_training_labels_dedupe
     ON training_labels(user_id, source, external_id);
+
+-- Cached plain-language summaries for swipe cards (one batched Haiku call fills
+-- many; cached by posting so a role is summarized once ever — keeps AI spend low).
+CREATE TABLE IF NOT EXISTS posting_summaries (
+    cache_key   TEXT PRIMARY KEY,   -- "{source}:{external_id}"
+    tldr        TEXT,
+    fit         TEXT,
+    created_at  TEXT NOT NULL
+);
 """
 
 

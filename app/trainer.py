@@ -200,7 +200,12 @@ _PAGE = r"""<!doctype html>
   .company { font-size: 15px; color: #9aa4b2; margin-top: 4px; }
   .meta { font-size: 13px; color: #7c8595; margin-top: 8px; display: flex; gap: 10px; flex-wrap: wrap; }
   .score { background: #1f2430; border-radius: 8px; padding: 2px 8px; }
-  .desc { margin-top: 14px; font-size: 14px; line-height: 1.5; color: #c7ccd6; overflow: auto; flex: 1; }
+  .tldr { margin-top: 14px; font-size: 14.5px; line-height: 1.45; color: #e8ecf3;
+          background: #11203a; border: 1px solid #1e3a5f; border-radius: 10px; padding: 10px 12px; }
+  .tldr .lbl { font-size: 11px; font-weight: 700; letter-spacing: .04em; color: #6ea8ff; }
+  .fit { margin-top: 8px; font-size: 13px; color: #7ee2a8; }
+  .fit .lbl { color: #5a8a6e; font-weight: 700; }
+  .desc { margin-top: 12px; font-size: 13px; line-height: 1.5; color: #aab2bf; overflow: auto; flex: 1; }
   .link { font-size: 12px; color: #6ea8ff; margin-top: 10px; text-decoration: none; word-break: break-all; }
   #buttons { display: flex; gap: 18px; margin-top: 22px; }
   button { font-size: 16px; font-weight: 600; padding: 14px 28px; border-radius: 14px;
@@ -258,6 +263,8 @@ function renderTop(){
         <span class="score">match ${Math.round((c.relevance_score||0)*100)}%</span>
         <span>${esc(c.source)}</span>
       </div>
+      ${c.tldr ? `<div class="tldr"><span class="lbl">TL;DR</span> &nbsp;${esc(c.tldr)}</div>` : ''}
+      ${c.fit ? `<div class="fit"><span class="lbl">FIT:</span> ${esc(c.fit)}</div>` : ''}
       <div class="desc">${esc(c.description) || '<em>No description.</em>'}</div>
       ${c.url ? `<a class="link" href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.url)}</a>` : ''}
     </div>`;

@@ -123,6 +123,15 @@ class Settings(BaseSettings):
     eligibility_llm_enabled: bool = False
     eligibility_max_calls_per_day: int = 100     # batched Haiku eligibility checks / day
 
+    # --- Deck TL;DR insights (swipe trainer) -----------------------------
+    # Plain-language "what is this role + is it for me" on each swipe card.
+    # Off by default; reuses ANTHROPIC_API_KEY. Cheap by design: ONE batched
+    # Haiku call per deck, results cached per posting (summarized once ever),
+    # daily-capped. Each call covers a whole deck (~15 roles), so the cap is in
+    # decks/day, not roles/day.
+    deck_tldr_enabled: bool = False
+    deck_tldr_max_calls_per_day: int = 50
+
     @property
     def serpapi_enabled(self) -> bool:
         return bool(self.serpapi_api_key.strip())
