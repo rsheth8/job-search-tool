@@ -19,6 +19,7 @@ import logging
 import re
 import sqlite3
 
+from . import embeddings
 from .config import get_settings
 from .jobsources import JobPosting
 from .profile import profile_text
@@ -158,6 +159,62 @@ def _heuristic_score(p: JobPosting, terms: set[str], locations: list[str]) -> fl
     return round(max(0.0, min(1.0, base)), 3)
 
 
+# Chars of description fed to the embedder. Generous vs the LLM's _DESC_CHARS:
+# embeddings handle longer context cheaply and descriptions are already capped
+# at MAX_DESCRIPTION_CHARS upstream.
+_EMBED_DESC_CHARS = 1500
+
+
+def _embed_text(p: JobPosting) -> str:
+    return f"{p.title}\n{p.location}\n{p.description[:_EMBED_DESC_CHARS]}".strip()
+
+
+def _embedding_score(
+    postings: list[JobPosting],
+    profile: sqlite3.Row | None,
+    embedder,
+    terms: set[str],
+    locations: list[str],
+) -> list[tuple[JobPosting, float]] | None:
+    """Score by cosine similarity (profile vs each JD).
+
+    Returns None to signal "embeddings unavailable, fall back" — when the profile
+    is empty (nothing to compare against) or the profile vector can't be built.
+    A *per-posting* embed miss falls back to the heuristic for that posting only,
+    mirroring how the LLM path fills gaps. Each posting's vector is stashed on the
+    object so ``save_posting`` persists it (embed once).
+
+    NOTE: cosine magnitudes don't line up 1:1 with the keyword heuristic's scale,
+    so ``job_relevance_threshold`` may want re-tuning (the user already has TUNE)
+    after embeddings go live. Calibration is a deliberate follow-up, not done here.
+    """
+    profile_block = profile_text(profile)
+    if not profile_block:
+        return None
+    pvecs = embedder([profile_block], input_type="query")
+    if not pvecs or pvecs[0] is None:
+        return None
+    pvec = pvecs[0]
+    dvecs = embedder([_embed_text(p) for p in postings], input_type="document")
+    out: list[tuple[JobPosting, float]] = []
+    for p, dvec in zip(postings, dvecs):
+        if dvec is None:
+            out.append((p, _heuristic_score(p, terms, locations)))
+            continue
+        p.embedding = dvec
+        base = max(0.0, embeddings.cosine(pvec, dvec))
+        if locations:
+            text = _haystack(p)
+            if any(loc in text for loc in locations):
+                base += 0.05
+            elif "remote" in text:
+                base += 0.02
+            else:
+                base -= 0.05
+        out.append((p, round(max(0.0, min(1.0, base)), 3)))
+    return out
+
+
 _SCORE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -235,15 +292,28 @@ def score(
     profile: sqlite3.Row | None,
     *,
     llm=None,
+    embedder=None,
 ) -> list[tuple[JobPosting, float]]:
     """Return [(posting, score)] for each posting.
 
-    Uses the LLM when configured; falls back to the free heuristic on no-key,
-    rate-limit, or any API error. ``llm`` injects a scorer in tests.
+    Scoring strategy, in order of preference:
+      1. Embeddings (cosine profile-vs-JD) when active or injected — semantic.
+      2. LLM (Haiku) when keyed.
+      3. Free keyword/location heuristic (the CI path, and the final fallback).
+    Each layer degrades to the next on failure, so discovery never blocks.
+    ``llm`` / ``embedder`` inject scorers in tests.
     """
     if not postings:
         return []
     terms, locations = _terms(profile), _locations(profile)
+
+    embed_fn = embedder or (embeddings.embed if get_settings().embedding_active else None)
+    if embed_fn is not None:
+        result = _embedding_score(postings, profile, embed_fn, terms, locations)
+        if result is not None:
+            return result
+        # Profile/embedder gave nothing usable — fall through to LLM/heuristic.
+
     use_llm = llm is not None or get_settings().use_llm_router
     if use_llm:
         try:

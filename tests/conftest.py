@@ -20,6 +20,8 @@ def temp_db(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")  # force offline heuristic router
     monkeypatch.setenv("APOLLO_API_KEY", "")  # never hit live Apollo from .env
     monkeypatch.setenv("SERPAPI_API_KEY", "")  # never hit the paid aggregator
+    monkeypatch.setenv("VOYAGE_API_KEY", "")  # never hit the paid embedder
+    monkeypatch.setenv("EMBEDDING_ENABLED", "false")
     # Keep wide discovery off by default so tests never touch the network; tests
     # that exercise it enable + monkeypatch the fetchers explicitly.
     monkeypatch.setenv("JOB_WIDE_AGGREGATOR_ENABLED", "false")
@@ -36,7 +38,7 @@ def temp_db(monkeypatch):
     monkeypatch.setattr("dotenv.dotenv_values", lambda *a, **k: {})
 
     # Reset cached settings + router singleton so env changes take effect.
-    from app import apollo, config, matcher, reminders, router
+    from app import apollo, config, embeddings, matcher, reminders, router
 
     config.get_settings.cache_clear()
     router._router_singleton = None
@@ -46,6 +48,7 @@ def temp_db(monkeypatch):
     apollo.reset_for_tests()
     matcher._llm_client = None  # nor a matcher LLM client/limiter
     matcher._llm_limiter = None
+    embeddings.reset_for_tests()  # nor an embedding rate limiter
 
     from app.db import init_db
 

@@ -93,6 +93,12 @@ def health() -> dict:
         "last_tick": discovery.last_tick_at,
         "postings": jobstore.global_counts_by_status(),
     }
+    if s.embedding_active:
+        info["embeddings"] = {
+            "model": s.embedding_model,
+            "calls_today": jobstore.embedding_calls_today(),
+            "max_per_day": s.embedding_max_calls_per_day,
+        }
     return info
 
 

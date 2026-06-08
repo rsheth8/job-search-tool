@@ -183,7 +183,8 @@ CREATE TABLE IF NOT EXISTS job_postings (
     first_seen_at   TEXT NOT NULL,
     relevance_score REAL,
     status          TEXT NOT NULL DEFAULT 'new',  -- new|alerted|applied|dismissed|snoozed|seeded
-    snoozed_until   TEXT                          -- when a 'snoozed' posting should resurface
+    snoozed_until   TEXT,                         -- when a 'snoozed' posting should resurface
+    embedding       BLOB                          -- float32 JD vector (Matching v2); NULL when off
 );
 
 -- One job-search profile per user: target roles/keywords/locations plus a short
@@ -283,6 +284,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     post_cols = {r[1] for r in conn.execute("PRAGMA table_info(job_postings)")}
     if post_cols and "snoozed_until" not in post_cols:
         conn.execute("ALTER TABLE job_postings ADD COLUMN snoozed_until TEXT")
+    if post_cols and "embedding" not in post_cols:
+        conn.execute("ALTER TABLE job_postings ADD COLUMN embedding BLOB")
     prof_cols = {r[1] for r in conn.execute("PRAGMA table_info(job_search_profile)")}
     if prof_cols and "min_relevance" not in prof_cols:
         conn.execute("ALTER TABLE job_search_profile ADD COLUMN min_relevance REAL")

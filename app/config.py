@@ -87,9 +87,25 @@ class Settings(BaseSettings):
     resume_tailor_enabled: bool = True
     tectonic_bin: str = "tectonic"
 
+    # --- Embedding matching (Matching v2, Phase 1) -------------------------
+    # Off by default. When enabled + keyed, matcher.score ranks postings by
+    # cosine similarity (profile vs JD) instead of the keyword heuristic. Gated
+    # + budget-capped like the paid aggregator; falls back to heuristic on any
+    # failure, so the free path is never broken.
+    embedding_enabled: bool = False
+    voyage_api_key: str = ""
+    embedding_model: str = "voyage-3-lite"
+    embedding_max_calls_per_day: int = 200   # billable embedding requests / UTC day
+    embedding_rate_limit_per_min: int = 60   # token-bucket on Voyage calls
+
     @property
     def serpapi_enabled(self) -> bool:
         return bool(self.serpapi_api_key.strip())
+
+    @property
+    def embedding_active(self) -> bool:
+        """Embedding scoring runs only when explicitly enabled AND keyed."""
+        return self.embedding_enabled and bool(self.voyage_api_key.strip())
 
     @property
     def use_llm_router(self) -> bool:

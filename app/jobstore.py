@@ -86,18 +86,23 @@ def save_posting(
     status: str = "new",
 ) -> sqlite3.Row | None:
     """Insert a discovered posting. Returns the row, or None if it already existed."""
+    from . import embeddings
+
+    embedding_blob = embeddings.to_blob(getattr(posting, "embedding", None))
     with connect() as conn:
         cur = conn.execute(
             """
             INSERT OR IGNORE INTO job_postings
                 (user_id, source, external_id, company, title, location, url,
-                 description, posted_at, first_seen_at, relevance_score, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 description, posted_at, first_seen_at, relevance_score, status,
+                 embedding)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id, posting.source, posting.external_id, posting.company,
                 posting.title, posting.location, posting.url, posting.description,
                 posting.posted_at, _now(), relevance_score, status,
+                embedding_blob,
             ),
         )
         if cur.rowcount == 0:
@@ -374,6 +379,38 @@ def record_aggregator_call(user_id: str | None = None) -> None:
             "INSERT INTO job_api_calls (call_type, user_id, called_at) VALUES (?, ?, ?)",
             ("aggregator", user_id, _now()),
         )
+
+
+def allow_embedding_call() -> bool:
+    """True while today's billable Voyage embedding requests are under the cap."""
+    from .config import get_settings
+
+    cap = get_settings().embedding_max_calls_per_day
+    with connect() as conn:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM job_api_calls WHERE call_type = 'embedding' "
+            "AND called_at >= ?",
+            (_utc_day_start(),),
+        ).fetchone()[0]
+    return n < cap
+
+
+def record_embedding_call(user_id: str | None = None) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO job_api_calls (call_type, user_id, called_at) VALUES (?, ?, ?)",
+            ("embedding", user_id, _now()),
+        )
+
+
+def embedding_calls_today() -> int:
+    """Billable embedding requests so far this UTC day (for /health)."""
+    with connect() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM job_api_calls WHERE call_type = 'embedding' "
+            "AND called_at >= ?",
+            (_utc_day_start(),),
+        ).fetchone()[0]
 
 
 def tracked_count() -> int:

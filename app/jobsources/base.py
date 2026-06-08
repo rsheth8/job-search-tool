@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 logger = logging.getLogger("jobsources")
@@ -25,6 +25,10 @@ class JobPosting:
     location: str = ""
     description: str = ""
     posted_at: str = ""       # ISO 8601 string, best-effort
+    # Semantic vector (Matching v2). Set during scoring when embeddings are
+    # active, then persisted by ``jobstore.save_posting`` (embed once, like the
+    # score-once dedupe rule). Not part of identity, so excluded from dedupe.
+    embedding: list[float] | None = field(default=None, compare=False)
 
     def dedupe_key(self) -> tuple[str, str]:
         return (self.source, self.external_id)
