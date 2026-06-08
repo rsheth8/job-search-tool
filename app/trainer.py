@@ -16,12 +16,19 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-from . import matcher, profile
+from . import eligibility, matcher, profile
+from .config import get_settings
 from .db import connect
 from .jobsources import JobPosting
-from .jobsources import directory
+from .jobsources import directory, ghost, quality
+from .jobsources import rss as rss_src
 
 _SUMMARY_CHARS = 280
+# RSS feeds woven into the deck for company variety — these are startup/scale-up
+# heavy, balancing the big-name ATS directory.
+_DECK_RSS_FEEDS = ("remoteok", "weworkremotely")
+# Max roles one company can contribute to a single deck (keeps variety up).
+_MAX_PER_COMPANY = 3
 
 
 def _now() -> str:
@@ -37,15 +44,36 @@ def _already_labeled_ids(user_id: str) -> set[str]:
     return {r["k"] for r in rows}
 
 
+def _default_sources() -> list[JobPosting]:
+    """Real postings for the deck: the big-name ATS directory PLUS startup-heavy
+    RSS feeds, so the deck isn't all large companies. Each source is wrapped so a
+    single bad feed never empties the deck."""
+    posts: list[JobPosting] = []
+    try:
+        posts += directory.fetch_directory_batch(boards_to_probe=8)
+    except Exception:  # noqa: BLE001
+        pass
+    for feed in _DECK_RSS_FEEDS:
+        try:
+            posts += rss_src.fetch(feed)
+        except Exception:  # noqa: BLE001
+            pass
+    return posts
+
+
 def build_deck(user_id: str, *, limit: int = 15, fetch=None) -> list[dict]:
     """A batch of fresh, un-swiped real postings to judge, best-match first.
 
-    ``fetch`` injects the posting source in tests; in production it's the ATS
-    directory batch (which advances a global cursor, so repeat calls bring new
-    companies). Each card carries a relevance score (the matcher's own) so the
-    re-ranker's ``relevance`` feature is populated from the swipe.
+    Runs the same gates discovery does — reputability, the eligibility rule tier
+    (drop roles above the candidate's level), and the profile pre-filter — so the
+    deck reflects roles that actually make sense for the user. ``fetch`` injects
+    the posting source in tests; in production it's ``_default_sources`` (ATS
+    directory + RSS, the directory advancing a cursor so repeat calls bring new
+    companies). Each card carries the matcher's relevance score, populating the
+    re-ranker's ``relevance`` feature from the swipe.
     """
-    fetcher = fetch or (lambda: directory.fetch_directory_batch(boards_to_probe=12))
+    settings = get_settings()
+    fetcher = fetch or _default_sources
     try:
         postings: list[JobPosting] = fetcher() or []
     except Exception:  # noqa: BLE001 — a bad board never breaks the deck
@@ -65,9 +93,43 @@ def build_deck(user_id: str, *, limit: int = 15, fetch=None) -> list[dict]:
         return []
 
     prof = profile.get_profile(user_id)
-    scored = matcher.score(fresh, prof)  # [(posting, score)]; never raises
+    fresh, _ = quality.filter_reputable(fresh)        # drop spam/placeholder
+    fresh = [p for p in fresh if not ghost.is_ghost(p)]  # drop ghost/evergreen reqs
+    if settings.eligibility_filter_enabled:           # drop over-qualified roles
+        fresh, _ = eligibility.filter_eligible(fresh, prof)
+    pool = matcher.prefilter(fresh, prof) or fresh    # focus on profile terms
+    if not pool:
+        return []
+
+    scored = matcher.score(pool, prof)  # [(posting, score)]; never raises
     scored.sort(key=lambda t: t[1], reverse=True)
-    return [_card(p, sc) for p, sc in scored[:limit]]
+
+    # Collapse near-duplicates (same company + title, e.g. one role posted for
+    # many locations) and cap how many roles any one company contributes, so the
+    # deck shows variety rather than 10 listings from a single employer.
+    cards: list[dict] = []
+    seen_roles: set[tuple[str, str]] = set()
+    per_company: dict[str, int] = {}
+    for p, sc in scored:
+        company = (p.company or "").strip().lower()
+        sig = (company, (p.title or "").strip().lower())
+        if sig in seen_roles or per_company.get(company, 0) >= _MAX_PER_COMPANY:
+            continue
+        seen_roles.add(sig)
+        per_company[company] = per_company.get(company, 0) + 1
+        cards.append(_card(p, sc))
+        if len(cards) >= limit:
+            break
+    return cards
+
+
+def _clean_title(title: str, company: str) -> str:
+    """Strip a redundant 'Company: ' prefix some RSS feeds bake into the title."""
+    title = (title or "Role").strip()
+    comp = (company or "").strip()
+    if comp and ":" in title and title.lower().startswith(comp.lower() + ":"):
+        return title[len(comp) + 1:].strip() or title
+    return title
 
 
 def _card(p: JobPosting, score: float) -> dict:
@@ -78,7 +140,7 @@ def _card(p: JobPosting, score: float) -> dict:
         "source": p.source,
         "external_id": p.external_id,
         "company": p.company or p.source,
-        "title": p.title or "Role",
+        "title": _clean_title(p.title, p.company),
         "location": p.location or "",
         "url": p.url or "",
         "description": desc,

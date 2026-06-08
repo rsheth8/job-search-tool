@@ -102,11 +102,10 @@ def test_train_page_serves_html():
 
 
 def test_deck_and_label_endpoints(monkeypatch):
-    # Force the deck source so the endpoint never hits the network.
+    # Force the deck source so the endpoint never hits the network (directory + RSS).
     from app import trainer as t
     monkeypatch.setattr(
-        t.directory, "fetch_directory_batch",
-        lambda **k: [_posting("Software Engineer", "1")],
+        t, "_default_sources", lambda: [_posting("Software Engineer", "1")],
     )
     client = TestClient(app)
     deck = client.get("/train/deck?user=u1&n=5").json()
