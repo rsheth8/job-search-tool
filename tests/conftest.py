@@ -22,6 +22,7 @@ def temp_db(monkeypatch):
     monkeypatch.setenv("SERPAPI_API_KEY", "")  # never hit the paid aggregator
     monkeypatch.setenv("VOYAGE_API_KEY", "")  # never hit the paid embedder
     monkeypatch.setenv("EMBEDDING_ENABLED", "false")
+    monkeypatch.setenv("RERANKER_ENABLED", "false")  # opt-in; tests enable explicitly
     # Keep wide discovery off by default so tests never touch the network; tests
     # that exercise it enable + monkeypatch the fetchers explicitly.
     monkeypatch.setenv("JOB_WIDE_AGGREGATOR_ENABLED", "false")

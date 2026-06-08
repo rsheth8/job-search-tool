@@ -96,7 +96,27 @@ graceful fallback when backend returns nothing, migration idempotency.
 
 ---
 
-## Phase 2 — Personalized re-ranker (the right-sized "own model")
+## Phase 2 — Personalized re-ranker — DONE (2026-06-08)
+
+Shipped on branch `matching-v2`:
+- `app/reranker.py` — pure-Python L2 logistic regression (NOT scikit-learn, to
+  keep the box light); `Featurizer` reuses the matcher's term/location logic for
+  6 free features (relevance, kw_overlap, title_hit, loc_match, is_remote,
+  first_party); `train` / `maybe_retrain` / `rerank` / model persistence.
+  Labels: applied=1, dismissed=0, snoozed=0 @ half weight. Cold-start safe (no-op
+  below per-class minimums); never raises.
+- `app/db.py` — `reranker_models` table (one JSON model per user).
+- `app/config.py` — `reranker_enabled` (default off) + `reranker_min_positive` /
+  `reranker_min_negative`. `app/discovery.py` — `maybe_retrain` + `rerank` after
+  scoring (gated). `app/main.py` — `/health` flag.
+- `tests/test_reranker.py` (10). Full suite **378 passing**.
+
+Decision: chose **pure-Python LR** over sklearn (avoids numpy+scipy ~100MB on the
+512MB box; same math at this data scale). Retrains in-place per tick when the
+label count changes — cheap. **Deferred:** a hold-out "don't promote a worse
+model" guard (noisy at small N; L2 regularization covers overfit for now).
+
+### Original design notes
 
 **Goal:** learn *your* preferences from the labels you already produce, so ranking
 reflects what you actually apply to vs dismiss — not just generic similarity.

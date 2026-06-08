@@ -103,6 +103,15 @@ class Settings(BaseSettings):
     embedding_max_calls_per_day: int = 200   # billable embedding requests / UTC day
     embedding_rate_limit_per_min: int = 60   # token-bucket on Voyage calls
 
+    # --- Personalized re-ranker (Matching v2, Phase 2) --------------------
+    # Off by default. When on, a small logistic-regression model trained on the
+    # user's own apply/dismiss/snooze history re-scores postings — personalizing
+    # the ranking. Cold-starts gracefully: below the label minimums it's a no-op
+    # and the matcher's score stands. Pure-Python, no extra deps.
+    reranker_enabled: bool = False
+    reranker_min_positive: int = 5   # min 'applied' labels before the model engages
+    reranker_min_negative: int = 5   # min 'dismissed'/'snoozed' labels before engaging
+
     @property
     def serpapi_enabled(self) -> bool:
         return bool(self.serpapi_api_key.strip())

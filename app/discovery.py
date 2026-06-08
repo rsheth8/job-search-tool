@@ -16,7 +16,10 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from . import job_alerts, jobstore, matcher, posting_match, profile, reminders, wide_discovery
+from . import (
+    job_alerts, jobstore, matcher, posting_match, profile, reminders, reranker,
+    wide_discovery,
+)
 from .config import get_settings
 from .jobsources import NON_BOARD_SOURCES, JobPosting, fetch_source
 from .jobsources import ghost, quality
@@ -164,8 +167,12 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
     if not candidates:
         return 0
 
-    # 3. Score (LLM when configured, else heuristic; never raises).
+    # 3. Score (embeddings/LLM/heuristic; never raises), then personalize the
+    #    ranking with the user's own apply/dismiss model (no-op until trained).
     scored = matcher.score(candidates, prof)
+    if settings.reranker_enabled:
+        reranker.maybe_retrain(user_id, prof)
+        scored = reranker.rerank(user_id, prof, scored)
 
     # 4. Persist every scored posting (never re-scored) and notify per alert mode.
     #    Threshold is per-user (TUNE) falling back to the global default.

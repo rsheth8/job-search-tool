@@ -87,6 +87,7 @@ def health() -> dict:
         "wide_aggregator": s.job_wide_aggregator_enabled,
         "serpapi": s.serpapi_enabled,
         "ghost_filter": s.ghost_filter_enabled,
+        "reranker": s.reranker_enabled,
         "directory_boards": dir_src.board_count(),
         "tracked_boards": jobstore.tracked_count(),
         "poll_seconds": s.job_poll_seconds,

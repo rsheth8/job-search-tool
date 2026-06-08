@@ -246,6 +246,16 @@ CREATE INDEX IF NOT EXISTS idx_tailored_user_company
     ON tailored_resumes(user_id, variant, company);
 CREATE INDEX IF NOT EXISTS idx_tailored_posting
     ON tailored_resumes(user_id, posting_id);
+
+-- Personalized re-ranker model (Matching v2, Phase 2). One small logistic-
+-- regression model per user, stored as JSON (weights + bias + metadata),
+-- retrained from the user's apply/dismiss/snooze labels as they accumulate.
+CREATE TABLE IF NOT EXISTS reranker_models (
+    user_id     TEXT PRIMARY KEY,
+    model_json  TEXT NOT NULL,
+    n_labels    INTEGER NOT NULL,
+    trained_at  TEXT NOT NULL
+);
 """
 
 
