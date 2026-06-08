@@ -96,6 +96,24 @@ graceful fallback when backend returns nothing, migration idempotency.
 
 ---
 
+## Swipe trainer — bootstrap the re-ranker — DONE (2026-06-08)
+
+Cold-start tool so the re-ranker has labels before the user has applied to much.
+A Tinder-style web UI at `/train` shows **real** postings (from the ATS directory)
+and records a quick "would I apply?" yes/no per card.
+- `app/trainer.py` — `build_deck` (directory postings, scored, deduped vs already-
+  swiped), `record_label`, `stats`, `render_page` (self-contained HTML/JS, no deps).
+- `app/db.py` — `training_labels` table (separate from `job_postings` so swipes
+  never look like real applications).
+- `app/reranker.py` — `_labeled_examples` now reads training_labels alongside
+  real applications (swipe-'like'→1, swipe-'pass'→0); `_label_count` counts both.
+- `app/main.py` — `GET /train` (UI), `GET /train/deck`, `POST /train/label`
+  (records + retrains + returns stats).
+- `tests/test_trainer.py` (9). Full suite **387 passing**.
+
+Usage: run the server, open `/train?user=<your id>`, swipe ~10+ (≥5 yes, ≥5 no);
+the model trains automatically. Set `RERANKER_ENABLED=true` for discovery to use it.
+
 ## Phase 2 — Personalized re-ranker — DONE (2026-06-08)
 
 Shipped on branch `matching-v2`:

@@ -256,6 +256,27 @@ CREATE TABLE IF NOT EXISTS reranker_models (
     n_labels    INTEGER NOT NULL,
     trained_at  TEXT NOT NULL
 );
+
+-- Swipe-trainer labels: fast 'would I apply?' yes/no judgements on real postings,
+-- used to bootstrap the re-ranker before the user has applied to much. Kept
+-- separate from job_postings so it never touches the real application pipeline.
+CREATE TABLE IF NOT EXISTS training_labels (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         TEXT NOT NULL,
+    source          TEXT NOT NULL,
+    external_id     TEXT NOT NULL,
+    company         TEXT,
+    title           TEXT,
+    location        TEXT,
+    url             TEXT,
+    description     TEXT,
+    relevance_score REAL,
+    label           TEXT NOT NULL,   -- 'like' (would apply) | 'pass'
+    created_at      TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_training_labels_dedupe
+    ON training_labels(user_id, source, external_id);
 """
 
 

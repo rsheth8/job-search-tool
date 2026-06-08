@@ -46,6 +46,41 @@ def dashboard(user: str | None = None) -> HTMLResponse:
     return HTMLResponse(dash.render(user))
 
 
+@app.get("/train", response_class=HTMLResponse)
+def train_page(user: str | None = None) -> HTMLResponse:
+    """Tinder-style swipe trainer to bootstrap the re-ranker on real postings."""
+    from . import dashboard as dash
+    from . import trainer
+
+    return HTMLResponse(trainer.render_page(user or dash.default_user()))
+
+
+@app.get("/train/deck")
+def train_deck(user: str | None = None, n: int = 15) -> dict:
+    from . import dashboard as dash
+    from . import trainer
+
+    uid = user or dash.default_user()
+    return {"user": uid, "cards": trainer.build_deck(uid, limit=n),
+            "stats": trainer.stats(uid)}
+
+
+@app.post("/train/label")
+async def train_label(request: Request) -> dict:
+    """Record one swipe, retrain the model if there's enough signal, return stats."""
+    from . import dashboard as dash
+    from . import profile as prof
+    from . import reranker, trainer
+
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    item = body.get("item") or {}
+    label = body.get("label", "pass")
+    trainer.record_label(uid, item, label)
+    reranker.maybe_retrain(uid, prof.get_profile(uid))
+    return trainer.stats(uid)
+
+
 @app.get("/health")
 def health() -> dict:
     from .router import get_router

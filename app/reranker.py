@@ -149,39 +149,59 @@ def _predict(weights: list[float], bias: float, x: list[float]) -> float:
 # Labels + training
 # ---------------------------------------------------------------------------
 
-def _labeled_rows(user_id: str) -> list[sqlite3.Row]:
+def _labeled_examples(user_id: str) -> list[tuple]:
+    """Normalized (title, location, description, source, relevance, y, weight)
+    training rows from BOTH real applications (job_postings status) and the swipe
+    trainer (training_labels) — so the model learns from whichever signal exists.
+
+        applied / swipe-'like'  -> y=1
+        dismissed / swipe-'pass'-> y=0
+        snoozed                 -> y=0 at half weight ('not now', milder)
+    """
+    out: list[tuple] = []
     with connect() as conn:
-        return conn.execute(
+        for r in conn.execute(
             "SELECT title, location, description, source, relevance_score, status "
             "FROM job_postings WHERE user_id = ? "
             "AND status IN ('applied', 'dismissed', 'snoozed')",
             (user_id,),
-        ).fetchall()
+        ):
+            if r["status"] == "applied":
+                y, w = 1.0, 1.0
+            else:
+                y = 0.0
+                w = _SNOOZE_WEIGHT if r["status"] == "snoozed" else 1.0
+            out.append((r["title"], r["location"], r["description"], r["source"],
+                        r["relevance_score"], y, w))
+        for r in conn.execute(
+            "SELECT title, location, description, source, relevance_score, label "
+            "FROM training_labels WHERE user_id = ?",
+            (user_id,),
+        ):
+            y = 1.0 if r["label"] == "like" else 0.0
+            out.append((r["title"], r["location"], r["description"], r["source"],
+                        r["relevance_score"], y, 1.0))
+    return out
 
 
 def _build_dataset(
-    rows: list[sqlite3.Row], feat: Featurizer
+    examples: list[tuple], feat: Featurizer
 ) -> tuple[list[list[float]], list[float], list[float], int, int]:
     """Returns (X, y, sample_weight, n_positive, n_negative)."""
     X: list[list[float]] = []
     y: list[float] = []
     w: list[float] = []
     n_pos = n_neg = 0
-    for r in rows:
-        x = feat.features(
-            title=r["title"], location=r["location"], description=r["description"],
-            source=r["source"], relevance=r["relevance_score"],
-        )
-        if r["status"] == "applied":
-            label, weight = 1.0, 1.0
-            n_pos += 1
-        else:  # dismissed | snoozed
-            label = 0.0
-            weight = _SNOOZE_WEIGHT if r["status"] == "snoozed" else 1.0
-            n_neg += 1
-        X.append(x)
+    for title, location, description, source, relevance, label, weight in examples:
+        X.append(feat.features(title=title, location=location,
+                               description=description, source=source,
+                               relevance=relevance))
         y.append(label)
         w.append(weight)
+        if label >= 0.5:
+            n_pos += 1
+        else:
+            n_neg += 1
     return X, y, w, n_pos, n_neg
 
 
@@ -189,9 +209,9 @@ def train(user_id: str, profile: sqlite3.Row | None) -> dict | None:
     """Train + persist a model from the user's labels. Returns the model dict, or
     None when there isn't enough signal yet (cold start)."""
     s = get_settings()
-    rows = _labeled_rows(user_id)
+    examples = _labeled_examples(user_id)
     feat = Featurizer(profile)
-    X, y, w, n_pos, n_neg = _build_dataset(rows, feat)
+    X, y, w, n_pos, n_neg = _build_dataset(examples, feat)
     if n_pos < s.reranker_min_positive or n_neg < s.reranker_min_negative:
         return None
     try:
@@ -204,7 +224,7 @@ def train(user_id: str, profile: sqlite3.Row | None) -> dict | None:
         "features": list(FEATURES),
         "weights": weights,
         "bias": bias,
-        "n_labels": len(rows),
+        "n_labels": len(examples),
         "trained_at": datetime.now(timezone.utc).isoformat(),
     }
     _save_model(user_id, model)
@@ -266,12 +286,19 @@ def rerank(
 # ---------------------------------------------------------------------------
 
 def _label_count(user_id: str) -> int:
+    """Total training examples (real applications + swipe labels) — drives the
+    'have new labels appeared since last train?' check in maybe_retrain."""
     with connect() as conn:
-        return conn.execute(
+        n_posts = conn.execute(
             "SELECT COUNT(*) FROM job_postings WHERE user_id = ? "
             "AND status IN ('applied', 'dismissed', 'snoozed')",
             (user_id,),
         ).fetchone()[0]
+        n_swipes = conn.execute(
+            "SELECT COUNT(*) FROM training_labels WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()[0]
+    return n_posts + n_swipes
 
 
 def _save_model(user_id: str, model: dict) -> None:
