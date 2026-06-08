@@ -96,6 +96,25 @@ graceful fallback when backend returns nothing, migration idempotency.
 
 ---
 
+## Eligibility / qualification gate — DONE (2026-06-08)
+
+Answers "could this candidate realistically *do / be considered for* this role?",
+distinct from the matcher's "is it a good fit?". Profile-driven (candidate level
+from profile seniority, fallback `eligibility_candidate_level`).
+- `app/eligibility.py` — rule tier (free, on): seniority-gap (role rank −
+  candidate rank ≥ 2), big years-of-experience asks (scales with level), hard
+  credentials (nursing/CPA/clearance/required doctorate). LLM tier (off; batched
+  Haiku, gated + daily-capped, **fail-open**) for nuance; injectable judge in tests.
+- `app/discovery.py` — rule tier after ghost gate (before prefilter); LLM tier on
+  the capped candidate set. `app/jobstore.py` — eligibility daily-cap helpers.
+- `app/config.py` — `eligibility_filter_enabled` (on) / `_candidate_level` /
+  `_llm_enabled` (off) / `_max_calls_per_day`. `app/main.py` — `/health` flags.
+- `tests/test_eligibility.py` (13). Full suite **400 passing**.
+
+Validated against real swipe data: correctly drops Analytics Lead/Manager &
+Compliance Lead, keeps Analyst II / Associate. Customized — the same Senior role
+is dropped for an entry candidate, kept for a senior one.
+
 ## Swipe trainer — bootstrap the re-ranker — DONE (2026-06-08)
 
 Cold-start tool so the re-ranker has labels before the user has applied to much.

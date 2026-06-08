@@ -23,6 +23,8 @@ def temp_db(monkeypatch):
     monkeypatch.setenv("VOYAGE_API_KEY", "")  # never hit the paid embedder
     monkeypatch.setenv("EMBEDDING_ENABLED", "false")
     monkeypatch.setenv("RERANKER_ENABLED", "false")  # opt-in; tests enable explicitly
+    monkeypatch.setenv("ELIGIBILITY_FILTER_ENABLED", "false")  # opt-in; tests enable explicitly
+    monkeypatch.setenv("ELIGIBILITY_LLM_ENABLED", "false")
     # Keep wide discovery off by default so tests never touch the network; tests
     # that exercise it enable + monkeypatch the fetchers explicitly.
     monkeypatch.setenv("JOB_WIDE_AGGREGATOR_ENABLED", "false")
@@ -39,7 +41,7 @@ def temp_db(monkeypatch):
     monkeypatch.setattr("dotenv.dotenv_values", lambda *a, **k: {})
 
     # Reset cached settings + router singleton so env changes take effect.
-    from app import apollo, config, embeddings, matcher, reminders, router
+    from app import apollo, config, eligibility, embeddings, matcher, reminders, router
 
     config.get_settings.cache_clear()
     router._router_singleton = None
@@ -50,6 +52,7 @@ def temp_db(monkeypatch):
     matcher._llm_client = None  # nor a matcher LLM client/limiter
     matcher._llm_limiter = None
     embeddings.reset_for_tests()  # nor an embedding rate limiter
+    eligibility.reset_for_tests()  # nor an eligibility LLM client/limiter
 
     from app.db import init_db
 

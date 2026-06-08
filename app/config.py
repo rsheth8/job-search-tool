@@ -112,6 +112,17 @@ class Settings(BaseSettings):
     reranker_min_positive: int = 5   # min 'applied' labels before the model engages
     reranker_min_negative: int = 5   # min 'dismissed'/'snoozed' labels before engaging
 
+    # --- Eligibility / qualification gate (Matching v2) -------------------
+    # Drop roles the candidate clearly isn't qualified for / couldn't realistically
+    # do, given their level. Rule tier (free, on) catches seniority gaps, big
+    # experience requirements, and hard credentials. LLM tier (off; batched Haiku)
+    # adds nuanced judgement. Candidate level comes from the profile's seniority,
+    # falling back to ``eligibility_candidate_level``.
+    eligibility_filter_enabled: bool = True
+    eligibility_candidate_level: str = "entry"   # fallback when profile has no seniority
+    eligibility_llm_enabled: bool = False
+    eligibility_max_calls_per_day: int = 100     # batched Haiku eligibility checks / day
+
     @property
     def serpapi_enabled(self) -> bool:
         return bool(self.serpapi_api_key.strip())

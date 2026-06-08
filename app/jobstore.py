@@ -433,6 +433,28 @@ def embedding_calls_today() -> int:
         ).fetchone()[0]
 
 
+def allow_eligibility_call() -> bool:
+    """True while today's batched LLM eligibility checks are under the cap."""
+    from .config import get_settings
+
+    cap = get_settings().eligibility_max_calls_per_day
+    with connect() as conn:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM job_api_calls WHERE call_type = 'eligibility' "
+            "AND called_at >= ?",
+            (_utc_day_start(),),
+        ).fetchone()[0]
+    return n < cap
+
+
+def record_eligibility_call(user_id: str | None = None) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO job_api_calls (call_type, user_id, called_at) VALUES (?, ?, ?)",
+            ("eligibility", user_id, _now()),
+        )
+
+
 def tracked_count() -> int:
     with connect() as conn:
         return conn.execute("SELECT COUNT(*) FROM tracked_companies").fetchone()[0]
