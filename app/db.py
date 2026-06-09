@@ -280,11 +280,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_training_labels_dedupe
 
 -- Cached plain-language summaries for swipe cards (one batched Haiku call fills
 -- many; cached by posting so a role is summarized once ever — keeps AI spend low).
+-- The summary is a JSON blob so new fields don't need a migration.
 CREATE TABLE IF NOT EXISTS posting_summaries (
-    cache_key   TEXT PRIMARY KEY,   -- "{source}:{external_id}"
-    tldr        TEXT,
-    fit         TEXT,
-    created_at  TEXT NOT NULL
+    cache_key    TEXT PRIMARY KEY,   -- "{source}:{external_id}"
+    summary_json TEXT NOT NULL,      -- {tldr, level, skills, fit}
+    created_at   TEXT NOT NULL
 );
 """
 
@@ -329,3 +329,12 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     prof_cols = {r[1] for r in conn.execute("PRAGMA table_info(job_search_profile)")}
     if prof_cols and "min_relevance" not in prof_cols:
         conn.execute("ALTER TABLE job_search_profile ADD COLUMN min_relevance REAL")
+    # posting_summaries moved from (tldr, fit) columns to a JSON blob; the old rows
+    # are a regenerable cache, so just rebuild the table on the richer schema.
+    sum_cols = {r[1] for r in conn.execute("PRAGMA table_info(posting_summaries)")}
+    if sum_cols and "summary_json" not in sum_cols:
+        conn.execute("DROP TABLE posting_summaries")
+        conn.execute(
+            "CREATE TABLE posting_summaries (cache_key TEXT PRIMARY KEY, "
+            "summary_json TEXT NOT NULL, created_at TEXT NOT NULL)"
+        )

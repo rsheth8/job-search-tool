@@ -25,7 +25,12 @@ from .ratelimit import TokenBucket
 
 logger = logging.getLogger("insights")
 
-_DESC_CHARS = 320  # JD slice sent per role — enough to summarize, few tokens
+# Bigger JD slice than before — JDs front-load boilerplate, so 320 chars often cut
+# off the actual responsibilities/requirements and made summaries vague. ~800 is
+# still cheap on Haiku, especially batched + cached.
+_DESC_CHARS = 800
+# Fields the model returns and the UI renders, in order.
+_FIELDS = ("tldr", "level", "skills", "fit")
 
 _llm_client = None
 _llm_limiter: TokenBucket | None = None
@@ -40,9 +45,11 @@ _SUMMARY_SCHEMA = {
                 "properties": {
                     "id": {"type": "string"},
                     "tldr": {"type": "string"},
+                    "level": {"type": "string"},
+                    "skills": {"type": "string"},
                     "fit": {"type": "string"},
                 },
-                "required": ["id", "tldr", "fit"],
+                "required": ["id", "tldr", "level", "skills", "fit"],
                 "additionalProperties": False,
             },
         }
@@ -82,21 +89,28 @@ def _get_cached(keys: list[str]) -> dict[str, dict]:
         return {}
     with connect() as conn:
         rows = conn.execute(
-            f"SELECT cache_key, tldr, fit FROM posting_summaries "
+            f"SELECT cache_key, summary_json FROM posting_summaries "
             f"WHERE cache_key IN ({','.join('?' * len(keys))})",
             keys,
         ).fetchall()
-    return {r["cache_key"]: {"tldr": r["tldr"], "fit": r["fit"]} for r in rows}
+    out: dict[str, dict] = {}
+    for r in rows:
+        try:
+            out[r["cache_key"]] = json.loads(r["summary_json"])
+        except (ValueError, TypeError):
+            continue
+    return out
 
 
-def _save_cached(key: str, tldr: str, fit: str) -> None:
+def _save_cached(key: str, data: dict) -> None:
     from datetime import datetime, timezone
 
+    payload = {f: data.get(f, "") for f in _FIELDS}
     with connect() as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO posting_summaries (cache_key, tldr, fit, created_at) "
-            "VALUES (?, ?, ?, ?)",
-            (key, tldr, fit, datetime.now(timezone.utc).isoformat()),
+            "INSERT OR REPLACE INTO posting_summaries (cache_key, summary_json, created_at) "
+            "VALUES (?, ?, ?)",
+            (key, json.dumps(payload), datetime.now(timezone.utc).isoformat()),
         )
 
 
@@ -116,16 +130,24 @@ def summarize_batch(cards: list[dict], profile_block: str) -> dict[int, dict]:
         for i, c in enumerate(cards)
     )
     system = (
-        "Summarize each job for a candidate in plain, simple language. For each id "
-        "return: 'tldr' — at most 22 words on what the role actually does day to "
-        "day (no buzzwords); and 'fit' — at most 12 words on whether it suits this "
-        "candidate and why (e.g. 'Good entry-level fit' or 'Wants ML research "
-        "experience'). Be direct and honest."
+        "You write tight, honest job-card summaries that help a candidate decide in "
+        "seconds. Read each posting and, grounded ONLY in what it says, return for "
+        "every id:\n"
+        "- tldr: <=20 words, plain spoken, what this person would actually DO day to "
+        "day. Concrete verbs, no buzzwords, no company marketing.\n"
+        "- level: the experience the role targets, very short — e.g. 'Entry / "
+        "new-grad', 'Internship', '1-2 yrs', 'Mid 3-5 yrs', 'Senior 5+ yrs'. Use "
+        "'Not stated' only if truly absent.\n"
+        "- skills: the 3-5 most important concrete skills/tech the posting names, "
+        "comma-separated (e.g. 'Python, SQL, AWS'). 'Not stated' if none.\n"
+        "- fit: <=12 words, honest read for THIS candidate and why (e.g. 'Strong "
+        "entry fit — Python + ML' or 'Needs 5+ yrs you lack').\n"
+        "Be specific to each posting; never generic or copy-pasted across roles."
     )
     user = f"CANDIDATE:\n{profile_block}\n\nJOBS:\n{listing}"
     resp = client.messages.create(
         model=get_settings().anthropic_model,
-        max_tokens=min(1800, 60 + 55 * len(cards)),
+        max_tokens=min(2400, 80 + 75 * len(cards)),
         system=system,
         messages=[{"role": "user", "content": user}],
         output_config={"format": {"type": "json_schema", "schema": _SUMMARY_SCHEMA}},
@@ -134,19 +156,24 @@ def summarize_batch(cards: list[dict], profile_block: str) -> dict[int, dict]:
     out: dict[int, dict] = {}
     for item in json.loads(payload).get("summaries", []):
         try:
-            out[int(item["id"])] = {
-                "tldr": str(item.get("tldr", "")).strip(),
-                "fit": str(item.get("fit", "")).strip(),
-            }
+            out[int(item["id"])] = {f: str(item.get(f, "")).strip() for f in _FIELDS}
         except (KeyError, TypeError, ValueError):
             continue
     return out
 
 
+def _apply(card: dict, data: dict) -> None:
+    for f in _FIELDS:
+        val = (data.get(f) or "").strip()
+        # Drop unhelpful "Not stated" so the UI just hides that chip.
+        if val and val.lower() != "not stated":
+            card[f] = val
+
+
 def enrich(cards: list[dict], profile_block: str, *, summarize=None) -> list[dict]:
-    """Attach 'tldr' and 'fit' to each card, using the cache first and ONE batched
-    LLM call for the rest. Inactive/over-cap/error → cards returned unchanged (no
-    tldr); never raises. ``summarize`` injects the summarizer in tests."""
+    """Attach tldr/level/skills/fit to each card, using the cache first and ONE
+    batched LLM call for the rest. Inactive/over-cap/error → cards returned
+    unchanged; never raises. ``summarize`` injects the summarizer in tests."""
     if not cards:
         return cards
     s = get_settings()
@@ -161,7 +188,7 @@ def enrich(cards: list[dict], profile_block: str, *, summarize=None) -> list[dic
     for c in cards:
         hit = cached.get(_cache_key(c))
         if hit:
-            c["tldr"], c["fit"] = hit["tldr"], hit["fit"]
+            _apply(c, hit)
 
     if not misses:
         return cards
@@ -187,6 +214,6 @@ def enrich(cards: list[dict], profile_block: str, *, summarize=None) -> list[dic
         res = results.get(local_idx)
         if not res:
             continue
-        card["tldr"], card["fit"] = res["tldr"], res["fit"]
-        _save_cached(_cache_key(card), res["tldr"], res["fit"])
+        _apply(card, res)
+        _save_cached(_cache_key(card), res)
     return cards

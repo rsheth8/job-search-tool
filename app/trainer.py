@@ -227,7 +227,13 @@ _PAGE = r"""<!doctype html>
   .title{ font-size:27px; font-weight:800; line-height:1.15; margin:16px 0 6px; }
   .company{ font-size:16px; color:var(--ink); font-weight:600; }
   .loc{ font-size:14px; color:var(--muted); margin-top:3px; }
-  .fit{ display:inline-flex; align-items:center; gap:8px; margin:16px 0 0; align-self:flex-start;
+  .chips{ display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
+  .chip{ font-size:12.5px; color:var(--muted); background:#20242f; border:1px solid var(--line);
+         border-radius:9px; padding:6px 11px; }
+  .chip b{ color:var(--ink); font-weight:600; }
+  .chip .k{ color:var(--dim); font-weight:700; font-size:10.5px; letter-spacing:.06em;
+            text-transform:uppercase; margin-right:6px; }
+  .fit{ display:inline-flex; align-items:center; gap:8px; margin:14px 0 0; align-self:flex-start;
         font-size:14px; font-weight:600; color:var(--green);
         background:var(--greenbg); border:1px solid #1f7a44; border-radius:999px; padding:7px 14px; }
   .tldr{ margin-top:14px; font-size:16px; line-height:1.5; color:var(--ink);
@@ -314,8 +320,12 @@ function cardHTML(c, cls){
     <div class="company">${esc(c.company)}</div>
     ${c.location ? `<div class="loc">&#128205; ${esc(c.location)}</div>` : ''}
     <div class="content">
-      ${c.fit ? `<div class="fit">&#127919; ${esc(c.fit)}</div>` : ''}
       ${c.tldr ? `<div class="tldr"><span class="lbl">TL;DR</span>${esc(c.tldr)}</div>` : ''}
+      ${(c.level || c.skills) ? `<div class="chips">
+        ${c.level ? `<span class="chip"><span class="k">Level</span><b>${esc(c.level)}</b></span>` : ''}
+        ${c.skills ? `<span class="chip"><span class="k">Skills</span>${esc(c.skills)}</span>` : ''}
+      </div>` : ''}
+      ${c.fit ? `<div class="fit">&#127919; ${esc(c.fit)}</div>` : ''}
       ${c.tldr
         ? `<details class="more"><summary>Full description</summary><div class="desc">${esc(c.description) || 'No description.'}</div></details>`
         : `<div class="desc grow"><span class="lbl">About this role</span>${esc(c.description) || 'No description provided.'}</div>`}
