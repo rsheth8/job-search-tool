@@ -141,3 +141,35 @@ def test_score_uses_injected_llm_and_falls_back_on_error():
 
 def test_score_empty():
     assert matcher.score([], None) == []
+
+
+def test_llm_score_chunks_and_merges_global_indices(monkeypatch):
+    # _llm_score must split a big batch into chunks and merge results back onto
+    # the GLOBAL posting indices (the bug: a single oversized call truncated JSON).
+    monkeypatch.setattr(matcher, "_SCORE_CHUNK", 2)
+    seen = []
+
+    def fake_chunk(chunk, profile_block):
+        seen.append(len(chunk))
+        # Echo a score keyed by the role title so we can verify index mapping.
+        return {i: round(0.1 * (int(p.title) + 1), 3) for i, p in enumerate(chunk)}
+
+    monkeypatch.setattr(matcher, "_llm_score_chunk", fake_chunk)
+    postings = [_p(str(n)) for n in range(5)]  # titles "0".."4"
+    out = matcher._llm_score(postings, "profile")
+    assert seen == [2, 2, 1]                    # chunked, not one giant call
+    assert set(out.keys()) == {0, 1, 2, 3, 4}   # global indices preserved
+    assert out[3] == round(0.1 * 4, 3)          # 4th posting scored correctly
+
+
+def test_score_allow_llm_false_uses_heuristic(monkeypatch):
+    # Even with the LLM "available", allow_llm=False must not call it.
+    monkeypatch.setattr("app.config.Settings.use_llm_router", property(lambda self: True))
+
+    def boom(*a, **k):
+        raise AssertionError("LLM scorer must not run when allow_llm=False")
+
+    monkeypatch.setattr(matcher, "_llm_score", boom)
+    prof = _profile(roles="software engineer")
+    out = matcher.score([_p("Software Engineer")], prof, allow_llm=False)
+    assert len(out) == 1 and 0.0 <= out[0][1] <= 1.0  # heuristic ran, no crash

@@ -255,8 +255,25 @@ def _get_llm():
     return _llm_client, _llm_limiter
 
 
+# Postings per LLM scoring call. Bounded so the JSON response never exceeds
+# max_tokens — a too-large batch truncates the output and the whole parse fails
+# (then the batch silently falls back to the heuristic, wasting the call).
+_SCORE_CHUNK = 25
+
+
 def _llm_score(postings: list[JobPosting], profile_block: str) -> dict[int, float]:
-    """Score every posting in one Claude call. Returns {index: score}. Raises on failure."""
+    """Score all postings, in bounded chunks, merged into one {index: score} map.
+    Raises on failure (caller falls back to the heuristic)."""
+    out: dict[int, float] = {}
+    for start in range(0, len(postings), _SCORE_CHUNK):
+        chunk = postings[start:start + _SCORE_CHUNK]
+        for local_i, sc in _llm_score_chunk(chunk, profile_block).items():
+            out[start + local_i] = sc  # offset back to the global index
+    return out
+
+
+def _llm_score_chunk(postings: list[JobPosting], profile_block: str) -> dict[int, float]:
+    """One Claude call for up to ``_SCORE_CHUNK`` postings. Returns {index: score}."""
     client, limiter = _get_llm()
     if not limiter.allow():
         raise RuntimeError("llm rate limited")
@@ -272,7 +289,9 @@ def _llm_score(postings: list[JobPosting], profile_block: str) -> dict[int, floa
     user = f"CANDIDATE PROFILE:\n{profile_block}\n\nPOSTINGS:\n{listing}"
     resp = client.messages.create(
         model=get_settings().anthropic_model,
-        max_tokens=min(1024, 40 + 12 * len(postings)),
+        # ~30 tokens/score (id + value + JSON); generous ceiling. With the chunk
+        # cap this never truncates.
+        max_tokens=min(2048, 80 + 30 * len(postings)),
         system=system,
         messages=[{"role": "user", "content": user}],
         output_config={"format": {"type": "json_schema", "schema": _SCORE_SCHEMA}},
@@ -293,14 +312,18 @@ def score(
     *,
     llm=None,
     embedder=None,
+    allow_llm: bool = True,
 ) -> list[tuple[JobPosting, float]]:
     """Return [(posting, score)] for each posting.
 
     Scoring strategy, in order of preference:
       1. Embeddings (cosine profile-vs-JD) when active or injected — semantic.
-      2. LLM (Haiku) when keyed.
+      2. LLM (Haiku) when keyed (unless ``allow_llm=False``).
       3. Free keyword/location heuristic (the CI path, and the final fallback).
     Each layer degrades to the next on failure, so discovery never blocks.
+    ``allow_llm=False`` skips the paid LLM scorer entirely — used by the
+    interactive swipe deck, where the heuristic is a fine sort key and we'd rather
+    spend the LLM budget (and latency) on the card summaries.
     ``llm`` / ``embedder`` inject scorers in tests.
     """
     if not postings:
@@ -314,7 +337,7 @@ def score(
             return result
         # Profile/embedder gave nothing usable — fall through to LLM/heuristic.
 
-    use_llm = llm is not None or get_settings().use_llm_router
+    use_llm = llm is not None or (allow_llm and get_settings().use_llm_router)
     if use_llm:
         try:
             scorer = llm or _llm_score

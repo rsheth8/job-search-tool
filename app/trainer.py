@@ -101,7 +101,9 @@ def build_deck(user_id: str, *, limit: int = 15, fetch=None) -> list[dict]:
     if not pool:
         return []
 
-    scored = matcher.score(pool, prof)  # [(posting, score)]; never raises
+    # Heuristic scoring (allow_llm=False): the deck's score is just a sort key, so
+    # we keep the deck fast/free and save the LLM budget for the card summaries.
+    scored = matcher.score(pool, prof, allow_llm=False)  # never raises
     scored.sort(key=lambda t: t[1], reverse=True)
 
     # Collapse near-duplicates (same company + title, e.g. one role posted for
