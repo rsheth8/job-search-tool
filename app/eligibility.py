@@ -62,7 +62,35 @@ _ROLE_TOKENS = {
 }
 _ROLE_DEFAULT_RANK = 2
 
-_YEARS_RE = re.compile(r"(\d{1,2})\s*\+?\s*(?:years?|yrs?)\b", re.I)
+_YEARS_RE = re.compile(r"(\d{1,2})\s*\+?\s*(?:years?|yrs?|yoe)\b", re.I)
+
+# Field gate (for a technical candidate). A title in a clearly NON-technical
+# field is dropped — UNLESS it also carries a technical signal (e.g. "Sales
+# Engineer", "Marketing Analyst", "Data ..."), which keeps technical-adjacent
+# roles. High-precision lists; conservative by design.
+_TECH_TITLE_RE = re.compile(
+    r"\b(engineer|engineering|developer|programmer|software|swe|sde|sdet|"
+    r"scientist|data|analyst|analytics|machine learning|\bml\b|\bai\b|"
+    r"artificial intelligence|deep learning|nlp|devops|\bsre\b|infrastructure|"
+    r"platform|backend|back-end|frontend|front-end|full[ -]?stack|security|"
+    r"research|computer|systems|database|cloud|mobile|ios|android|\bqa\b|"
+    r"technical|\bit\b|robotics|hardware|firmware|quantitative|\bquant\b)\b",
+    re.I,
+)
+_NONTECH_TITLE_RE = re.compile(
+    r"\b(account executive|account exec|business development|sales development|"
+    r"\bsales\b|\bsdr\b|\bbdr\b|account manager|recruiter|recruiting|"
+    r"talent acquisition|sourcer|marketing|\bbrand\b|copywriter|content writer|"
+    r"content strategist|social media|community manager|customer success|"
+    r"customer support|customer experience|administrative|executive assistant|"
+    r"receptionist|office manager|accountant|accounting|bookkeeper|payroll|"
+    r"accounts payable|accounts receivable|auditor|paralegal|attorney|counsel|"
+    r"\bnurse\b|clinical|therapist|physician|teacher|human resources|\bhr\b|"
+    r"people operations|merchandiser|buyer|underwriter|loan officer|"
+    r"administrative coordinator|operations coordinator|talent community|"
+    r"talent pool|talent network|\bexaminer\b|\bdriver\b)\b",
+    re.I,
+)
 
 # Hard credentials a CS/DS candidate generally won't hold. Matched only when the
 # posting says they're *required* (we avoid "preferred"/"a plus"). High-precision.
@@ -137,6 +165,14 @@ def rule_reasons(posting: JobPosting, profile: sqlite3.Row | None) -> list[str]:
         reasons.append("requires a hard credential/license")
     if _DEGREE_REQ_RE.search(desc):
         reasons.append("requires an advanced degree")
+
+    # Field gate: a clearly non-technical role for a technical candidate, with no
+    # technical signal in the title (so "Sales Engineer"/"Data Analyst" survive).
+    title = posting.title or ""
+    if (get_settings().eligibility_field_filter
+            and _NONTECH_TITLE_RE.search(title)
+            and not _TECH_TITLE_RE.search(title)):
+        reasons.append("role is outside the candidate's (technical) field")
     return reasons
 
 

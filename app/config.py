@@ -120,6 +120,9 @@ class Settings(BaseSettings):
     # falling back to ``eligibility_candidate_level``.
     eligibility_filter_enabled: bool = True
     eligibility_candidate_level: str = "entry"   # fallback when profile has no seniority
+    # Drop clearly non-technical roles (sales/recruiting/marketing/admin/etc.) for
+    # a technical candidate — unless the title has a technical signal. On by default.
+    eligibility_field_filter: bool = True
     eligibility_llm_enabled: bool = False
     eligibility_max_calls_per_day: int = 100     # batched Haiku eligibility checks / day
 

@@ -54,8 +54,37 @@ def test_manager_and_staff_and_director_ineligible_for_entry():
 # Rule tier — years + credentials
 # ---------------------------------------------------------------------------
 
+def test_nontechnical_field_roles_dropped_for_technical_candidate():
+    # Wrong field for a technical candidate, no technical signal in the title.
+    for t in ("Account Executive", "Business Development Representative",
+              "Sales Development Representative", "Recruiter",
+              "Administrative Coordinator", "Marketing Coordinator",
+              "Customer Success Specialist"):
+        assert not eligibility.is_eligible(_p(t), ENTRY), t
+
+
+def test_technical_and_adjacent_roles_survive_field_filter():
+    # A technical signal in the title keeps technical-adjacent roles.
+    for t in ("Sales Engineer", "Solutions Engineer", "Data Analyst",
+              "Business Systems Analyst II", "Marketing Analyst",
+              "Financial Analyst", "Software Engineer", "ML Engineer"):
+        assert eligibility.is_eligible(_p(t), ENTRY), t
+
+
+def test_field_filter_respects_config_flag(monkeypatch):
+    monkeypatch.setenv("ELIGIBILITY_FIELD_FILTER", "false")
+    from app.config import get_settings
+    get_settings.cache_clear()
+    assert eligibility.is_eligible(_p("Account Executive"), ENTRY)  # not dropped when off
+
+
 def test_big_experience_requirement_ineligible():
     assert not eligibility.is_eligible(_p(desc="We need 8+ years of experience."), ENTRY)
+
+
+def test_years_requirement_recognizes_yoe_abbreviation():
+    assert not eligibility.is_eligible(_p("Software Engineer (8+ YOE)"), ENTRY)
+    assert not eligibility.is_eligible(_p("Backend Engineer", "Requires 7 YOE."), ENTRY)
 
 
 def test_small_experience_requirement_ok():
