@@ -77,9 +77,9 @@ def test_enrich_fails_open_on_error():
 
 
 def test_cache_helpers_roundtrip():
-    insights._save_cached("greenhouse:9", {"tldr": "a tldr", "level": "Entry",
-                                           "skills": "Python", "fit": "a fit"})
+    insights._save_cached("greenhouse:9", {"about": "builds AI tools", "tldr": "a tldr",
+                                           "level": "Entry", "skills": "Python", "fit": "a fit"})
     got = insights._get_cached(["greenhouse:9", "missing:x"])
-    assert got["greenhouse:9"] == {"tldr": "a tldr", "level": "Entry",
-                                   "skills": "Python", "fit": "a fit"}
+    assert got["greenhouse:9"] == {"about": "builds AI tools", "tldr": "a tldr",
+                                   "level": "Entry", "skills": "Python", "fit": "a fit"}
     assert "missing:x" not in got

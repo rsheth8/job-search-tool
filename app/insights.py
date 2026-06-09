@@ -30,7 +30,10 @@ logger = logging.getLogger("insights")
 # still cheap on Haiku, especially batched + cached.
 _DESC_CHARS = 800
 # Fields the model returns and the UI renders, in order.
-_FIELDS = ("tldr", "level", "skills", "fit")
+#   about  — what the company does       tldr   — what you'd do in this role
+#   level  — experience targeted          skills — key tech named
+#   fit    — honest read for the candidate
+_FIELDS = ("about", "tldr", "level", "skills", "fit")
 
 _llm_client = None
 _llm_limiter: TokenBucket | None = None
@@ -44,12 +47,13 @@ _SUMMARY_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "id": {"type": "string"},
+                    "about": {"type": "string"},
                     "tldr": {"type": "string"},
                     "level": {"type": "string"},
                     "skills": {"type": "string"},
                     "fit": {"type": "string"},
                 },
-                "required": ["id", "tldr", "level", "skills", "fit"],
+                "required": ["id", "about", "tldr", "level", "skills", "fit"],
                 "additionalProperties": False,
             },
         }
@@ -133,8 +137,11 @@ def summarize_batch(cards: list[dict], profile_block: str) -> dict[int, dict]:
         "You write tight, honest job-card summaries that help a candidate decide in "
         "seconds. Read each posting and, grounded ONLY in what it says, return for "
         "every id:\n"
-        "- tldr: <=20 words, plain spoken, what this person would actually DO day to "
-        "day. Concrete verbs, no buzzwords, no company marketing.\n"
+        "- about: <=18 words on what the COMPANY does/builds, plain language "
+        "(e.g. 'Builds generative-media AI infrastructure and model APIs for "
+        "developers'). Skip the hype.\n"
+        "- tldr: <=22 words on what this person would actually DO day to day in "
+        "THIS role. Concrete verbs, no buzzwords.\n"
         "- level: the experience the role targets, very short — e.g. 'Entry / "
         "new-grad', 'Internship', '1-2 yrs', 'Mid 3-5 yrs', 'Senior 5+ yrs'. Use "
         "'Not stated' only if truly absent.\n"
@@ -147,7 +154,9 @@ def summarize_batch(cards: list[dict], profile_block: str) -> dict[int, dict]:
     user = f"CANDIDATE:\n{profile_block}\n\nJOBS:\n{listing}"
     resp = client.messages.create(
         model=get_settings().anthropic_model,
-        max_tokens=min(2400, 80 + 75 * len(cards)),
+        # ~110 tokens per role (5 fields + JSON), generous ceiling — too low here
+        # truncates the JSON for a full deck and the whole batch fails to parse.
+        max_tokens=min(4096, 160 + 120 * len(cards)),
         system=system,
         messages=[{"role": "user", "content": user}],
         output_config={"format": {"type": "json_schema", "schema": _SUMMARY_SCHEMA}},

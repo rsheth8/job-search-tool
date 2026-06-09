@@ -236,6 +236,9 @@ _PAGE = r"""<!doctype html>
   .fit{ display:inline-flex; align-items:center; gap:8px; margin:14px 0 0; align-self:flex-start;
         font-size:14px; font-weight:600; color:var(--green);
         background:var(--greenbg); border:1px solid #1f7a44; border-radius:999px; padding:7px 14px; }
+  .about{ margin-top:14px; font-size:13.5px; line-height:1.5; color:var(--muted); }
+  .about .k{ display:block; font-size:10.5px; font-weight:800; letter-spacing:.1em;
+             text-transform:uppercase; color:var(--dim); margin-bottom:3px; }
   .tldr{ margin-top:14px; font-size:16px; line-height:1.5; color:var(--ink);
          background:linear-gradient(180deg,#13243f,#101b30); border:1px solid #244674;
          border-radius:14px; padding:14px 16px; }
@@ -320,7 +323,8 @@ function cardHTML(c, cls){
     <div class="company">${esc(c.company)}</div>
     ${c.location ? `<div class="loc">&#128205; ${esc(c.location)}</div>` : ''}
     <div class="content">
-      ${c.tldr ? `<div class="tldr"><span class="lbl">TL;DR</span>${esc(c.tldr)}</div>` : ''}
+      ${c.about ? `<div class="about"><span class="k">About ${esc(c.company)}</span>${esc(c.about)}</div>` : ''}
+      ${c.tldr ? `<div class="tldr"><span class="lbl">The role</span>${esc(c.tldr)}</div>` : ''}
       ${(c.level || c.skills) ? `<div class="chips">
         ${c.level ? `<span class="chip"><span class="k">Level</span><b>${esc(c.level)}</b></span>` : ''}
         ${c.skills ? `<span class="chip"><span class="k">Skills</span>${esc(c.skills)}</span>` : ''}
