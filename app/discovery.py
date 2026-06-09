@@ -16,10 +16,13 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from . import job_alerts, jobstore, matcher, posting_match, profile, reminders, wide_discovery
+from . import (
+    eligibility, job_alerts, jobstore, matcher, posting_match, profile, reminders,
+    reranker, wide_discovery,
+)
 from .config import get_settings
 from .jobsources import NON_BOARD_SOURCES, JobPosting, fetch_source
-from .jobsources import quality
+from .jobsources import ghost, quality
 from .jobsources import rss as rss_src
 
 logger = logging.getLogger("discovery")
@@ -142,6 +145,25 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
     fresh, dropped = quality.filter_reputable(fresh)
     if dropped:
         logger.info("discovery: dropped %d low-reputation posting(s) for %s", dropped, user_id)
+    # Ghost-job gate: drop never-really-hiring reqs (evergreen/reposted/stale/scam).
+    if settings.ghost_filter_enabled and fresh:
+        kept: list[JobPosting] = []
+        ghosted = 0
+        for p in fresh:
+            reposts = jobstore.seen_similar_count(user_id, p.company, p.title)
+            if ghost.is_ghost(p, repost_count=reposts):
+                ghosted += 1
+                continue
+            kept.append(p)
+        if ghosted:
+            logger.info("discovery: dropped %d ghost posting(s) for %s", ghosted, user_id)
+        fresh = kept
+    # Eligibility gate (rule tier): drop roles the candidate clearly isn't
+    # qualified for / couldn't realistically do, given their level.
+    if settings.eligibility_filter_enabled and fresh:
+        fresh, unfit = eligibility.filter_eligible(fresh, prof)
+        if unfit:
+            logger.info("discovery: dropped %d over-qualified posting(s) for %s", unfit, user_id)
     if not fresh:
         return 0
 
@@ -150,9 +172,21 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
     candidates = matcher.prefilter(fresh, prof)[: settings.job_max_scored_per_tick]
     if not candidates:
         return 0
+    # Eligibility gate (LLM tier, optional): nuanced "could I even apply?" check on
+    # the capped set. Fail-open — never drops on an LLM error.
+    if settings.eligibility_llm_enabled and candidates:
+        candidates, unfit = eligibility.filter_eligible_llm(candidates, prof)
+        if unfit:
+            logger.info("discovery: LLM dropped %d unqualified posting(s) for %s", unfit, user_id)
+        if not candidates:
+            return 0
 
-    # 3. Score (LLM when configured, else heuristic; never raises).
+    # 3. Score (embeddings/LLM/heuristic; never raises), then personalize the
+    #    ranking with the user's own apply/dismiss model (no-op until trained).
     scored = matcher.score(candidates, prof)
+    if settings.reranker_enabled:
+        reranker.maybe_retrain(user_id, prof)
+        scored = reranker.rerank(user_id, prof, scored)
 
     # 4. Persist every scored posting (never re-scored) and notify per alert mode.
     #    Threshold is per-user (TUNE) falling back to the global default.

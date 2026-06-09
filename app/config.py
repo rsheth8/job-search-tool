@@ -81,15 +81,68 @@ class Settings(BaseSettings):
     serpapi_api_key: str = ""
     job_aggregator_max_per_day: int = 5
 
+    # Ghost-job filter (Matching v2, Phase 3): drop never-really-hiring reqs
+    # (evergreen language, reposts, stale, scam contact) beyond quality.py's spam
+    # gate. Conservative + free (rules only). On by default; flip off to disable.
+    ghost_filter_enabled: bool = True
+
     # --- Resume tailoring (assisted apply) ---------------------------------
     # Base .tex files live on the Fly volume, not in git (personal info).
     resume_tex_dir: str = "/data/resumes"
     resume_tailor_enabled: bool = True
     tectonic_bin: str = "tectonic"
 
+    # --- Embedding matching (Matching v2, Phase 1) -------------------------
+    # Off by default. When enabled + keyed, matcher.score ranks postings by
+    # cosine similarity (profile vs JD) instead of the keyword heuristic. Gated
+    # + budget-capped like the paid aggregator; falls back to heuristic on any
+    # failure, so the free path is never broken.
+    embedding_enabled: bool = False
+    voyage_api_key: str = ""
+    embedding_model: str = "voyage-3-lite"
+    embedding_max_calls_per_day: int = 200   # billable embedding requests / UTC day
+    embedding_rate_limit_per_min: int = 60   # token-bucket on Voyage calls
+
+    # --- Personalized re-ranker (Matching v2, Phase 2) --------------------
+    # Off by default. When on, a small logistic-regression model trained on the
+    # user's own apply/dismiss/snooze history re-scores postings — personalizing
+    # the ranking. Cold-starts gracefully: below the label minimums it's a no-op
+    # and the matcher's score stands. Pure-Python, no extra deps.
+    reranker_enabled: bool = False
+    reranker_min_positive: int = 5   # min 'applied' labels before the model engages
+    reranker_min_negative: int = 5   # min 'dismissed'/'snoozed' labels before engaging
+
+    # --- Eligibility / qualification gate (Matching v2) -------------------
+    # Drop roles the candidate clearly isn't qualified for / couldn't realistically
+    # do, given their level. Rule tier (free, on) catches seniority gaps, big
+    # experience requirements, and hard credentials. LLM tier (off; batched Haiku)
+    # adds nuanced judgement. Candidate level comes from the profile's seniority,
+    # falling back to ``eligibility_candidate_level``.
+    eligibility_filter_enabled: bool = True
+    eligibility_candidate_level: str = "entry"   # fallback when profile has no seniority
+    # Drop clearly non-technical roles (sales/recruiting/marketing/admin/etc.) for
+    # a technical candidate — unless the title has a technical signal. On by default.
+    eligibility_field_filter: bool = True
+    eligibility_llm_enabled: bool = False
+    eligibility_max_calls_per_day: int = 100     # batched Haiku eligibility checks / day
+
+    # --- Deck TL;DR insights (swipe trainer) -----------------------------
+    # Plain-language "what is this role + is it for me" on each swipe card.
+    # Off by default; reuses ANTHROPIC_API_KEY. Cheap by design: ONE batched
+    # Haiku call per deck, results cached per posting (summarized once ever),
+    # daily-capped. Each call covers a whole deck (~15 roles), so the cap is in
+    # decks/day, not roles/day.
+    deck_tldr_enabled: bool = False
+    deck_tldr_max_calls_per_day: int = 50
+
     @property
     def serpapi_enabled(self) -> bool:
         return bool(self.serpapi_api_key.strip())
+
+    @property
+    def embedding_active(self) -> bool:
+        """Embedding scoring runs only when explicitly enabled AND keyed."""
+        return self.embedding_enabled and bool(self.voyage_api_key.strip())
 
     @property
     def use_llm_router(self) -> bool:

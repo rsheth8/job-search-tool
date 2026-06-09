@@ -46,6 +46,43 @@ def dashboard(user: str | None = None) -> HTMLResponse:
     return HTMLResponse(dash.render(user))
 
 
+@app.get("/train", response_class=HTMLResponse)
+def train_page(user: str | None = None) -> HTMLResponse:
+    """Tinder-style swipe trainer to bootstrap the re-ranker on real postings."""
+    from . import dashboard as dash
+    from . import trainer
+
+    return HTMLResponse(trainer.render_page(user or dash.default_user()))
+
+
+@app.get("/train/deck")
+def train_deck(user: str | None = None, n: int = 15) -> dict:
+    from . import dashboard as dash
+    from . import insights, profile as prof, trainer
+
+    uid = user or dash.default_user()
+    cards = trainer.build_deck(uid, limit=n)
+    # Plain-language TL;DR per card (batched + cached; no-op unless enabled).
+    cards = insights.enrich(cards, prof.profile_text(prof.get_profile(uid)))
+    return {"user": uid, "cards": cards, "stats": trainer.stats(uid)}
+
+
+@app.post("/train/label")
+async def train_label(request: Request) -> dict:
+    """Record one swipe, retrain the model if there's enough signal, return stats."""
+    from . import dashboard as dash
+    from . import profile as prof
+    from . import reranker, trainer
+
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    item = body.get("item") or {}
+    label = body.get("label", "pass")
+    trainer.record_label(uid, item, label)
+    reranker.maybe_retrain(uid, prof.get_profile(uid))
+    return trainer.stats(uid)
+
+
 @app.get("/health")
 def health() -> dict:
     from .router import get_router
@@ -86,6 +123,11 @@ def health() -> dict:
         "wide_directory": s.job_wide_directory_enabled,
         "wide_aggregator": s.job_wide_aggregator_enabled,
         "serpapi": s.serpapi_enabled,
+        "ghost_filter": s.ghost_filter_enabled,
+        "eligibility_filter": s.eligibility_filter_enabled,
+        "eligibility_llm": s.eligibility_llm_enabled,
+        "deck_tldr": s.deck_tldr_enabled,
+        "reranker": s.reranker_enabled,
         "directory_boards": dir_src.board_count(),
         "tracked_boards": jobstore.tracked_count(),
         "poll_seconds": s.job_poll_seconds,
@@ -93,6 +135,12 @@ def health() -> dict:
         "last_tick": discovery.last_tick_at,
         "postings": jobstore.global_counts_by_status(),
     }
+    if s.embedding_active:
+        info["embeddings"] = {
+            "model": s.embedding_model,
+            "calls_today": jobstore.embedding_calls_today(),
+            "max_per_day": s.embedding_max_calls_per_day,
+        }
     return info
 
 

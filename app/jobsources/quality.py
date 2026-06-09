@@ -39,9 +39,14 @@ _SPAM_TITLE = re.compile(
 )
 
 
+def is_first_party(p: JobPosting) -> bool:
+    """True for postings from companies' own ATS (inherently trustworthy)."""
+    return (p.source or "").lower() in FIRST_PARTY_SOURCES
+
+
 def is_reputable(p: JobPosting) -> bool:
     """True if a posting looks like a real, actionable role."""
-    if (p.source or "").lower() in FIRST_PARTY_SOURCES:
+    if is_first_party(p):
         return True
     company = (p.company or "").strip().lower()
     if company in _GENERIC_COMPANY:

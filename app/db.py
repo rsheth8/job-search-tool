@@ -183,7 +183,8 @@ CREATE TABLE IF NOT EXISTS job_postings (
     first_seen_at   TEXT NOT NULL,
     relevance_score REAL,
     status          TEXT NOT NULL DEFAULT 'new',  -- new|alerted|applied|dismissed|snoozed|seeded
-    snoozed_until   TEXT                          -- when a 'snoozed' posting should resurface
+    snoozed_until   TEXT,                         -- when a 'snoozed' posting should resurface
+    embedding       BLOB                          -- float32 JD vector (Matching v2); NULL when off
 );
 
 -- One job-search profile per user: target roles/keywords/locations plus a short
@@ -245,6 +246,46 @@ CREATE INDEX IF NOT EXISTS idx_tailored_user_company
     ON tailored_resumes(user_id, variant, company);
 CREATE INDEX IF NOT EXISTS idx_tailored_posting
     ON tailored_resumes(user_id, posting_id);
+
+-- Personalized re-ranker model (Matching v2, Phase 2). One small logistic-
+-- regression model per user, stored as JSON (weights + bias + metadata),
+-- retrained from the user's apply/dismiss/snooze labels as they accumulate.
+CREATE TABLE IF NOT EXISTS reranker_models (
+    user_id     TEXT PRIMARY KEY,
+    model_json  TEXT NOT NULL,
+    n_labels    INTEGER NOT NULL,
+    trained_at  TEXT NOT NULL
+);
+
+-- Swipe-trainer labels: fast 'would I apply?' yes/no judgements on real postings,
+-- used to bootstrap the re-ranker before the user has applied to much. Kept
+-- separate from job_postings so it never touches the real application pipeline.
+CREATE TABLE IF NOT EXISTS training_labels (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         TEXT NOT NULL,
+    source          TEXT NOT NULL,
+    external_id     TEXT NOT NULL,
+    company         TEXT,
+    title           TEXT,
+    location        TEXT,
+    url             TEXT,
+    description     TEXT,
+    relevance_score REAL,
+    label           TEXT NOT NULL,   -- 'like' (would apply) | 'pass'
+    created_at      TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_training_labels_dedupe
+    ON training_labels(user_id, source, external_id);
+
+-- Cached plain-language summaries for swipe cards (one batched Haiku call fills
+-- many; cached by posting so a role is summarized once ever — keeps AI spend low).
+-- The summary is a JSON blob so new fields don't need a migration.
+CREATE TABLE IF NOT EXISTS posting_summaries (
+    cache_key    TEXT PRIMARY KEY,   -- "{source}:{external_id}"
+    summary_json TEXT NOT NULL,      -- {tldr, level, skills, fit}
+    created_at   TEXT NOT NULL
+);
 """
 
 
@@ -283,6 +324,17 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     post_cols = {r[1] for r in conn.execute("PRAGMA table_info(job_postings)")}
     if post_cols and "snoozed_until" not in post_cols:
         conn.execute("ALTER TABLE job_postings ADD COLUMN snoozed_until TEXT")
+    if post_cols and "embedding" not in post_cols:
+        conn.execute("ALTER TABLE job_postings ADD COLUMN embedding BLOB")
     prof_cols = {r[1] for r in conn.execute("PRAGMA table_info(job_search_profile)")}
     if prof_cols and "min_relevance" not in prof_cols:
         conn.execute("ALTER TABLE job_search_profile ADD COLUMN min_relevance REAL")
+    # posting_summaries moved from (tldr, fit) columns to a JSON blob; the old rows
+    # are a regenerable cache, so just rebuild the table on the richer schema.
+    sum_cols = {r[1] for r in conn.execute("PRAGMA table_info(posting_summaries)")}
+    if sum_cols and "summary_json" not in sum_cols:
+        conn.execute("DROP TABLE posting_summaries")
+        conn.execute(
+            "CREATE TABLE posting_summaries (cache_key TEXT PRIMARY KEY, "
+            "summary_json TEXT NOT NULL, created_at TEXT NOT NULL)"
+        )
