@@ -161,8 +161,8 @@ def _heuristic_score(p: JobPosting, terms: set[str], locations: list[str]) -> fl
 
 # Chars of description fed to the embedder. Generous vs the LLM's _DESC_CHARS:
 # embeddings handle longer context cheaply and descriptions are already capped
-# at MAX_DESCRIPTION_CHARS upstream.
-_EMBED_DESC_CHARS = 1500
+# at MAX_DESCRIPTION_CHARS upstream — give the embedder the whole thing.
+_EMBED_DESC_CHARS = 3000
 
 
 def _embed_text(p: JobPosting) -> str:

@@ -35,7 +35,7 @@ def _embed_voyage(texts: list[str], input_type: str) -> list[list[float]]:
     from app import embeddings
 
     out: list[list[float]] = []
-    chunk = 40
+    chunk = 12  # smaller: full-text postings are ~400 tokens each (free-tier TPM)
     for i in range(0, len(texts), chunk):
         batch = texts[i:i + chunk]
         vecs = [None] * len(batch)
@@ -70,7 +70,7 @@ def main(user: str = "local") -> None:
         X_base.append(feat.features(title=title, location=loc, description=desc,
                                     source=source, relevance=rel))
         y.append(label); w.append(weight)
-        texts.append(f"{title}\n{loc}\n{(desc or '')[:400]}")
+        texts.append(f"{title}\n{loc}\n{(desc or '')[:1500]}")
 
     from app.config import get_settings
     prof_text = profile_text(prof) or "software engineer data scientist"

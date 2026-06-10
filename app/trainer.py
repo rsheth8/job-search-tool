@@ -23,7 +23,6 @@ from .jobsources import JobPosting
 from .jobsources import directory, ghost, quality
 from .jobsources import rss as rss_src
 
-_SUMMARY_CHARS = 280
 # RSS feeds woven into the deck for company variety — these are startup/scale-up
 # heavy, balancing the big-name ATS directory.
 _DECK_RSS_FEEDS = ("remoteok", "weworkremotely")
@@ -135,9 +134,10 @@ def _clean_title(title: str, company: str) -> str:
 
 
 def _card(p: JobPosting, score: float) -> dict:
+    # Keep the FULL description (up to the source cap): it's stored as the training
+    # label and fed to embeddings, where truncating to a snippet badly hurt match
+    # quality. The card UI shows it in a scrollable box, so length is fine.
     desc = (p.description or "").strip()
-    if len(desc) > _SUMMARY_CHARS:
-        desc = desc[:_SUMMARY_CHARS].rstrip() + "…"
     return {
         "source": p.source,
         "external_id": p.external_id,

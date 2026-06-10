@@ -9,8 +9,10 @@ from datetime import datetime, timezone
 logger = logging.getLogger("jobsources")
 
 HTTP_TIMEOUT_SECONDS = 12.0
-# Cap stored/scored description length — keeps SQLite small and LLM tokens cheap.
-MAX_DESCRIPTION_CHARS = 1500
+# Cap stored description length. Generous so embeddings get the real
+# responsibilities/requirements (JDs front-load boilerplate); still bounded to
+# keep SQLite small. LLM callers slice this further for token cost.
+MAX_DESCRIPTION_CHARS = 3000
 
 
 @dataclass
