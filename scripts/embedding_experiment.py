@@ -19,18 +19,41 @@ from app.reranker import FEATURES, Featurizer, _fit, _labeled_examples, _predict
 from scripts.analyze_reranker import _auc, _kfold_eval
 
 
-def _embed(texts: list[str]):
+def _embed_local(texts: list[str]) -> list[list[float]]:
     from model2vec import StaticModel
 
     print("  loading local embedding model (minishlab/potion-base-8M)…")
     model = StaticModel.from_pretrained("minishlab/potion-base-8M")
-    return model.encode(texts)
+    return [list(map(float, v)) for v in model.encode(texts)]
+
+
+def _embed_voyage(texts: list[str], input_type: str) -> list[list[float]]:
+    """Real Voyage embeddings via app.embeddings. Small chunks + backoff so the
+    free tier (~3 req/min, token-per-min cap) doesn't 429. Missing -> []."""
+    import time
+
+    from app import embeddings
+
+    out: list[list[float]] = []
+    chunk = 40
+    for i in range(0, len(texts), chunk):
+        batch = texts[i:i + chunk]
+        vecs = [None] * len(batch)
+        for attempt in range(5):
+            vecs = embeddings.embed(batch, input_type=input_type)
+            if any(v is not None for v in vecs):
+                break
+            time.sleep(25)  # 429 backoff
+        out.extend(v if v is not None else [] for v in vecs)
+        print(f"    embedded {min(i + chunk, len(texts))}/{len(texts)}")
+        if i + chunk < len(texts):
+            time.sleep(22)  # space requests for free-tier RPM
+    return out
 
 
 def _cos(a, b) -> float:
-    dot = float((a * b).sum())
-    na = math.sqrt(float((a * a).sum())); nb = math.sqrt(float((b * b).sum()))
-    return dot / (na * nb) if na and nb else 0.0
+    from app.embeddings import cosine
+    return cosine(a, b)
 
 
 def main(user: str = "local") -> None:
@@ -47,12 +70,20 @@ def main(user: str = "local") -> None:
         X_base.append(feat.features(title=title, location=loc, description=desc,
                                     source=source, relevance=rel))
         y.append(label); w.append(weight)
-        texts.append(f"{title}\n{loc}\n{(desc or '')[:600]}")
+        texts.append(f"{title}\n{loc}\n{(desc or '')[:400]}")
 
-    print(f"=== Embedding A/B — user '{user}', {len(ex)} labels ===\n")
-    vecs = _embed(texts + [profile_text(prof) or "software engineer data scientist"])
-    pvec = vecs[-1]
-    sims = [_cos(vecs[i], pvec) for i in range(len(ex))]
+    from app.config import get_settings
+    prof_text = profile_text(prof) or "software engineer data scientist"
+    if get_settings().embedding_active:
+        print(f"=== Embedding A/B — user '{user}', {len(ex)} labels  [Voyage: "
+              f"{get_settings().embedding_model}] ===\n")
+        doc_vecs = _embed_voyage(texts, "document")
+        pvec = _embed_voyage([prof_text], "query")[0]
+    else:
+        print(f"=== Embedding A/B — user '{user}', {len(ex)} labels  [local model2vec] ===\n")
+        allv = _embed_local(texts + [prof_text])
+        doc_vecs, pvec = allv[:-1], allv[-1]
+    sims = [_cos(doc_vecs[i], pvec) for i in range(len(ex))]
     lo, hi = min(sims), max(sims)
     print(f"  embedding cosine range: {lo:.3f} … {hi:.3f}\n")
 
