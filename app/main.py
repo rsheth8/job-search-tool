@@ -56,12 +56,12 @@ def train_page(user: str | None = None) -> HTMLResponse:
 
 
 @app.get("/train/deck")
-def train_deck(user: str | None = None, n: int = 15) -> dict:
+def train_deck(user: str | None = None, n: int = 15, diverse: bool = False) -> dict:
     from . import dashboard as dash
     from . import insights, profile as prof, trainer
 
     uid = user or dash.default_user()
-    cards = trainer.build_deck(uid, limit=n)
+    cards = trainer.build_deck(uid, limit=n, diverse=diverse)
     # Plain-language TL;DR per card (batched + cached; no-op unless enabled).
     cards = insights.enrich(cards, prof.profile_text(prof.get_profile(uid)))
     return {"user": uid, "cards": cards, "stats": trainer.stats(uid)}

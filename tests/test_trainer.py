@@ -32,6 +32,25 @@ def test_build_deck_returns_scored_cards():
     assert deck[0]["relevance_score"] >= deck[1]["relevance_score"]
 
 
+def test_diverse_mode_skips_prefilter_to_surface_off_target():
+    # One posting matches the profile; the rest don't. Normal mode prefilters down
+    # to the match; Mix mode keeps the wider pool so there are roles to reject.
+    posts = [
+        _posting("ML Engineer", "0", company="Co0", desc="machine learning systems"),
+        _posting("Frontend Engineer", "1", company="Co1", desc="react ui work"),
+        _posting("DevOps Engineer", "2", company="Co2", desc="kubernetes and ci"),
+        _posting("Security Engineer", "3", company="Co3", desc="appsec and audits"),
+        _posting("Mobile Engineer", "4", company="Co4", desc="ios and android"),
+    ]
+    from app import profile
+    profile.set_profile("u1", roles="machine learning")
+    normal = trainer.build_deck("u1", limit=6, fetch=_deck_fetch(posts))
+    mixed = trainer.build_deck("u1", limit=6, diverse=True, fetch=_deck_fetch(posts))
+    assert {c["title"] for c in normal} == {"ML Engineer"}   # prefiltered to the match
+    assert len(mixed) > len(normal)                          # Mix is wider
+    assert "Frontend Engineer" in {c["title"] for c in mixed}  # off-target surfaces
+
+
 def test_build_deck_excludes_already_labeled():
     p = _posting("Software Engineer", "1")
     trainer.record_label("u1", trainer._card(p, 0.5), "like")

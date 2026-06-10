@@ -60,16 +60,21 @@ def _default_sources() -> list[JobPosting]:
     return posts
 
 
-def build_deck(user_id: str, *, limit: int = 15, fetch=None) -> list[dict]:
-    """A batch of fresh, un-swiped real postings to judge, best-match first.
+def build_deck(user_id: str, *, limit: int = 15, fetch=None, diverse: bool = False) -> list[dict]:
+    """A batch of fresh, un-swiped real postings to judge.
 
     Runs the same gates discovery does — reputability, the eligibility rule tier
-    (drop roles above the candidate's level), and the profile pre-filter — so the
-    deck reflects roles that actually make sense for the user. ``fetch`` injects
-    the posting source in tests; in production it's ``_default_sources`` (ATS
-    directory + RSS, the directory advancing a cursor so repeat calls bring new
-    companies). Each card carries the matcher's relevance score, populating the
-    re-ranker's ``relevance`` feature from the swipe.
+    (drop roles above the candidate's level), and (in normal mode) the profile
+    pre-filter — so the deck reflects roles that make sense for the user. ``fetch``
+    injects the posting source in tests; in production it's ``_default_sources``
+    (ATS directory + RSS, the directory advancing a cursor so repeat calls bring
+    new companies). Each card carries the matcher's relevance score, populating
+    the re-ranker's ``relevance`` feature from the swipe.
+
+    ``diverse=True`` (the UI's "Mix" mode) is for *training*: it skips the profile
+    pre-filter and spreads cards across the whole relevance range (strong → weak)
+    instead of only the top matches — so the user actually sees roles worth
+    rejecting, which is what balances the apply/pass labels the re-ranker needs.
     """
     settings = get_settings()
     fetcher = fetch or _default_sources
@@ -96,7 +101,9 @@ def build_deck(user_id: str, *, limit: int = 15, fetch=None) -> list[dict]:
     fresh = [p for p in fresh if not ghost.is_ghost(p)]  # drop ghost/evergreen reqs
     if settings.eligibility_filter_enabled:           # drop over-qualified roles
         fresh, _ = eligibility.filter_eligible(fresh, prof)
-    pool = matcher.prefilter(fresh, prof) or fresh    # focus on profile terms
+    # Normal mode focuses on profile terms; Mix mode keeps the wider pool so there
+    # are off-target roles to reject.
+    pool = fresh if diverse else (matcher.prefilter(fresh, prof) or fresh)
     if not pool:
         return []
 
@@ -104,6 +111,11 @@ def build_deck(user_id: str, *, limit: int = 15, fetch=None) -> list[dict]:
     # we keep the deck fast/free and save the LLM budget for the card summaries.
     scored = matcher.score(pool, prof, allow_llm=False)  # never raises
     scored.sort(key=lambda t: t[1], reverse=True)
+    if diverse and len(scored) > limit:
+        # Spread evenly across the sorted range (strong → weak), then append the
+        # full list so the dedup/cap loop below can still backfill to `limit`.
+        spread = [scored[round(i * (len(scored) - 1) / (limit - 1))] for i in range(limit)]
+        scored = spread + scored
 
     # Collapse near-duplicates (same company + title, e.g. one role posted for
     # many locations) and cap how many roles any one company contributes, so the
@@ -211,6 +223,12 @@ _PAGE = r"""<!doctype html>
              font-size:13px; color:var(--muted); }
   .pill{ padding:3px 10px; border-radius:999px; background:#20242f; border:1px solid var(--line); font-weight:600; }
   .pill.ok{ background:var(--greenbg); border-color:#1f7a44; color:var(--green); }
+  .modes{ display:inline-flex; gap:4px; background:#171a22; border:1px solid var(--line);
+          border-radius:10px; padding:3px; margin-top:12px; }
+  .mode{ flex:none; font-size:12.5px; font-weight:600; padding:6px 12px; border-radius:7px;
+         border:none; background:transparent; color:var(--muted); cursor:pointer; }
+  .mode.active{ background:#26304a; color:var(--ink); }
+  .modehint{ font-size:12px; color:var(--dim); margin:6px 0 0; }
   /* deck */
   #stack{ position:relative; width:min(620px,96vw); height:min(580px,70vh); }
   .card{ position:absolute; inset:0; background:var(--card); border:1px solid var(--line);
@@ -286,6 +304,11 @@ _PAGE = r"""<!doctype html>
       <span id="counts">loading&hellip;</span>
       <span class="pill" id="status">&mdash;</span>
     </div>
+    <div class="modes">
+      <button class="mode active" data-mode="best">&#127919; Best matches</button>
+      <button class="mode" data-mode="mix">&#127922; Mix (train)</button>
+    </div>
+    <div class="modehint" id="modehint">Showing your strongest matches.</div>
   </div>
   <div id="stack"></div>
   <div id="buttons">
@@ -298,6 +321,7 @@ _PAGE = r"""<!doctype html>
 const USER = "__USER__";
 let deck = [];
 let busy = false;
+let diverse = false;
 const $ = (id) => document.getElementById(id);
 function esc(s){ const d=document.createElement('div'); d.textContent = s==null?'':s; return d.innerHTML; }
 
@@ -370,7 +394,7 @@ function attachDrag(el){
 
 async function loadDeck(){
   try{
-    const r = await fetch(`/train/deck?user=${encodeURIComponent(USER)}&n=15`);
+    const r = await fetch(`/train/deck?user=${encodeURIComponent(USER)}&n=15&diverse=${diverse}`);
     const data = await r.json();
     deck = deck.concat(data.cards || []);
     renderProgress(data.stats);
@@ -397,6 +421,18 @@ async function swipe(label){
 $('pass').onclick = () => swipe('pass');
 $('like').onclick = () => swipe('like');
 document.addEventListener('keydown', (e)=>{ if(e.key==='ArrowLeft') swipe('pass'); if(e.key==='ArrowRight') swipe('like'); });
+
+document.querySelectorAll('.mode').forEach(b => b.onclick = () => {
+  const want = b.dataset.mode === 'mix';
+  if (want === diverse) return;
+  diverse = want;
+  document.querySelectorAll('.mode').forEach(x => x.classList.toggle('active', x === b));
+  $('modehint').textContent = diverse
+    ? 'Showing a wide mix — reject the off-target ones to balance your training.'
+    : 'Showing your strongest matches.';
+  deck = []; $('stack').innerHTML = ''; loadDeck();
+});
+
 loadDeck();
 </script>
 </body>
