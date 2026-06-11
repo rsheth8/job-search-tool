@@ -107,9 +107,10 @@ def build_deck(user_id: str, *, limit: int = 15, fetch=None, diverse: bool = Fal
     if not pool:
         return []
 
-    # Heuristic scoring (allow_llm=False): the deck's score is just a sort key, so
-    # we keep the deck fast/free and save the LLM budget for the card summaries.
-    scored = matcher.score(pool, prof, allow_llm=False)  # never raises
+    # Free heuristic scoring only (no LLM, no embeddings): the deck's score is
+    # just a sort key, so we keep it fast with no API latency/rate-limits and
+    # spend the LLM budget on the card summaries instead.
+    scored = matcher.score(pool, prof, allow_llm=False, allow_embeddings=False)  # never raises
     scored.sort(key=lambda t: t[1], reverse=True)
     if diverse and len(scored) > limit:
         # Spread evenly across the sorted range (strong → weak), then append the
@@ -392,9 +393,15 @@ function attachDrag(el){
   el.addEventListener('pointercancel', end);
 }
 
+function renderLoading(){
+  $('stack').innerHTML = '<div class="card"><div class="empty">Loading roles&hellip;'
+    + '<br><span style="font-size:13px;color:var(--dim)">writing quick summaries &mdash; a few seconds</span></div></div>';
+}
+
 async function loadDeck(){
+  if (!deck.length) renderLoading();
   try{
-    const r = await fetch(`/train/deck?user=${encodeURIComponent(USER)}&n=15&diverse=${diverse}`);
+    const r = await fetch(`/train/deck?user=${encodeURIComponent(USER)}&n=8&diverse=${diverse}`);
     const data = await r.json();
     deck = deck.concat(data.cards || []);
     renderProgress(data.stats);
