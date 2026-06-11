@@ -42,15 +42,23 @@ def main(user: str = "local") -> None:
         [f"{c['source']}:{c['external_id']}" for c in cards]))
     print(f"{len(cards)} labeled postings; {pre} already have a fit score.\n")
 
+    def _keys(cs):
+        return [f"{c['source']}:{c['external_id']}" for c in cs]
+
     done = 0
     for i in range(0, len(cards), 10):
         chunk = cards[i:i + 10]
-        # Pass the summarizer explicitly -> bypasses the daily cap (a one-off
-        # backfill), still respects the per-minute rate limiter inside it.
-        insights.enrich(chunk, pblock, summarize=insights.summarize_batch)
+        # Retry each chunk with backoff: Anthropic rate-limits (429) if we fire
+        # too fast, and enrich fails open (no cache) on error. Pass the summarizer
+        # explicitly to bypass the daily cap (one-off backfill).
+        for attempt in range(4):
+            insights.enrich(chunk, pblock, summarize=insights.summarize_batch)
+            if len(insights.cached_fit_scores(_keys(chunk))) >= len(chunk):
+                break
+            time.sleep(8 * (attempt + 1))  # 8s, 16s, 24s backoff
         done += len(chunk)
         print(f"  summarized {done}/{len(cards)}")
-        time.sleep(1)
+        time.sleep(6)  # pace under the per-minute server limit
 
     post = len(insights.cached_fit_scores(
         [f"{c['source']}:{c['external_id']}" for c in cards]))
