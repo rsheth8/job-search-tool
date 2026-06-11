@@ -52,8 +52,11 @@ _SUMMARY_SCHEMA = {
                     "level": {"type": "string"},
                     "skills": {"type": "string"},
                     "fit": {"type": "string"},
+                    # Numeric fit for the hybrid re-ranker feature (no bounds in the
+                    # schema — Anthropic rejects them; we clamp [0,1] after parsing).
+                    "fit_score": {"type": "number"},
                 },
-                "required": ["id", "about", "tldr", "level", "skills", "fit"],
+                "required": ["id", "about", "tldr", "level", "skills", "fit", "fit_score"],
                 "additionalProperties": False,
             },
         }
@@ -110,12 +113,24 @@ def _save_cached(key: str, data: dict) -> None:
     from datetime import datetime, timezone
 
     payload = {f: data.get(f, "") for f in _FIELDS}
+    payload["fit_score"] = data.get("fit_score")  # numeric; for the re-ranker feature
     with connect() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO posting_summaries (cache_key, summary_json, created_at) "
             "VALUES (?, ?, ?)",
             (key, json.dumps(payload), datetime.now(timezone.utc).isoformat()),
         )
+
+
+def cached_fit_scores(keys: list[str]) -> dict[str, float]:
+    """Map of cache_key -> LLM fit_score for postings the summarizer has seen.
+    Used as a re-ranker feature; missing keys are simply absent (caller defaults)."""
+    out: dict[str, float] = {}
+    for key, data in _get_cached(keys).items():
+        val = data.get("fit_score")
+        if isinstance(val, (int, float)):
+            out[key] = float(val)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +164,9 @@ def summarize_batch(cards: list[dict], profile_block: str) -> dict[int, dict]:
         "comma-separated (e.g. 'Python, SQL, AWS'). 'Not stated' if none.\n"
         "- fit: <=12 words, honest read for THIS candidate and why (e.g. 'Strong "
         "entry fit — Python + ML' or 'Needs 5+ yrs you lack').\n"
+        "- fit_score: a number 0.0-1.0 for how well THIS candidate fits and could "
+        "land the role (1.0 = excellent + clearly qualified, 0.0 = wrong field or "
+        "far over their level). Calibrate honestly across the batch.\n"
         "Be specific to each posting; never generic or copy-pasted across roles."
     )
     user = f"CANDIDATE:\n{profile_block}\n\nJOBS:\n{listing}"
@@ -165,9 +183,14 @@ def summarize_batch(cards: list[dict], profile_block: str) -> dict[int, dict]:
     out: dict[int, dict] = {}
     for item in json.loads(payload).get("summaries", []):
         try:
-            out[int(item["id"])] = {f: str(item.get(f, "")).strip() for f in _FIELDS}
+            res = {f: str(item.get(f, "")).strip() for f in _FIELDS}
         except (KeyError, TypeError, ValueError):
             continue
+        try:
+            res["fit_score"] = max(0.0, min(1.0, float(item.get("fit_score"))))
+        except (TypeError, ValueError):
+            res["fit_score"] = None
+        out[int(item["id"])] = res
     return out
 
 

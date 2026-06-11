@@ -51,6 +51,16 @@ def test_featurizer_shape_and_values():
     assert x[5] == 1.0                  # first_party (greenhouse)
 
 
+def test_featurizer_llm_fit_from_cache_else_neutral():
+    feat = reranker.Featurizer(_profile(), {"greenhouse:job1": 0.9})
+    hit = feat.features(title="X", location="", description="", source="greenhouse",
+                        relevance=0.5, external_id="job1")
+    miss = feat.features(title="X", location="", description="", source="greenhouse",
+                         relevance=0.5, external_id="unknown")
+    assert hit[-1] == 0.9    # llm_fit pulled from the cache map
+    assert miss[-1] == 0.5   # neutral default when not assessed
+
+
 def test_featurizer_relevance_defaults_when_missing():
     feat = reranker.Featurizer(_profile())
     x = feat.features(title="X", location="", description="", source="rss", relevance=None)

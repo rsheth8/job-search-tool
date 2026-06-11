@@ -66,9 +66,9 @@ def main(user: str = "local") -> None:
     # Base 6-feature matrix (current model) + labels/weights.
     X_base, y, w = [], [], []
     texts = []
-    for title, loc, desc, source, rel, label, weight in ex:
+    for title, loc, desc, source, external_id, rel, label, weight in ex:
         X_base.append(feat.features(title=title, location=loc, description=desc,
-                                    source=source, relevance=rel))
+                                    source=source, relevance=rel, external_id=external_id))
         y.append(label); w.append(weight)
         texts.append(f"{title}\n{loc}\n{(desc or '')[:1500]}")
 

@@ -39,6 +39,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from . import matcher
+from . import insights
 from .config import get_settings
 from .db import connect
 from .jobsources import JobPosting
@@ -46,8 +47,12 @@ from .jobsources import quality
 
 logger = logging.getLogger("reranker")
 
-FEATURES = ("relevance", "kw_overlap", "title_hit", "loc_match", "is_remote", "first_party")
-_MODEL_VERSION = 1
+# `llm_fit` is the hybrid feature: the LLM's own 0-1 fit judgement (from the card
+# summarizer, cached per posting). The re-ranker learns how much to trust it from
+# the user's history — LLM comprehension weighted by personal behaviour.
+FEATURES = ("relevance", "kw_overlap", "title_hit", "loc_match", "is_remote",
+            "first_party", "llm_fit")
+_MODEL_VERSION = 2  # feature schema changed (added llm_fit) -> old models invalidated
 _SNOOZE_WEIGHT = 0.5  # snoozed = mild negative, counts half as much as a dismiss
 
 # Training hyperparameters — fixed, small data so these are uncritical.
@@ -67,10 +72,16 @@ class Featurizer:
     in both layers. Profile-derived sets are computed once per instance.
     """
 
-    def __init__(self, profile: sqlite3.Row | None) -> None:
+    def __init__(
+        self, profile: sqlite3.Row | None, fit_scores: dict[str, float] | None = None
+    ) -> None:
         self.terms = matcher._terms(profile)
         self.match_terms = matcher._match_terms(profile)
         self.locations = matcher._locations(profile)
+        # cache_key ("{source}:{external_id}") -> LLM fit score, for the llm_fit
+        # feature. Empty/missing -> neutral 0.5 (so the feature is harmless when
+        # summaries are off or a posting hasn't been assessed yet).
+        self.fit_scores = fit_scores or {}
 
     def features(
         self,
@@ -80,6 +91,7 @@ class Featurizer:
         description: str | None,
         source: str | None,
         relevance: float | None,
+        external_id: str | None = None,
     ) -> list[float]:
         title_l = (title or "").lower()
         haystack = f"{title or ''} {location or ''} {description or ''}".lower()
@@ -96,6 +108,7 @@ class Featurizer:
         )
         is_remote = 1.0 if "remote" in haystack else 0.0
         first_party = 1.0 if (source or "").lower() in quality.FIRST_PARTY_SOURCES else 0.0
+        llm_fit = self.fit_scores.get(f"{source or ''}:{external_id or ''}", 0.5)
         return [
             float(relevance if relevance is not None else 0.5),
             kw_overlap,
@@ -103,6 +116,7 @@ class Featurizer:
             loc_match,
             is_remote,
             first_party,
+            llm_fit,
         ]
 
 
@@ -150,9 +164,10 @@ def _predict(weights: list[float], bias: float, x: list[float]) -> float:
 # ---------------------------------------------------------------------------
 
 def _labeled_examples(user_id: str) -> list[tuple]:
-    """Normalized (title, location, description, source, relevance, y, weight)
-    training rows from BOTH real applications (job_postings status) and the swipe
-    trainer (training_labels) — so the model learns from whichever signal exists.
+    """Normalized (title, location, description, source, external_id, relevance,
+    y, weight) training rows from BOTH real applications (job_postings status) and
+    the swipe trainer (training_labels) — so the model learns from whichever
+    signal exists.
 
         applied / swipe-'like'  -> y=1
         dismissed / swipe-'pass'-> y=0
@@ -161,8 +176,8 @@ def _labeled_examples(user_id: str) -> list[tuple]:
     out: list[tuple] = []
     with connect() as conn:
         for r in conn.execute(
-            "SELECT title, location, description, source, relevance_score, status "
-            "FROM job_postings WHERE user_id = ? "
+            "SELECT title, location, description, source, external_id, "
+            "relevance_score, status FROM job_postings WHERE user_id = ? "
             "AND status IN ('applied', 'dismissed', 'snoozed')",
             (user_id,),
         ):
@@ -172,16 +187,22 @@ def _labeled_examples(user_id: str) -> list[tuple]:
                 y = 0.0
                 w = _SNOOZE_WEIGHT if r["status"] == "snoozed" else 1.0
             out.append((r["title"], r["location"], r["description"], r["source"],
-                        r["relevance_score"], y, w))
+                        r["external_id"], r["relevance_score"], y, w))
         for r in conn.execute(
-            "SELECT title, location, description, source, relevance_score, label "
-            "FROM training_labels WHERE user_id = ?",
+            "SELECT title, location, description, source, external_id, "
+            "relevance_score, label FROM training_labels WHERE user_id = ?",
             (user_id,),
         ):
             y = 1.0 if r["label"] == "like" else 0.0
             out.append((r["title"], r["location"], r["description"], r["source"],
-                        r["relevance_score"], y, 1.0))
+                        r["external_id"], r["relevance_score"], y, 1.0))
     return out
+
+
+def _fit_scores_for(examples: list[tuple]) -> dict[str, float]:
+    """Batch-load the LLM fit scores for these examples (keyed source:external_id)."""
+    keys = [f"{e[3] or ''}:{e[4] or ''}" for e in examples]
+    return insights.cached_fit_scores(keys)
 
 
 def _build_dataset(
@@ -192,10 +213,10 @@ def _build_dataset(
     y: list[float] = []
     w: list[float] = []
     n_pos = n_neg = 0
-    for title, location, description, source, relevance, label, weight in examples:
+    for title, location, description, source, external_id, relevance, label, weight in examples:
         X.append(feat.features(title=title, location=location,
                                description=description, source=source,
-                               relevance=relevance))
+                               relevance=relevance, external_id=external_id))
         y.append(label)
         w.append(weight)
         if label >= 0.5:
@@ -210,7 +231,7 @@ def train(user_id: str, profile: sqlite3.Row | None) -> dict | None:
     None when there isn't enough signal yet (cold start)."""
     s = get_settings()
     examples = _labeled_examples(user_id)
-    feat = Featurizer(profile)
+    feat = Featurizer(profile, _fit_scores_for(examples))
     X, y, w, n_pos, n_neg = _build_dataset(examples, feat)
     if n_pos < s.reranker_min_positive or n_neg < s.reranker_min_negative:
         return None
@@ -265,13 +286,14 @@ def rerank(
         return scored
     try:
         weights, bias = model["weights"], model["bias"]
-        feat = Featurizer(profile)
+        keys = [f"{p.source or ''}:{p.external_id or ''}" for p, _ in scored]
+        feat = Featurizer(profile, insights.cached_fit_scores(keys))
         out = []
         for posting, base in scored:
             x = feat.features(
                 title=posting.title, location=posting.location,
                 description=posting.description, source=posting.source,
-                relevance=base,
+                relevance=base, external_id=posting.external_id,
             )
             out.append((posting, round(_predict(weights, bias, x), 3)))
         out.sort(key=lambda t: t[1], reverse=True)
