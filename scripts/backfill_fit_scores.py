@@ -9,12 +9,39 @@ Run:  python -m scripts.backfill_fit_scores [user_id]
 """
 from __future__ import annotations
 
+import json
 import sys
 import time
 
 from app import insights, profile
 from app.db import connect
 from app.profile import profile_text
+
+
+def _purge_stale(cards: list[dict]) -> int:
+    """Delete cached summaries that lack a numeric fit_score (e.g. cached before
+    fit_score existed). enrich skips anything already cached, so these would never
+    regenerate otherwise. Returns how many were purged."""
+    keys = [f"{c['source']}:{c['external_id']}" for c in cards]
+    if not keys:
+        return 0
+    stale: list[str] = []
+    with connect() as conn:
+        rows = conn.execute(
+            f"SELECT cache_key, summary_json FROM posting_summaries "
+            f"WHERE cache_key IN ({','.join('?' * len(keys))})",
+            keys,
+        ).fetchall()
+        for r in rows:
+            try:
+                data = json.loads(r["summary_json"])
+            except (ValueError, TypeError):
+                data = {}
+            if not isinstance(data.get("fit_score"), (int, float)):
+                stale.append(r["cache_key"])
+        for k in stale:
+            conn.execute("DELETE FROM posting_summaries WHERE cache_key = ?", (k,))
+    return len(stale)
 
 
 def _labeled_cards(user: str) -> list[dict]:
@@ -40,7 +67,9 @@ def main(user: str = "local") -> None:
 
     pre = len(insights.cached_fit_scores(
         [f"{c['source']}:{c['external_id']}" for c in cards]))
-    print(f"{len(cards)} labeled postings; {pre} already have a fit score.\n")
+    purged = _purge_stale(cards)
+    print(f"{len(cards)} labeled postings; {pre} already have a fit score; "
+          f"purged {purged} stale (no-fit-score) cache entries to regenerate.\n")
 
     def _keys(cs):
         return [f"{c['source']}:{c['external_id']}" for c in cs]
