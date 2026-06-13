@@ -406,7 +406,27 @@ async function loadDeck(){
     deck = deck.concat(data.cards || []);
     renderProgress(data.stats);
   }catch(e){}
-  renderTop();
+  renderTop();         // show cards immediately (raw description)
+  ensureSummaries();   // fill in AI summaries a beat later
+}
+
+async function ensureSummaries(){
+  const need = deck.filter(c => !c._sumReq).slice(0, 6);
+  if (!need.length) return;
+  need.forEach(c => c._sumReq = true);  // don't re-request the same card
+  try{
+    const r = await fetch('/train/summaries', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({user: USER, items: need})
+    });
+    const map = (await r.json()).summaries || {};
+    let changed = false;
+    deck.forEach(c => {
+      const s = map[`${c.source}:${c.external_id}`];
+      if (s){ Object.assign(c, s); changed = true; }
+    });
+    if (changed) renderTop();  // refresh the visible card with its summary
+  }catch(e){ need.forEach(c => c._sumReq = false); }  // allow a retry on failure
 }
 
 async function swipe(label){
@@ -422,6 +442,7 @@ async function swipe(label){
   }catch(e){}
   setTimeout(renderTop, 200);
   if (deck.length < 3) loadDeck();
+  ensureSummaries();   // keep upcoming cards' summaries warm
   busy = false;
 }
 

@@ -29,11 +29,18 @@ logger = logging.getLogger("insights")
 # off the actual responsibilities/requirements and made summaries vague. ~800 is
 # still cheap on Haiku, especially batched + cached.
 _DESC_CHARS = 800
-# Fields the model returns and the UI renders, in order.
+# Display fields the model returns and the UI renders, in order.
 #   about  — what the company does       tldr   — what you'd do in this role
 #   level  — experience targeted          skills — key tech named
 #   fit    — honest read for the candidate
 _FIELDS = ("about", "tldr", "level", "skills", "fit")
+
+# Numeric 0-1 LLM judgements consumed by the re-ranker as features (cached per
+# posting). Each has a neutral default for postings the LLM hasn't assessed.
+#   fit_score    — overall fit + landability   tech_overlap — your skills ∩ the role's
+#   stretch      — how much of a reach (0 easy ... 1 big stretch)
+LLM_FEATURES = ("fit_score", "tech_overlap", "stretch")
+LLM_DEFAULTS = {"fit_score": 0.5, "tech_overlap": 0.5, "stretch": 0.5}
 
 _llm_client = None
 _llm_limiter: TokenBucket | None = None
@@ -52,11 +59,14 @@ _SUMMARY_SCHEMA = {
                     "level": {"type": "string"},
                     "skills": {"type": "string"},
                     "fit": {"type": "string"},
-                    # Numeric fit for the hybrid re-ranker feature (no bounds in the
-                    # schema — Anthropic rejects them; we clamp [0,1] after parsing).
+                    # Numeric judgements for the hybrid re-ranker features (no
+                    # bounds — Anthropic rejects them; we clamp [0,1] after parsing).
                     "fit_score": {"type": "number"},
+                    "tech_overlap": {"type": "number"},
+                    "stretch": {"type": "number"},
                 },
-                "required": ["id", "about", "tldr", "level", "skills", "fit", "fit_score"],
+                "required": ["id", "about", "tldr", "level", "skills", "fit",
+                             "fit_score", "tech_overlap", "stretch"],
                 "additionalProperties": False,
             },
         }
@@ -113,7 +123,8 @@ def _save_cached(key: str, data: dict) -> None:
     from datetime import datetime, timezone
 
     payload = {f: data.get(f, "") for f in _FIELDS}
-    payload["fit_score"] = data.get("fit_score")  # numeric; for the re-ranker feature
+    for f in LLM_FEATURES:  # numeric; for the re-ranker features
+        payload[f] = data.get(f)
     with connect() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO posting_summaries (cache_key, summary_json, created_at) "
@@ -122,15 +133,23 @@ def _save_cached(key: str, data: dict) -> None:
         )
 
 
-def cached_fit_scores(keys: list[str]) -> dict[str, float]:
-    """Map of cache_key -> LLM fit_score for postings the summarizer has seen.
-    Used as a re-ranker feature; missing keys are simply absent (caller defaults)."""
-    out: dict[str, float] = {}
+def cached_llm_features(keys: list[str]) -> dict[str, dict[str, float]]:
+    """Map of cache_key -> {feature: value} for the numeric LLM judgements the
+    summarizer has produced. Only numeric values are included; the re-ranker
+    defaults anything missing. A posting with no numeric features is omitted."""
+    out: dict[str, dict[str, float]] = {}
     for key, data in _get_cached(keys).items():
-        val = data.get("fit_score")
-        if isinstance(val, (int, float)):
-            out[key] = float(val)
+        feats = {f: float(data[f]) for f in LLM_FEATURES
+                 if isinstance(data.get(f), (int, float))}
+        if feats:
+            out[key] = feats
     return out
+
+
+def cached_fit_scores(keys: list[str]) -> dict[str, float]:
+    """Back-compat: just the fit_score per key (numeric only)."""
+    return {k: v["fit_score"] for k, v in cached_llm_features(keys).items()
+            if "fit_score" in v}
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +186,10 @@ def summarize_batch(cards: list[dict], profile_block: str) -> dict[int, dict]:
         "- fit_score: a number 0.0-1.0 for how well THIS candidate fits and could "
         "land the role (1.0 = excellent + clearly qualified, 0.0 = wrong field or "
         "far over their level). Calibrate honestly across the batch.\n"
+        "- tech_overlap: 0.0-1.0, the share of the role's key skills/tech the "
+        "candidate clearly has (1.0 = has all of them, 0.0 = none).\n"
+        "- stretch: 0.0-1.0, how much of a reach this is for them (0.0 = clearly "
+        "qualified/easy, 1.0 = a big stretch beyond their experience).\n"
         "Be specific to each posting; never generic or copy-pasted across roles."
     )
     user = f"CANDIDATE:\n{profile_block}\n\nJOBS:\n{listing}"
@@ -186,10 +209,11 @@ def summarize_batch(cards: list[dict], profile_block: str) -> dict[int, dict]:
             res = {f: str(item.get(f, "")).strip() for f in _FIELDS}
         except (KeyError, TypeError, ValueError):
             continue
-        try:
-            res["fit_score"] = max(0.0, min(1.0, float(item.get("fit_score"))))
-        except (TypeError, ValueError):
-            res["fit_score"] = None
+        for f in LLM_FEATURES:
+            try:
+                res[f] = max(0.0, min(1.0, float(item.get(f))))
+            except (TypeError, ValueError):
+                res[f] = None
         out[int(item["id"])] = res
     return out
 

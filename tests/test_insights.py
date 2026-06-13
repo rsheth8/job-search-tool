@@ -77,18 +77,21 @@ def test_enrich_fails_open_on_error():
 
 
 def test_cache_helpers_roundtrip():
-    insights._save_cached("greenhouse:9", {"about": "builds AI tools", "tldr": "a tldr",
-                                           "level": "Entry", "skills": "Python", "fit": "a fit",
-                                           "fit_score": 0.8})
+    data = {"about": "builds AI tools", "tldr": "a tldr", "level": "Entry",
+            "skills": "Python", "fit": "a fit",
+            "fit_score": 0.8, "tech_overlap": 0.6, "stretch": 0.3}
+    insights._save_cached("greenhouse:9", data)
     got = insights._get_cached(["greenhouse:9", "missing:x"])
-    assert got["greenhouse:9"] == {"about": "builds AI tools", "tldr": "a tldr",
-                                   "level": "Entry", "skills": "Python", "fit": "a fit",
-                                   "fit_score": 0.8}
+    assert got["greenhouse:9"] == data
     assert "missing:x" not in got
 
 
-def test_cached_fit_scores_extracts_numeric():
-    insights._save_cached("greenhouse:1", {"fit": "good", "fit_score": 0.9})
-    insights._save_cached("greenhouse:2", {"fit": "n/a", "fit_score": None})  # not assessed
-    scores = insights.cached_fit_scores(["greenhouse:1", "greenhouse:2", "missing:3"])
-    assert scores == {"greenhouse:1": 0.9}  # only the numeric one
+def test_cached_llm_features_extracts_numeric():
+    insights._save_cached("greenhouse:1", {"fit": "good", "fit_score": 0.9,
+                                           "tech_overlap": 0.7, "stretch": 0.2})
+    insights._save_cached("greenhouse:2", {"fit": "n/a", "fit_score": None,
+                                           "tech_overlap": None, "stretch": None})
+    feats = insights.cached_llm_features(["greenhouse:1", "greenhouse:2", "missing:3"])
+    assert feats == {"greenhouse:1": {"fit_score": 0.9, "tech_overlap": 0.7, "stretch": 0.2}}
+    # back-compat helper still returns just fit_score
+    assert insights.cached_fit_scores(["greenhouse:1", "greenhouse:2"]) == {"greenhouse:1": 0.9}

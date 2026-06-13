@@ -57,14 +57,33 @@ def train_page(user: str | None = None) -> HTMLResponse:
 
 @app.get("/train/deck")
 def train_deck(user: str | None = None, n: int = 15, diverse: bool = False) -> dict:
+    """Return scored cards FAST (no summaries) so the deck shows instantly; the
+    client fetches summaries lazily via /train/summaries."""
     from . import dashboard as dash
-    from . import insights, profile as prof, trainer
+    from . import trainer
 
     uid = user or dash.default_user()
     cards = trainer.build_deck(uid, limit=n, diverse=diverse)
-    # Plain-language TL;DR per card (batched + cached; no-op unless enabled).
-    cards = insights.enrich(cards, prof.profile_text(prof.get_profile(uid)))
     return {"user": uid, "cards": cards, "stats": trainer.stats(uid)}
+
+
+@app.post("/train/summaries")
+async def train_summaries(request: Request) -> dict:
+    """Generate (batched + cached) the plain-language summaries for the given
+    cards. Returns a map keyed by 'source:external_id' so the client fills them in
+    after the card is already on screen."""
+    from . import dashboard as dash
+    from . import insights, profile as prof
+
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    items = body.get("items") or []
+    enriched = insights.enrich(items, prof.profile_text(prof.get_profile(uid)))
+    fields = ("about", "tldr", "level", "skills", "fit")
+    return {"summaries": {
+        f"{c.get('source')}:{c.get('external_id')}": {k: c.get(k) for k in fields if c.get(k)}
+        for c in enriched
+    }}
 
 
 @app.post("/train/label")

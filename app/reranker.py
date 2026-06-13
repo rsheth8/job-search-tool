@@ -47,12 +47,14 @@ from .jobsources import quality
 
 logger = logging.getLogger("reranker")
 
-# `llm_fit` is the hybrid feature: the LLM's own 0-1 fit judgement (from the card
-# summarizer, cached per posting). The re-ranker learns how much to trust it from
-# the user's history — LLM comprehension weighted by personal behaviour.
-FEATURES = ("relevance", "kw_overlap", "title_hit", "loc_match", "is_remote",
-            "first_party", "llm_fit")
-_MODEL_VERSION = 2  # feature schema changed (added llm_fit) -> old models invalidated
+# Base (free) features + the hybrid LLM judgement features (insights.LLM_FEATURES:
+# fit_score, tech_overlap, stretch — the LLM's 0-1 reads, cached per posting). The
+# re-ranker learns how much to trust each from the user's history: LLM
+# comprehension weighted by personal behaviour.
+_BASE_FEATURES = ("relevance", "kw_overlap", "title_hit", "loc_match", "is_remote",
+                  "first_party")
+FEATURES = _BASE_FEATURES + insights.LLM_FEATURES
+_MODEL_VERSION = 3  # feature schema changed -> old models auto-invalidate + retrain
 _SNOOZE_WEIGHT = 0.5  # snoozed = mild negative, counts half as much as a dismiss
 
 # Training hyperparameters — fixed, small data so these are uncritical.
@@ -73,15 +75,16 @@ class Featurizer:
     """
 
     def __init__(
-        self, profile: sqlite3.Row | None, fit_scores: dict[str, float] | None = None
+        self, profile: sqlite3.Row | None,
+        llm_feats: dict[str, dict[str, float]] | None = None,
     ) -> None:
         self.terms = matcher._terms(profile)
         self.match_terms = matcher._match_terms(profile)
         self.locations = matcher._locations(profile)
-        # cache_key ("{source}:{external_id}") -> LLM fit score, for the llm_fit
-        # feature. Empty/missing -> neutral 0.5 (so the feature is harmless when
-        # summaries are off or a posting hasn't been assessed yet).
-        self.fit_scores = fit_scores or {}
+        # cache_key ("{source}:{external_id}") -> {feature: value} for the LLM
+        # features. Missing -> neutral defaults (so they're harmless when summaries
+        # are off or a posting hasn't been assessed yet).
+        self.llm_feats = llm_feats or {}
 
     def features(
         self,
@@ -108,7 +111,8 @@ class Featurizer:
         )
         is_remote = 1.0 if "remote" in haystack else 0.0
         first_party = 1.0 if (source or "").lower() in quality.FIRST_PARTY_SOURCES else 0.0
-        llm_fit = self.fit_scores.get(f"{source or ''}:{external_id or ''}", 0.5)
+        feats = self.llm_feats.get(f"{source or ''}:{external_id or ''}", {})
+        llm_vals = [feats.get(f, insights.LLM_DEFAULTS[f]) for f in insights.LLM_FEATURES]
         return [
             float(relevance if relevance is not None else 0.5),
             kw_overlap,
@@ -116,7 +120,7 @@ class Featurizer:
             loc_match,
             is_remote,
             first_party,
-            llm_fit,
+            *llm_vals,
         ]
 
 
@@ -199,10 +203,11 @@ def _labeled_examples(user_id: str) -> list[tuple]:
     return out
 
 
-def _fit_scores_for(examples: list[tuple]) -> dict[str, float]:
-    """Batch-load the LLM fit scores for these examples (keyed source:external_id)."""
+def _llm_feats_for(examples: list[tuple]) -> dict[str, dict[str, float]]:
+    """Batch-load the LLM judgement features for these examples (keyed
+    source:external_id)."""
     keys = [f"{e[3] or ''}:{e[4] or ''}" for e in examples]
-    return insights.cached_fit_scores(keys)
+    return insights.cached_llm_features(keys)
 
 
 def _build_dataset(
@@ -231,7 +236,7 @@ def train(user_id: str, profile: sqlite3.Row | None) -> dict | None:
     None when there isn't enough signal yet (cold start)."""
     s = get_settings()
     examples = _labeled_examples(user_id)
-    feat = Featurizer(profile, _fit_scores_for(examples))
+    feat = Featurizer(profile, _llm_feats_for(examples))
     X, y, w, n_pos, n_neg = _build_dataset(examples, feat)
     if n_pos < s.reranker_min_positive or n_neg < s.reranker_min_negative:
         return None
@@ -287,7 +292,7 @@ def rerank(
     try:
         weights, bias = model["weights"], model["bias"]
         keys = [f"{p.source or ''}:{p.external_id or ''}" for p, _ in scored]
-        feat = Featurizer(profile, insights.cached_fit_scores(keys))
+        feat = Featurizer(profile, insights.cached_llm_features(keys))
         out = []
         for posting, base in scored:
             x = feat.features(

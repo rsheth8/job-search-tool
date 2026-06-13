@@ -51,14 +51,18 @@ def test_featurizer_shape_and_values():
     assert x[5] == 1.0                  # first_party (greenhouse)
 
 
-def test_featurizer_llm_fit_from_cache_else_neutral():
-    feat = reranker.Featurizer(_profile(), {"greenhouse:job1": 0.9})
+def test_featurizer_llm_features_from_cache_else_neutral():
+    from app.insights import LLM_FEATURES
+    base = len(reranker.FEATURES) - len(LLM_FEATURES)
+    feat = reranker.Featurizer(_profile(), {
+        "greenhouse:job1": {"fit_score": 0.9, "tech_overlap": 0.8, "stretch": 0.2}})
     hit = feat.features(title="X", location="", description="", source="greenhouse",
                         relevance=0.5, external_id="job1")
     miss = feat.features(title="X", location="", description="", source="greenhouse",
                          relevance=0.5, external_id="unknown")
-    assert hit[-1] == 0.9    # llm_fit pulled from the cache map
-    assert miss[-1] == 0.5   # neutral default when not assessed
+    assert hit[base + LLM_FEATURES.index("fit_score")] == 0.9      # from cache
+    assert hit[base + LLM_FEATURES.index("tech_overlap")] == 0.8
+    assert miss[base:] == [0.5, 0.5, 0.5]                          # all neutral defaults
 
 
 def test_featurizer_relevance_defaults_when_missing():
