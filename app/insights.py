@@ -218,6 +218,27 @@ def summarize_batch(cards: list[dict], profile_block: str) -> dict[int, dict]:
     return out
 
 
+def enrich_postings(postings, profile_block: str, *, summarize=None) -> None:
+    """Summarize ``JobPosting`` objects so their numeric LLM features (fit_score,
+    tech_overlap, stretch) land in the cache for the re-ranker.
+
+    Discovery never shows cards, so without this its strongest signal (llm_fit)
+    would always default to neutral. Same gating/cap/fail-open as ``enrich`` — a
+    no-op when summaries are disabled or over the daily cap. Results are persisted
+    to the shared cache; the postings themselves aren't mutated."""
+    cards = [
+        {
+            "source": p.source,
+            "external_id": p.external_id,
+            "company": p.company or p.source,
+            "title": p.title or "",
+            "description": p.description or "",
+        }
+        for p in postings
+    ]
+    enrich(cards, profile_block, summarize=summarize)
+
+
 def _apply(card: dict, data: dict) -> None:
     for f in _FIELDS:
         val = (data.get(f) or "").strip()

@@ -86,6 +86,30 @@ def test_cache_helpers_roundtrip():
     assert "missing:x" not in got
 
 
+def test_enrich_postings_caches_llm_features_for_reranker():
+    """Discovery feeds JobPostings (not card dicts); enrich_postings must summarize
+    them so the numeric features land in the cache for the re-ranker."""
+    from app.jobsources import JobPosting
+
+    postings = [
+        JobPosting(source="greenhouse", external_id="d1", title="ML Engineer",
+                   url="https://x", company="Acme", location="Remote",
+                   description="Train models."),
+        JobPosting(source="greenhouse", external_id="d2", title="Data Analyst",
+                   url="https://y", company="Beta", location="NYC",
+                   description="Dashboards."),
+    ]
+
+    def fake(cards, profile_block):
+        return {i: {"tldr": "t", "fit": "f", "fit_score": 0.9 - 0.4 * i,
+                    "tech_overlap": 0.8, "stretch": 0.2} for i, _ in enumerate(cards)}
+
+    insights.enrich_postings(postings, "candidate", summarize=fake)
+    feats = insights.cached_llm_features(["greenhouse:d1", "greenhouse:d2"])
+    assert feats["greenhouse:d1"]["fit_score"] == 0.9
+    assert feats["greenhouse:d2"]["fit_score"] == 0.5
+
+
 def test_cached_llm_features_extracts_numeric():
     insights._save_cached("greenhouse:1", {"fit": "good", "fit_score": 0.9,
                                            "tech_overlap": 0.7, "stretch": 0.2})

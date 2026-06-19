@@ -231,9 +231,13 @@ def _build_dataset(
     return X, y, w, n_pos, n_neg
 
 
-def train(user_id: str, profile: sqlite3.Row | None) -> dict | None:
-    """Train + persist a model from the user's labels. Returns the model dict, or
-    None when there isn't enough signal yet (cold start)."""
+def _train_model(
+    user_id: str, profile: sqlite3.Row | None
+) -> tuple[dict, list[list[float]], list[float], list[float]] | None:
+    """Fit a model from the user's labels WITHOUT persisting. Returns
+    ``(model, X, y, sample_weight)``, or None below the per-class minimums (cold
+    start). The dataset is handed back so callers can run a hold-out check before
+    deciding to promote."""
     s = get_settings()
     examples = _labeled_examples(user_id)
     feat = Featurizer(profile, _llm_feats_for(examples))
@@ -253,24 +257,111 @@ def train(user_id: str, profile: sqlite3.Row | None) -> dict | None:
         "n_labels": len(examples),
         "trained_at": datetime.now(timezone.utc).isoformat(),
     }
+    return model, X, y, w
+
+
+def train(user_id: str, profile: sqlite3.Row | None) -> dict | None:
+    """Train + persist a model from the user's labels. Returns the model dict, or
+    None when there isn't enough signal yet (cold start). This is the explicit
+    path — it always persists; the hold-out guard lives in ``maybe_retrain``."""
+    built = _train_model(user_id, profile)
+    if built is None:
+        return None
+    model = built[0]
     _save_model(user_id, model)
-    logger.info(
-        "reranker trained for %s (%d pos / %d neg)", user_id, n_pos, n_neg
-    )
+    logger.info("reranker trained for %s (%d labels)", user_id, model["n_labels"])
     return model
 
 
 def maybe_retrain(user_id: str, profile: sqlite3.Row | None) -> None:
     """Train on first eligibility and whenever the label count changed. Cheap to
-    call every tick (tiny data); never raises."""
+    call every tick (tiny data); never raises.
+
+    Hold-out guard: once an incumbent model exists, a freshly-fit candidate only
+    replaces it if it ranks held-out labels at least as well (AUC). This stops a
+    noisy batch of new labels from silently degrading production ranking."""
     try:
         current = _label_count(user_id)
         existing = load_model(user_id)
         if existing is not None and existing.get("n_labels") == current:
             return  # nothing new to learn from
-        train(user_id, profile)
+        built = _train_model(user_id, profile)
+        if built is None:
+            return
+        model, X, y, w = built
+        if existing is not None and not _beats_incumbent(X, y, w, existing):
+            logger.info(
+                "reranker: candidate didn't beat incumbent for %s — keeping current",
+                user_id,
+            )
+            return
+        _save_model(user_id, model)
+        logger.info("reranker trained for %s (%d labels)", user_id, model["n_labels"])
     except Exception:  # noqa: BLE001 — re-ranking is best-effort
         logger.warning("reranker maybe_retrain failed for %s", user_id, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# Hold-out promotion guard
+# ---------------------------------------------------------------------------
+
+_HOLDOUT_FRAC = 0.25  # share of each class held out to score candidate vs incumbent
+
+
+def _auc(pairs: list[tuple[float, float]]) -> float:
+    """Rank-AUC (probability a random positive outscores a random negative).
+    0.5 when a class is missing (uninformative)."""
+    pos = [s for s, label in pairs if label >= 0.5]
+    neg = [s for s, label in pairs if label < 0.5]
+    if not pos or not neg:
+        return 0.5
+    wins = ties = 0
+    for ps in pos:
+        for ns in neg:
+            if ps > ns:
+                wins += 1
+            elif ps == ns:
+                ties += 1
+    return (wins + 0.5 * ties) / (len(pos) * len(neg))
+
+
+def _spread(idx: list[int], frac: float) -> list[int]:
+    """Pick ``frac`` of ``idx`` evenly across its length (deterministic)."""
+    n = int(len(idx) * frac)
+    if n < 1:
+        return []
+    step = len(idx) / n
+    return [idx[int(i * step)] for i in range(n)]
+
+
+def _beats_incumbent(
+    X: list[list[float]], y: list[float], w: list[float], incumbent: dict
+) -> bool:
+    """True if a model refit on a train split ranks the held-out labels at least
+    as well as the incumbent. Falls back to True (promote) when there isn't enough
+    data to carve a balanced hold-out — the freshest fit on more data wins by
+    default. The incumbent is scored on rows it was trained on, so this check is
+    deliberately conservative (biased toward keeping the current model)."""
+    if incumbent.get("features") != list(FEATURES):
+        return True  # schema differs — let the new model replace it
+    pos = [i for i, v in enumerate(y) if v >= 0.5]
+    neg = [i for i, v in enumerate(y) if v < 0.5]
+    if int(len(pos) * _HOLDOUT_FRAC) < 1 or int(len(neg) * _HOLDOUT_FRAC) < 1:
+        return True  # too few labels to hold out a balanced eval set
+    # Spread the hold-out evenly across each class (not the tail) so it stays
+    # representative regardless of label insertion order.
+    holdout = set(_spread(pos, _HOLDOUT_FRAC)) | set(_spread(neg, _HOLDOUT_FRAC))
+    tr = [i for i in range(len(y)) if i not in holdout]
+    if not any(y[i] >= 0.5 for i in tr) or not any(y[i] < 0.5 for i in tr):
+        return True  # train split lost a class — can't evaluate fairly
+    try:
+        cw, cb = _fit([X[i] for i in tr], [y[i] for i in tr], [w[i] for i in tr])
+    except (ValueError, OverflowError):
+        return True
+    iw, ib = incumbent["weights"], incumbent["bias"]
+    cand = [(_predict(cw, cb, X[i]), y[i]) for i in holdout]
+    inc = [(_predict(iw, ib, X[i]), y[i]) for i in holdout]
+    return _auc(cand) >= _auc(inc)
 
 
 # ---------------------------------------------------------------------------

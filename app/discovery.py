@@ -17,8 +17,8 @@ import re
 from datetime import datetime, timezone
 
 from . import (
-    eligibility, job_alerts, jobstore, matcher, posting_match, profile, reminders,
-    reranker, wide_discovery,
+    eligibility, insights, job_alerts, jobstore, matcher, posting_match, profile,
+    reminders, reranker, wide_discovery,
 )
 from .config import get_settings
 from .jobsources import NON_BOARD_SOURCES, JobPosting, fetch_source
@@ -185,6 +185,11 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
     #    ranking with the user's own apply/dismiss model (no-op until trained).
     scored = matcher.score(candidates, prof)
     if settings.reranker_enabled:
+        # Cache the LLM judgement features (fit_score, …) for this set so the
+        # re-ranker's strongest signal isn't defaulted to neutral here the way it
+        # is when discovery skips summarization. No-op unless deck summaries are
+        # enabled + keyed; gated, daily-capped and fail-open inside enrich.
+        insights.enrich_postings(candidates, profile.profile_text(prof))
         reranker.maybe_retrain(user_id, prof)
         scored = reranker.rerank(user_id, prof, scored)
 
