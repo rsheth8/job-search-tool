@@ -142,6 +142,16 @@ class Settings(BaseSettings):
     deck_tldr_enabled: bool = False
     deck_tldr_max_calls_per_day: int = 50
 
+    # --- Application autofill (browser extension, Track C) ----------------
+    # The autofill extension calls /apply/* from ATS origins (greenhouse.io, …).
+    # When set, the cross-origin autofill endpoints require this token in an
+    # X-Apply-Token header; left blank (default) they're open (fine for local/dev,
+    # a personal single-user tool). Always set it before exposing publicly.
+    apply_api_token: str = ""
+    # Comma-separated allowed CORS origins for the autofill endpoints; "*" allows
+    # any (token still gates writes). Tighten to specific ATS domains in prod.
+    apply_cors_origins: str = "*"
+
     @property
     def serpapi_enabled(self) -> bool:
         return bool(self.serpapi_api_key.strip())

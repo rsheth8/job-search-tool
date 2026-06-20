@@ -313,6 +313,73 @@ def draft_application_answers(
     return _draft_application_template(company, title, background)
 
 
+def answer_application_question(
+    question: str, company: str, title: str, description: str | None,
+    profile_row=None, *, identity_block: str = "",
+) -> str:
+    """Draft an answer to ONE free-text application question ("Why do you want to
+    work here?", "Describe a hard problem you solved"), grounded in the candidate's
+    background. Claude when keyed; otherwise a generic-but-usable template. Never
+    hard-fails — the browser autofill always gets *something* to show + edit."""
+    background = ""
+    if profile_row is not None:
+        from .profile import profile_text
+
+        background = profile_text(profile_row)
+    if get_settings().use_llm_router:
+        try:
+            return _answer_question_via_claude(
+                question, company, title, description, background, identity_block
+            )
+        except Exception:  # network/auth/parse — fall back, never block the form
+            logger.exception("Claude question answer failed; using template")
+    return _answer_question_template(question, company, title)
+
+
+def _answer_question_template(question: str, company: str, title: str) -> str:
+    role = title or "this role"
+    return (
+        f"I'm genuinely excited about {role} at {company}. "
+        f"(Re: \"{question.strip()}\") I'd bring strong ownership and a track "
+        "record of shipping, and I'm eager to contribute and grow with the team."
+    )
+
+
+def _answer_question_via_claude(
+    question: str, company: str, title: str, description: str | None,
+    background: str, identity_block: str,
+) -> str:
+    import anthropic
+
+    s = get_settings()
+    client = anthropic.Anthropic(api_key=s.anthropic_api_key)
+    desc = (description or "").strip()[:1000]
+    resp = client.messages.create(
+        model=s.anthropic_model,
+        max_tokens=320,
+        system=(
+            "You answer a single job-application question in the candidate's own "
+            "first-person voice. Be specific, honest, and concise (under 700 "
+            "characters unless the question clearly needs more). Ground every claim "
+            "in the candidate's background — never invent experience, employers, or "
+            "numbers. No preamble, no placeholders like [your name], no sign-off — "
+            "output only the answer text."
+        ),
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Question: {question.strip()}\n\n"
+                f"Role: {title} at {company}.\n"
+                f"Candidate: {identity_block or '(not provided)'}\n"
+                f"Background:\n{background or '(not provided)'}\n"
+                f"Job description (may be truncated):\n{desc or '(not provided)'}"
+            ),
+        }],
+    )
+    text = next((b.text for b in resp.content if b.type == "text"), "").strip()
+    return text or _answer_question_template(question, company, title)
+
+
 def _draft_application_template(company: str, title: str, background: str) -> str:
     role = title or "this role"
     fit = ""

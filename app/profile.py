@@ -15,7 +15,7 @@ from .db import connect
 # Columns a caller may set; user_id/updated_at are managed here.
 _FIELDS = (
     "roles", "keywords", "locations", "seniority", "resume_summary",
-    "prefs_json", "min_relevance",
+    "prefs_json", "min_relevance", "applicant_json",
 )
 
 
