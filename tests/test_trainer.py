@@ -51,6 +51,56 @@ def test_diverse_mode_skips_prefilter_to_surface_off_target():
     assert "Frontend Engineer" in {c["title"] for c in mixed}  # off-target surfaces
 
 
+def test_uncertain_mode_surfaces_least_confident_first():
+    """Active learning: with a trained model, the deck is ordered by how uncertain
+    the model is about each posting (predicted probability nearest 0.5 first),
+    which differs from the plain relevance sort."""
+    from app import jobstore, matcher, profile
+
+    profile.set_profile("u1", roles="software engineer", locations="remote")
+    # Train a model that keys on title_hit + first_party (apply = SWE roles on a
+    # company ATS; pass = non-SWE roles off an aggregator), so postings land at a
+    # spread of confidences rather than all-or-nothing.
+    for i in range(8):
+        jobstore.save_posting("u1", _posting("Software Engineer", f"p{i}",
+                              company=f"Co{i}", source="greenhouse"),
+                              relevance_score=0.6, status="applied")
+    for i in range(8):
+        jobstore.save_posting("u1", _posting("Data Entry Clerk", f"n{i}",
+                              company=f"X{i}", source="rss", desc="filing"),
+                              relevance_score=0.2, status="dismissed")
+    prof = profile.get_profile("u1")
+    assert reranker.train("u1", prof) is not None
+
+    # Distinct (company, title) so none are deduped; mixed signals create a spread.
+    posts = [
+        _posting("Software Engineer", "a", company="Alpha", source="greenhouse"),
+        _posting("Data Entry Clerk", "b", company="Bravo", source="rss", desc="filing"),
+        _posting("Software Engineer", "c", company="Charlie", source="rss"),
+    ]
+    deck = trainer.build_deck("u1", limit=3, uncertain=True, fetch=_deck_fetch(posts))
+
+    # Expected order computed the same way the deck does (heuristic relevance →
+    # model probability → sort by closeness to 0.5).
+    scored = matcher.score(posts, prof, allow_llm=False, allow_embeddings=False)
+    preds = reranker.predict("u1", prof, scored)
+    expected = [p.external_id for p, _ in sorted(preds, key=lambda t: abs(t[1] - 0.5))]
+    assert [c["external_id"] for c in deck] == expected
+    # And it's genuinely an active-learning reorder, not the relevance sort.
+    relevance_order = [p.external_id for p, _ in
+                       sorted(scored, key=lambda t: t[1], reverse=True)]
+    assert expected != relevance_order
+
+
+def test_uncertain_mode_falls_back_to_relevance_without_model():
+    # Cold start (no trained model): Learn mode is safe — it just returns a deck
+    # rather than erroring, ordered by the heuristic relevance.
+    posts = [_posting("Software Engineer", "1"), _posting("Sales Rep", "2")]
+    deck = trainer.build_deck("u1", uncertain=True, fetch=_deck_fetch(posts))
+    assert len(deck) == 2
+    assert deck[0]["relevance_score"] >= deck[1]["relevance_score"]
+
+
 def test_build_deck_excludes_already_labeled():
     p = _posting("Software Engineer", "1")
     trainer.record_label("u1", trainer._card(p, 0.5), "like")
