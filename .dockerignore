@@ -13,4 +13,6 @@ resumes/
 handoff.md
 README.md
 deploy
-scripts
+# NOTE: scripts/ IS baked into the image on purpose — it holds operational tools
+# meant to run in production (scripts.import_user / scripts.migrate_user via
+# `fly ssh`). Don't re-add it here; the analysis-only scripts are tiny + harmless.
