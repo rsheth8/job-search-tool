@@ -165,14 +165,28 @@ def last_application(user_id: str) -> sqlite3.Row | None:
     return rows[0] if rows else None
 
 
-def application_outcomes(user_id: str) -> list[sqlite3.Row]:
-    """(company, role, status) for every logged application — the re-ranker uses
-    the current stage to grade how strong an 'applied' label is."""
+def application_outcomes(user_id: str) -> list[tuple[str | None, str | None, list[str]]]:
+    """(company, role, stages) per application, where ``stages`` is every stage it
+    ever reached — the current status plus the full status-change history. The
+    re-ranker grades an 'applied' label by the FURTHEST stage, so e.g. an
+    onsite-then-rejected application still gets credit for the onsite."""
     with connect() as conn:
-        return conn.execute(
-            "SELECT company, role, status FROM applications WHERE user_id = ?",
+        apps = conn.execute(
+            "SELECT id, company, role, status FROM applications WHERE user_id = ?",
             (user_id,),
         ).fetchall()
+        out: list[tuple[str | None, str | None, list[str]]] = []
+        for a in apps:
+            stages = {a["status"]} if a["status"] else set()
+            for e in conn.execute(
+                "SELECT content FROM application_events "
+                "WHERE application_id = ? AND type = 'status'",
+                (a["id"],),
+            ):
+                if e["content"]:
+                    stages.add(e["content"])
+            out.append((a["company"], a["role"], list(stages)))
+        return out
 
 
 def edit_application(

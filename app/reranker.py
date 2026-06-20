@@ -199,10 +199,12 @@ def _outcome_grader(user_id: str):
 
     def grade(company: str | None, title: str | None) -> float:
         best: float | None = None
-        for a in apps:
-            if posting_match.matches_application(a["company"], a["role"], company, title):
-                wt = _OUTCOME_WEIGHTS.get(a["status"], _DEFAULT_APPLIED_WEIGHT)
-                if best is None or wt > best:  # furthest stage among duplicates
+        for comp, role, stages in apps:
+            if posting_match.matches_application(comp, role, company, title):
+                # Credit the furthest stage this application reached.
+                wt = max((_OUTCOME_WEIGHTS.get(s, _DEFAULT_APPLIED_WEIGHT) for s in stages),
+                         default=_DEFAULT_APPLIED_WEIGHT)
+                if best is None or wt > best:  # best across duplicate applications
                     best = wt
         return best if best is not None else _DEFAULT_APPLIED_WEIGHT
 

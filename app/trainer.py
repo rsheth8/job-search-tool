@@ -350,7 +350,8 @@ function renderProgress(st){
   const need = (st.need_likes||0) + (st.need_passes||0);
   const have = Math.min(5,st.likes||0) + Math.min(5,st.passes||0);
   $('progfill').style.width = (st.model_trained ? 100 : Math.round(have/10*100)) + '%';
-  $('counts').innerHTML = `&#128077; ${st.likes||0} would-apply &nbsp;&middot;&nbsp; &#128078; ${st.passes||0} pass`;
+  $('counts').innerHTML = `&#128077; ${st.likes||0} would-apply &nbsp;&middot;&nbsp; &#128078; ${st.passes||0} pass`
+    + (st.nudge_passes ? ` &nbsp;&middot;&nbsp; <span style="color:#f59e0b">add a few passes to sharpen your matcher</span>` : '');
   const s = $('status');
   if (st.model_trained){ s.className='pill ok'; s.innerHTML = `&#9989; Trained on ${st.model_n_labels}`; }
   else { s.className='pill'; s.innerHTML = `${need} more to train`; }
@@ -502,14 +503,19 @@ def stats(user_id: str) -> dict:
     counts = {r["label"]: r["n"] for r in rows}
     likes = counts.get("like", 0)
     passes = counts.get("pass", 0)
+    total = likes + passes
     model = reranker.load_model(user_id)
     return {
         "user": user_id,
         "likes": likes,
         "passes": passes,
-        "total": likes + passes,
+        "total": total,
         "need_likes": max(0, s.reranker_min_positive - likes),
         "need_passes": max(0, s.reranker_min_negative - passes),
+        # The re-ranker learns most from negatives; a like-heavy history is the
+        # measured bottleneck. Once there's a bit of data, flag the imbalance so
+        # the UI can nudge toward deliberate passes (and the Learn/Mix decks).
+        "nudge_passes": total >= 10 and passes < 0.35 * total,
         "model_trained": model is not None,
         "model_n_labels": (model or {}).get("n_labels"),
         "model_trained_at": (model or {}).get("trained_at"),
