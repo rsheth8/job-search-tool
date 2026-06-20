@@ -140,6 +140,14 @@ _SNOOZE_JOB_RE = re.compile(
     r"|\bsnooze\b\s+the\s+(.+?)\s+(?:one|posting|role|job|opening)\b",
     re.I,
 )
+# QUEUE_JOB: stage a surfaced posting into the apply queue ("queue 5", "stage #5",
+# "queue the stripe one"). Distinct from "apply" — staging just prepares the
+# application package; it never logs an application.
+_QUEUE_JOB_RE = re.compile(
+    r"\b(?:queue|stage)\b\s*(?:up\s+)?#?(\d+)\b"
+    r"|\b(?:queue|stage)\b\s+(?:up\s+)?the\s+(.+?)\s+(?:one|posting|role|job|opening)\b",
+    re.I,
+)
 
 # PROFILE: set search criteria, or show the saved profile.
 _PROFILE_SET_RE = re.compile(
@@ -509,6 +517,15 @@ class HeuristicRouter:
                 company=company, time_reference=time_ref,
                 confidence=0.9 if pid else 0.8,
             )
+
+        m = _QUEUE_JOB_RE.search(low)
+        if m:
+            pid = m.group(1)
+            if pid:
+                return ParsedMessage(intent=Intent.QUEUE_JOB, message=str(int(pid)),
+                                     confidence=0.9)
+            return ParsedMessage(intent=Intent.QUEUE_JOB,
+                                 company=_company_from(m.group(2)), confidence=0.8)
 
         tuned = _parse_tune(low)
         if tuned is not None:

@@ -67,6 +67,46 @@ def test_past_tense_applied_stays_apply():
     assert R.parse("applied to a job at google").intent == Intent.APPLY
 
 
+@pytest.mark.parametrize("text,company,msg", [
+    ("queue 3", None, "3"),
+    ("stage #7", None, "7"),
+    ("queue up 2", None, "2"),
+    ("queue the stripe one", "Stripe", None),
+])
+def test_queue_job_routes(text, company, msg):
+    p = R.parse(text)
+    assert p.intent == Intent.QUEUE_JOB
+    assert p.message == msg
+    if company:
+        assert p.company == company
+
+
+def test_queue_job_stages_without_applying():
+    from app import apply_queue, store
+
+    row = jobstore.save_posting(
+        "u",
+        JobPosting("greenhouse", "1", "Backend Engineer", "https://x/1",
+                   company="Acme", location="Remote", description="python, apis"),
+        relevance_score=0.82, status="queued",
+    )
+    reply = handle_sms("u", f"queue {row['id']}")
+    assert "/apply" in reply and "Backend Engineer" in reply
+
+    # Staged into the apply queue…
+    assert [it["posting_id"] for it in apply_queue.list_queue("u")] == [row["id"]]
+    # …but NOT applied: no application logged, posting stays queued.
+    assert store.list_applications("u") == []
+    assert jobstore.get_posting("u", row["id"])["status"] == "queued"
+
+    # Idempotent: queueing again just says it's already there.
+    assert "already in your apply queue" in handle_sms("u", f"queue {row['id']}")
+
+
+def test_queue_job_unknown_id():
+    assert "don't have job #999" in handle_sms("u", "queue 999")
+
+
 # --- engine wiring ---------------------------------------------------------
 
 def test_track_add_list_remove(monkeypatch):

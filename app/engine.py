@@ -94,6 +94,7 @@ MENU = (
     "  \"any new jobs\" — quick list of queued matches\n"
     "  \"review jobs\" — go through new matches one by one (skip / apply / stop)\n"
     "  \"apply 2\" — get the link + a drafted blurb for posting #2 (I log it)\n"
+    "  \"queue 2\" — stage #2 to your apply queue (package ready to review at /apply)\n"
     "  \"dismiss 2\" · \"snooze 2 for a week\" — clear a posting you're not into\n"
     "  \"only show 80%+ matches\" · \"be less picky\" — tune match strictness\n"
     "\n"
@@ -209,7 +210,8 @@ def _looks_like_new_command(p: ParsedMessage, text: str, pending: Pending) -> bo
         p.intent in (Intent.LIST, Intent.QUERY, Intent.STATS, Intent.DEADLINE,
                      Intent.CHECK, Intent.UNDO, Intent.JOBS, Intent.JOBS_REVIEW,
                      Intent.TRACK, Intent.PROFILE, Intent.APPLY_JOB,
-                     Intent.DISMISS_JOB, Intent.SNOOZE_JOB, Intent.TUNE)
+                     Intent.QUEUE_JOB, Intent.DISMISS_JOB, Intent.SNOOZE_JOB,
+                     Intent.TUNE)
         and p.confidence >= 0.7
     ):
         return True
@@ -262,6 +264,8 @@ def _start(user_id: str, p: ParsedMessage, raw: str) -> str:
         return _do_profile(user_id, p, raw)
     if p.intent == Intent.APPLY_JOB:
         return _do_apply_job(user_id, p, raw)
+    if p.intent == Intent.QUEUE_JOB:
+        return _do_queue_job(user_id, p)
     if p.intent == Intent.DISMISS_JOB:
         return _do_dismiss_job(user_id, p)
     if p.intent == Intent.SNOOZE_JOB:
@@ -893,7 +897,7 @@ def _resolve_posting(user_id: str, p: ParsedMessage):
         # Most relevant un-applied posting for that company (alerted/new only).
         for row in jobstore.list_postings(
             user_id,
-            statuses=("alerted", "new"),
+            statuses=("alerted", "queued", "new"),
             limit=25,
             exclude_already_applied=True,
         ):
@@ -999,6 +1003,26 @@ def _posting_not_found(p: ParsedMessage, verb: str) -> str:
         return f"I don't have an open posting from {p.company} to {verb}."
     return (f"Which posting should I {verb}? Reply '{verb} <#>' with a number "
             "from a job alert.")
+
+
+def _do_queue_job(user_id: str, p: ParsedMessage) -> str:
+    """Stage a surfaced posting into the apply queue. We pre-assemble the
+    application package (draft answers + tailored resume) for review at /apply —
+    nothing is applied or submitted here."""
+    posting = _resolve_posting(user_id, p)
+    if posting is None:
+        return _posting_not_found(p, "queue")
+    from . import apply_queue
+
+    label = _posting_label(posting)
+    if not apply_queue.stage(user_id, posting["id"]):
+        return (f"#{posting['id']} ({label}) is already in your apply queue — "
+                "review and submit it at /apply.")
+    return (
+        f"📥 Staged #{posting['id']} ({label}) to your apply queue. I'll have the "
+        "application package (draft answers + tailored resume) ready to review and "
+        "submit at /apply — I never submit anything for you."
+    )
 
 
 def _do_dismiss_job(user_id: str, p: ParsedMessage) -> str:
