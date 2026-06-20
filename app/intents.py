@@ -28,6 +28,7 @@ class Intent(str, Enum):
     PROFILE = "PROFILE"  # set or show the job-search profile
     # Assisted apply (Phase 2)
     APPLY_JOB = "APPLY_JOB"  # apply to a discovered posting (by # or company)
+    QUEUE_JOB = "QUEUE_JOB"  # stage a discovered posting into the apply queue
     # Discovery polish
     DISMISS_JOB = "DISMISS_JOB"  # hide a discovered posting for good
     SNOOZE_JOB = "SNOOZE_JOB"    # mute a posting for a while, then resurface
