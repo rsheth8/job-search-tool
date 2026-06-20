@@ -21,7 +21,7 @@ from . import profile as profile_mod
 #   bools (work_authorized / needs_sponsorship) are stored as real booleans.
 TEXT_FIELDS = (
     "first_name", "last_name", "full_name", "email", "phone",
-    "city", "state", "country", "linkedin", "github", "portfolio",
+    "city", "state", "country", "location", "linkedin", "github", "portfolio",
     "school", "grad_year", "years_experience",
 )
 BOOL_FIELDS = ("work_authorized", "needs_sponsorship")
@@ -38,6 +38,12 @@ def get_identity(user_id: str) -> dict:
         joined = " ".join(p for p in (data.get("first_name"), data.get("last_name")) if p)
         if joined:
             data["full_name"] = joined
+    if not data.get("location"):
+        # "Chicago, IL" / "Chicago, IL, USA" — what most "current location" fields want.
+        loc = ", ".join(p for p in (data.get("city"), data.get("state"),
+                                    data.get("country")) if p)
+        if loc:
+            data["location"] = loc
     return data
 
 

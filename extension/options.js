@@ -2,7 +2,7 @@
  * identity to the server (/apply/identity). */
 const CONN = ["baseUrl", "user", "token", "postingId"];
 const TEXT = ["first_name", "last_name", "email", "phone", "city", "state",
-  "country", "linkedin", "github", "portfolio", "school", "grad_year",
+  "country", "location", "linkedin", "github", "portfolio", "school", "grad_year",
   "years_experience"];
 const BOOL = ["work_authorized", "needs_sponsorship"];
 const $ = (id) => document.getElementById(id);

@@ -25,6 +25,15 @@ def test_identity_partial_update_and_full_name_derivation():
     assert d["email"] == "ada@x.com" and d["phone"] == "555-1234"
 
 
+def test_location_derived_from_city_state():
+    applicant.set_identity("u1", {"city": "Chicago", "state": "IL"})
+    assert applicant.get_identity("u1")["location"] == "Chicago, IL"
+    # An explicit location wins over the derived one.
+    applicant.set_identity("u1", {"location": "Remote (US)"})
+    assert applicant.get_identity("u1")["location"] == "Remote (US)"
+    assert applicant.autofill_map("u1")["location"] == "Remote (US)"
+
+
 def test_identity_bools_and_unknown_keys():
     applicant.set_identity("u1", {"work_authorized": "yes", "needs_sponsorship": False,
                                   "favourite_color": "blue"})

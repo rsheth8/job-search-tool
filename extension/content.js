@@ -21,6 +21,8 @@
     ["linkedin", /linked.?in/i],
     ["github", /git.?hub/i],
     ["portfolio", /portfolio|personal (web)?site|website|url/i],
+    // Combined "Chicago, IL"-style fields first, so they win over bare city/state.
+    ["location", /\blocation\b|where are you (based|located)|city.{0,5}state/i],
     ["city", /\bcity\b|town/i],
     ["state", /\bstate\b|province|region/i],
     ["country", /country/i],
@@ -65,10 +67,13 @@
     const key = matchKey(label);
 
     if (key && IDENTITY[key] != null && IDENTITY[key] !== "") {
+      // A known fact (name/email/location/…) — fill it directly.
       showChip(el, `Fill: ${truncate(IDENTITY[key], 40)}`, () => fill(el, IDENTITY[key]));
-    } else if (isFreeText(el, label)) {
+    } else if (isEssay(el)) {
+      // A genuine free-text question — offer a drafted answer.
       showChip(el, "✨ Draft answer", () => draftAnswer(el, fieldLabel(el)));
     } else {
+      // Unknown short field — stay out of the way; don't draft a paragraph into it.
       hideChip();
     }
   }
@@ -82,9 +87,11 @@
     return ["text", "email", "tel", "url", "search", ""].includes(t);
   }
 
-  function isFreeText(el, label) {
-    if (el.tagName.toLowerCase() === "textarea") return true;
-    return label.length > 40 || label.includes("?");
+  // Only <textarea>s get the "Draft answer" treatment. Application essays are
+  // textareas; short facts (location, name, links) are <input>s — drafting a
+  // paragraph into one of those was the wrong behavior.
+  function isEssay(el) {
+    return el.tagName.toLowerCase() === "textarea";
   }
 
   // Best label text for a field: <label for>, aria-label, placeholder, name, id.
