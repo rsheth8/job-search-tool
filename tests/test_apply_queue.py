@@ -51,6 +51,36 @@ def test_get_package_assembles_and_caches_answers():
     assert apply_queue.get_package("u1", pid)["answers"] == pkg["answers"]
 
 
+def test_get_package_includes_identity():
+    from app import applicant
+    applicant.set_identity("u1", {"first_name": "Ada", "email": "ada@x.com",
+                                  "city": "Chicago", "state": "IL"})
+    pid = _save()
+    apply_queue.stage("u1", pid)
+    pkg = apply_queue.get_package("u1", pid)
+    assert pkg["identity"]["email"] == "ada@x.com"
+    assert pkg["identity"]["location"] == "Chicago, IL"   # derived
+
+
+def test_save_answer_persists_edit():
+    pid = _save()
+    apply_queue.stage("u1", pid)
+    apply_queue.get_package("u1", pid)                     # assemble first
+    assert apply_queue.save_answer("u1", pid, "My edited answer.") is True
+    assert apply_queue.get_package("u1", pid)["answers"] == "My edited answer."
+    assert apply_queue.save_answer("u1", 99999, "x") is False  # not staged
+
+
+def test_redraft_regenerates_answer():
+    pid = _save()
+    apply_queue.stage("u1", pid)
+    apply_queue.save_answer("u1", pid, "stale")
+    fresh = apply_queue.redraft_answer("u1", pid)
+    assert fresh and fresh != "stale"
+    assert apply_queue.get_package("u1", pid)["answers"] == fresh   # cached
+    assert apply_queue.redraft_answer("u1", 99999) is None          # not staged
+
+
 def test_get_package_missing_item_returns_none():
     pid = _save()
     # Posting exists but was never staged.
@@ -103,6 +133,22 @@ def test_endpoints_stage_review_and_mark():
     assert c.post("/apply/mark", json={"user": "u1", "posting_id": pid,
                                        "status": "submitted"}).json()["ok"]
     assert c.get("/apply/data?user=u1").json()["queue"][0]["status"] == "submitted"
+
+
+def test_answer_save_and_redraft_endpoints():
+    pid = _save()
+    c = _client()
+    c.post("/apply/stage", json={"user": "u1", "posting_id": pid})
+    c.post("/apply/package", json={"user": "u1", "posting_id": pid})
+
+    assert c.post("/apply/answer/save",
+                  json={"user": "u1", "posting_id": pid, "answer": "edited"}).json()["ok"]
+    pkg = c.post("/apply/package", json={"user": "u1", "posting_id": pid}).json()
+    assert pkg["answers"] == "edited"
+
+    fresh = c.post("/apply/answer/redraft",
+                   json={"user": "u1", "posting_id": pid}).json()["answer"]
+    assert fresh and fresh != "edited"
 
 
 def test_resume_endpoint_404_when_unavailable():

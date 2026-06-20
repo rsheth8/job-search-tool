@@ -185,6 +185,30 @@ async def apply_package(request: Request) -> dict:
     return pkg or {"error": "not found"}
 
 
+@app.post("/apply/answer/save")
+async def apply_answer_save(request: Request) -> dict:
+    """Persist a user-edited drafted answer for a staged item."""
+    from . import apply_queue
+    from . import dashboard as dash
+
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    ok = apply_queue.save_answer(uid, int(body["posting_id"]), body.get("answer", ""))
+    return {"ok": ok}
+
+
+@app.post("/apply/answer/redraft")
+async def apply_answer_redraft(request: Request) -> dict:
+    """Regenerate the drafted answer for a staged item from scratch."""
+    from . import apply_queue
+    from . import dashboard as dash
+
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    answer = apply_queue.redraft_answer(uid, int(body["posting_id"]))
+    return {"answer": answer} if answer is not None else {"error": "not found"}
+
+
 @app.post("/apply/mark")
 async def apply_mark(request: Request) -> dict:
     from . import apply_queue
