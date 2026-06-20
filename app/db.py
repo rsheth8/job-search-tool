@@ -286,6 +286,21 @@ CREATE TABLE IF NOT EXISTS posting_summaries (
     summary_json TEXT NOT NULL,      -- {tldr, level, skills, fit}
     created_at   TEXT NOT NULL
 );
+
+-- Semi-auto application queue (Track C): postings the user has staged to apply
+-- to, with a pre-assembled package (draft answers + tailored resume) ready for a
+-- final human review. Status walks staged -> ready -> submitted; we NEVER submit
+-- a form automatically — 'submitted' is the user confirming they sent it.
+CREATE TABLE IF NOT EXISTS apply_queue (
+    user_id      TEXT NOT NULL,
+    posting_id   INTEGER NOT NULL REFERENCES job_postings(id) ON DELETE CASCADE,
+    status       TEXT NOT NULL DEFAULT 'staged',  -- staged | ready | submitted
+    answers      TEXT,                            -- cached draft "why I'm a fit"
+    resume_path  TEXT,                            -- cached tailored-resume PDF path
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    PRIMARY KEY (user_id, posting_id)
+);
 """
 
 

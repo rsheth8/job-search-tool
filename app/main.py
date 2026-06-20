@@ -113,6 +113,90 @@ async def train_label(request: Request) -> dict:
     return trainer.stats(uid)
 
 
+@app.get("/apply")
+def apply_page(user: str | None = None) -> HTMLResponse:
+    """Semi-auto application queue: staged matches with pre-assembled packages."""
+    from . import apply_queue
+    from . import dashboard as dash
+
+    return HTMLResponse(apply_queue.render_page(user or dash.default_user()))
+
+
+@app.get("/apply/data")
+def apply_data(user: str | None = None) -> dict:
+    """The apply queue plus the top un-staged matches available to stage."""
+    from . import apply_queue, jobstore
+    from . import dashboard as dash
+
+    uid = user or dash.default_user()
+    staged = {it["posting_id"] for it in apply_queue.list_queue(uid)}
+    queued = [
+        {"posting_id": r["id"], "company": r["company"], "title": r["title"],
+         "url": r["url"], "score": r["relevance_score"], "source": r["source"]}
+        for r in jobstore.list_review_queue(uid) if r["id"] not in staged
+    ]
+    return {"user": uid, "queued": queued, "queue": apply_queue.list_queue(uid)}
+
+
+@app.post("/apply/stage")
+async def apply_stage(request: Request) -> dict:
+    from . import apply_queue
+    from . import dashboard as dash
+
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    return {"ok": apply_queue.stage(uid, int(body["posting_id"]))}
+
+
+@app.post("/apply/package")
+async def apply_package(request: Request) -> dict:
+    """Assemble (and cache) the full application package for one staged item."""
+    from . import apply_queue
+    from . import dashboard as dash
+
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    pkg = apply_queue.get_package(uid, int(body["posting_id"]))
+    return pkg or {"error": "not found"}
+
+
+@app.post("/apply/mark")
+async def apply_mark(request: Request) -> dict:
+    from . import apply_queue
+    from . import dashboard as dash
+
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    return {"ok": apply_queue.mark(uid, int(body["posting_id"]), body.get("status", ""))}
+
+
+@app.post("/apply/remove")
+async def apply_remove(request: Request) -> dict:
+    from . import apply_queue
+    from . import dashboard as dash
+
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    return {"ok": apply_queue.remove(uid, int(body["posting_id"]))}
+
+
+@app.get("/apply/resume")
+def apply_resume(user: str | None = None, id: int = 0) -> Response:
+    """Download the staged item's tailored resume PDF (rebuilt from cache)."""
+    from . import apply_queue
+    from . import dashboard as dash
+
+    uid = user or dash.default_user()
+    built = apply_queue.build_resume_bytes(uid, id)
+    if built is None:
+        return Response(status_code=404, content="no tailored resume")
+    pdf, filename = built
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.get("/health")
 def health() -> dict:
     from .router import get_router
