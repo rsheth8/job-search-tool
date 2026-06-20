@@ -20,8 +20,26 @@ question-answer endpoints, CORS, optional token).
    - **API token** — only if you set `APPLY_API_TOKEN` on the server
    - **Your details** — name, email, links, work authorization, etc. Saving
      syncs these to the server (`POST /apply/identity`).
-4. Open a job application on a supported site and click into a field — a blue
-   chip appears with the suggestion. Click it to fill.
+4. Open a job application on a supported site. Two ways to fill:
+   - **One click:** hit the floating **⚡ Autofill this page** button (bottom-right)
+     — it fills every text field, dropdown, and Yes/No question it recognizes at
+     once, and tells you how many free-text questions still need you.
+   - **Per field:** click into a field and accept the inline chip (a known fact,
+     or **✨ Draft answer** for a free-text question).
+
+## What it can fill
+
+- **Text facts:** name (first/last/preferred), pronouns, email, phone, street
+  address, city/state/zip/country, "current location", LinkedIn/GitHub/portfolio,
+  school, degree, major, GPA, grad year, current company/title, years of
+  experience, salary expectation, start date.
+- **Dropdowns (`<select>`)** — picks the matching option (country, state, Yes/No).
+- **Yes/No questions (radio groups)** — work authorization, sponsorship, willing
+  to relocate.
+- **Free-text questions (`<textarea>`)** — a Haiku-drafted answer you review.
+
+It does **not** touch: file uploads (resume), consent checkboxes, or EEO/
+demographic questions (gender, race, veteran, disability) — those are left to you.
 
 ## iPhone (Safari)
 

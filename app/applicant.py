@@ -20,11 +20,22 @@ from . import profile as profile_mod
 # value just means "no suggestion for that field".
 #   bools (work_authorized / needs_sponsorship) are stored as real booleans.
 TEXT_FIELDS = (
-    "first_name", "last_name", "full_name", "email", "phone",
-    "city", "state", "country", "location", "linkedin", "github", "portfolio",
-    "school", "grad_year", "years_experience",
+    # name + contact
+    "first_name", "last_name", "full_name", "preferred_name", "pronouns",
+    "email", "phone",
+    # location
+    "address", "city", "state", "zip", "country", "location",
+    # links
+    "linkedin", "github", "portfolio",
+    # education
+    "school", "degree", "discipline", "gpa", "grad_year",
+    # experience
+    "current_company", "current_title", "years_experience",
+    # logistics commonly asked on applications
+    "salary_expectation", "start_date",
 )
-BOOL_FIELDS = ("work_authorized", "needs_sponsorship")
+# Yes/No questions. Rendered as "Yes"/"No" for selects/radios by autofill_map.
+BOOL_FIELDS = ("work_authorized", "needs_sponsorship", "willing_to_relocate")
 FIELDS = TEXT_FIELDS + BOOL_FIELDS
 
 
