@@ -37,6 +37,12 @@ def temp_db(monkeypatch):
     monkeypatch.setenv("SLACK_SIGNING_SECRET", "")
     monkeypatch.setenv("SLACK_BOT_TOKEN", "")
     monkeypatch.setenv("RESUME_TAILOR_ENABLED", "false")
+    # Twilio outbound is .env-configured in prod; neutralize it so the LogSender/
+    # config tests stay hermetic regardless of a real number in .env (the tests
+    # that exercise Twilio set these explicitly via monkeypatch).
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "")
+    monkeypatch.setenv("TWILIO_FROM_NUMBER", "")
     # Neutralize the .env fallback in get_settings so a real key in .env can't
     # pull tests onto the live (paid) API — tests must stay offline.
     monkeypatch.setattr("dotenv.dotenv_values", lambda *a, **k: {})
