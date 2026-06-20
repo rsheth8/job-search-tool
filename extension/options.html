@@ -42,12 +42,19 @@
     <div><label>Last name</label><input id="last_name"></div>
   </div>
   <div class="row">
+    <div><label>Preferred name</label><input id="preferred_name"></div>
+    <div><label>Pronouns</label><input id="pronouns" placeholder="she/her"></div>
+  </div>
+  <div class="row">
     <div><label>Email</label><input id="email" type="email"></div>
     <div><label>Phone</label><input id="phone"></div>
   </div>
+  <label>Street address</label>
+  <input id="address">
   <div class="row">
     <div><label>City</label><input id="city"></div>
     <div><label>State</label><input id="state"></div>
+    <div><label>Zip</label><input id="zip"></div>
     <div><label>Country</label><input id="country"></div>
   </div>
   <label>Current location <span style="font-weight:400;color:#888">(how "Current location" fields want it, e.g. "Chicago, IL" — auto-fills from City/State if blank)</span></label>
@@ -58,13 +65,31 @@
   </div>
   <label>Portfolio / website</label>
   <input id="portfolio">
+
+  <h2>Education &amp; experience</h2>
   <div class="row">
     <div><label>School</label><input id="school"></div>
     <div><label>Grad year</label><input id="grad_year"></div>
+  </div>
+  <div class="row">
+    <div><label>Degree</label><input id="degree" placeholder="B.S."></div>
+    <div><label>Major / discipline</label><input id="discipline" placeholder="Computer Science"></div>
+    <div><label>GPA</label><input id="gpa"></div>
+  </div>
+  <div class="row">
+    <div><label>Current company</label><input id="current_company"></div>
+    <div><label>Current title</label><input id="current_title"></div>
     <div><label>Years experience</label><input id="years_experience"></div>
+  </div>
+
+  <h2>Logistics</h2>
+  <div class="row">
+    <div><label>Salary expectation</label><input id="salary_expectation" placeholder="$120,000"></div>
+    <div><label>Earliest start date</label><input id="start_date" placeholder="Immediately"></div>
   </div>
   <div class="check"><input type="checkbox" id="work_authorized"><label style="margin:0">Authorized to work (no sponsorship issues)</label></div>
   <div class="check"><input type="checkbox" id="needs_sponsorship"><label style="margin:0">Will require visa sponsorship</label></div>
+  <div class="check"><input type="checkbox" id="willing_to_relocate"><label style="margin:0">Willing to relocate</label></div>
 
   <div><button id="save">Save</button><span id="status"></span></div>
 

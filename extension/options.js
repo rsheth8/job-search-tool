@@ -1,10 +1,12 @@
 /* Options page: persists connection settings locally and syncs the applicant
  * identity to the server (/apply/identity). */
 const CONN = ["baseUrl", "user", "token", "postingId"];
-const TEXT = ["first_name", "last_name", "email", "phone", "city", "state",
-  "country", "location", "linkedin", "github", "portfolio", "school", "grad_year",
-  "years_experience"];
-const BOOL = ["work_authorized", "needs_sponsorship"];
+const TEXT = ["first_name", "last_name", "preferred_name", "pronouns", "email",
+  "phone", "address", "city", "state", "zip", "country", "location", "linkedin",
+  "github", "portfolio", "school", "degree", "discipline", "gpa", "grad_year",
+  "current_company", "current_title", "years_experience", "salary_expectation",
+  "start_date"];
+const BOOL = ["work_authorized", "needs_sponsorship", "willing_to_relocate"];
 const $ = (id) => document.getElementById(id);
 
 function api(method, path, cfg, body) {

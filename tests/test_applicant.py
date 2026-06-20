@@ -34,6 +34,22 @@ def test_location_derived_from_city_state():
     assert applicant.autofill_map("u1")["location"] == "Remote (US)"
 
 
+def test_expanded_application_fields_round_trip():
+    applicant.set_identity("u1", {
+        "preferred_name": "Ace", "pronouns": "she/her", "address": "1 Main St",
+        "zip": "60601", "degree": "B.S.", "discipline": "Computer Science",
+        "gpa": "3.9", "current_company": "Acme", "current_title": "SWE",
+        "salary_expectation": "$120,000", "start_date": "Immediately",
+        "willing_to_relocate": "yes",
+    })
+    d = applicant.get_identity("u1")
+    assert d["discipline"] == "Computer Science" and d["gpa"] == "3.9"
+    assert d["salary_expectation"] == "$120,000"
+    assert d["willing_to_relocate"] is True
+    # Bools render Yes/No for select/radio matching in the extension.
+    assert applicant.autofill_map("u1")["willing_to_relocate"] == "Yes"
+
+
 def test_identity_bools_and_unknown_keys():
     applicant.set_identity("u1", {"work_authorized": "yes", "needs_sponsorship": False,
                                   "favourite_color": "blue"})
