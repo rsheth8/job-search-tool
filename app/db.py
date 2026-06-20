@@ -198,6 +198,7 @@ CREATE TABLE IF NOT EXISTS job_search_profile (
     resume_summary TEXT,            -- a few lines describing the candidate
     prefs_json     TEXT,            -- free-form JSON for future prefs
     min_relevance  REAL,            -- per-user alert threshold (NULL = use global default)
+    applicant_json TEXT,            -- JSON identity for application autofill (name/email/links/work-auth)
     updated_at     TEXT
 );
 
@@ -344,6 +345,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     prof_cols = {r[1] for r in conn.execute("PRAGMA table_info(job_search_profile)")}
     if prof_cols and "min_relevance" not in prof_cols:
         conn.execute("ALTER TABLE job_search_profile ADD COLUMN min_relevance REAL")
+    if prof_cols and "applicant_json" not in prof_cols:
+        conn.execute("ALTER TABLE job_search_profile ADD COLUMN applicant_json TEXT")
     # posting_summaries moved from (tldr, fit) columns to a JSON blob; the old rows
     # are a regenerable cache, so just rebuild the table on the richer schema.
     sum_cols = {r[1] for r in conn.execute("PRAGMA table_info(posting_summaries)")}

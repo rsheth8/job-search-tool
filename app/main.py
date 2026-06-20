@@ -33,9 +33,34 @@ app = FastAPI(
     title="Job Search SMS Intelligence", version="0.1.0", lifespan=lifespan
 )
 
+# CORS for the application-autofill extension: its content script runs on ATS
+# origins (greenhouse.io, lever.co, …) and calls /apply/* cross-origin. Writes are
+# additionally gated by the X-Apply-Token header (see _require_apply_token).
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+
+_cors = [o.strip() for o in get_settings().apply_cors_origins.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors or ["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
+
 # Ensure the schema exists as soon as the app module is imported, regardless of
 # how it's launched (uvicorn, TestClient, etc.). init_db() is idempotent.
 init_db()
+
+
+def _require_apply_token(request: Request) -> None:
+    """Gate the autofill endpoints when APPLY_API_TOKEN is configured. No-op when
+    it's blank (local/dev). Raises 401 on a missing/wrong token."""
+    from fastapi import HTTPException
+
+    expected = get_settings().apply_api_token.strip()
+    if not expected:
+        return
+    if request.headers.get("X-Apply-Token", "").strip() != expected:
+        raise HTTPException(status_code=401, detail="bad or missing X-Apply-Token")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -178,6 +203,64 @@ async def apply_remove(request: Request) -> dict:
     body = await request.json()
     uid = body.get("user") or dash.default_user()
     return {"ok": apply_queue.remove(uid, int(body["posting_id"]))}
+
+
+@app.get("/apply/identity")
+def apply_identity(request: Request, user: str | None = None) -> dict:
+    """The applicant identity map the extension paints onto simple form fields."""
+    from . import applicant
+    from . import dashboard as dash
+
+    _require_apply_token(request)
+    uid = user or dash.default_user()
+    return {"user": uid, "fields": applicant.autofill_map(uid)}
+
+
+@app.post("/apply/identity")
+async def apply_identity_set(request: Request) -> dict:
+    """Save/update applicant identity (used by the extension options page)."""
+    from . import applicant
+    from . import dashboard as dash
+
+    _require_apply_token(request)
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    fields = body.get("fields") or {}
+    return {"user": uid, "fields": applicant.get_identity(uid),
+            "saved": applicant.set_identity(uid, fields)}
+
+
+@app.post("/apply/answer")
+async def apply_answer(request: Request) -> dict:
+    """Draft an answer to one free-text application question. ``posting_id`` adds
+    the JD/company as context; ``company``/``title``/``jd`` can be passed directly
+    when the extension only has the live page (no posting on file)."""
+    from . import applicant, apply_queue, jobstore, outreach
+    from . import dashboard as dash
+    from . import profile as prof
+
+    _require_apply_token(request)
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    question = (body.get("question") or "").strip()
+    if not question:
+        return {"error": "no question"}
+    company = body.get("company") or ""
+    title = body.get("title") or ""
+    description = body.get("jd") or ""
+    pid = body.get("posting_id")
+    if pid is not None:
+        posting = jobstore.get_posting(uid, int(pid))
+        if posting is not None:
+            company = company or posting["company"] or ""
+            title = title or posting["title"] or ""
+            description = description or posting["description"] or ""
+            apply_queue.stage(uid, int(pid))  # keep it in the queue we're working
+    answer = outreach.answer_application_question(
+        question, company or "the company", title, description,
+        prof.get_profile(uid), identity_block=applicant.identity_block(uid),
+    )
+    return {"question": question, "answer": answer}
 
 
 @app.get("/apply/resume")

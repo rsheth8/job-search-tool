@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Job Apply Autofill",
+  "version": "0.1.0",
+  "description": "Inline autofill for job applications, powered by your job-search-tool profile. Suggests values as you focus a field; never submits.",
+  "permissions": ["storage"],
+  "host_permissions": ["<all_urls>"],
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Job Apply Autofill",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://boards.greenhouse.io/*",
+        "*://*.greenhouse.io/*",
+        "*://jobs.lever.co/*",
+        "*://*.lever.co/*",
+        "*://*.ashbyhq.com/*",
+        "*://*.myworkdayjobs.com/*",
+        "*://*.icims.com/*",
+        "*://*.smartrecruiters.com/*",
+        "*://*.workable.com/*",
+        "*://*.bamboohr.com/*"
+      ],
+      "js": ["content.js"],
+      "css": ["overlay.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
