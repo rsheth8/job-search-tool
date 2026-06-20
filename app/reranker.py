@@ -411,6 +411,41 @@ def _beats_incumbent(
 # Ranking
 # ---------------------------------------------------------------------------
 
+def predict(
+    user_id: str,
+    profile: sqlite3.Row | None,
+    scored: list[tuple[JobPosting, float]],
+) -> list[tuple[JobPosting, float]] | None:
+    """Per-posting model probability, in the input order (NOT sorted). Returns
+    None when there's no trained model (cold start) or on any error — callers
+    treat that as 'no signal'. Used by active-learning deck selection, which wants
+    the raw probabilities (to find the most *uncertain* postings), not a ranking."""
+    model = load_model(user_id)
+    if model is None:
+        return None
+    try:
+        weights, bias = model["weights"], model["bias"]
+        keys = [f"{p.source or ''}:{p.external_id or ''}" for p, _ in scored]
+        feat = Featurizer(profile, insights.cached_llm_features(keys))
+        return [
+            (
+                posting,
+                _predict(
+                    weights, bias,
+                    feat.features(
+                        title=posting.title, location=posting.location,
+                        description=posting.description, source=posting.source,
+                        relevance=base, external_id=posting.external_id,
+                    ),
+                ),
+            )
+            for posting, base in scored
+        ]
+    except Exception:  # noqa: BLE001
+        logger.warning("reranker predict failed for %s", user_id, exc_info=True)
+        return None
+
+
 def rerank(
     user_id: str,
     profile: sqlite3.Row | None,

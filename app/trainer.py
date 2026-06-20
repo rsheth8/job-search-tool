@@ -60,7 +60,8 @@ def _default_sources() -> list[JobPosting]:
     return posts
 
 
-def build_deck(user_id: str, *, limit: int = 15, fetch=None, diverse: bool = False) -> list[dict]:
+def build_deck(user_id: str, *, limit: int = 15, fetch=None, diverse: bool = False,
+               uncertain: bool = False) -> list[dict]:
     """A batch of fresh, un-swiped real postings to judge.
 
     Runs the same gates discovery does — reputability, the eligibility rule tier
@@ -75,6 +76,12 @@ def build_deck(user_id: str, *, limit: int = 15, fetch=None, diverse: bool = Fal
     pre-filter and spreads cards across the whole relevance range (strong → weak)
     instead of only the top matches — so the user actually sees roles worth
     rejecting, which is what balances the apply/pass labels the re-ranker needs.
+
+    ``uncertain=True`` (the UI's "Learn" mode) is **active learning**: it scores
+    the wide pool with the trained re-ranker and surfaces the postings it's least
+    sure about (probability nearest 0.5), so each swipe resolves a genuine
+    ambiguity and teaches the model the most. Falls back to the relevance sort
+    until a model exists (cold start), so it's safe to pick before training.
     """
     settings = get_settings()
     fetcher = fetch or _default_sources
@@ -101,9 +108,10 @@ def build_deck(user_id: str, *, limit: int = 15, fetch=None, diverse: bool = Fal
     fresh = [p for p in fresh if not ghost.is_ghost(p)]  # drop ghost/evergreen reqs
     if settings.eligibility_filter_enabled:           # drop over-qualified roles
         fresh, _ = eligibility.filter_eligible(fresh, prof)
-    # Normal mode focuses on profile terms; Mix mode keeps the wider pool so there
-    # are off-target roles to reject.
-    pool = fresh if diverse else (matcher.prefilter(fresh, prof) or fresh)
+    # Normal mode focuses on profile terms; Mix and Learn modes keep the wider
+    # pool — Mix so there are off-target roles to reject, Learn so the model has
+    # varied roles to be uncertain about.
+    pool = fresh if (diverse or uncertain) else (matcher.prefilter(fresh, prof) or fresh)
     if not pool:
         return []
 
@@ -112,7 +120,16 @@ def build_deck(user_id: str, *, limit: int = 15, fetch=None, diverse: bool = Fal
     # spend the LLM budget on the card summaries instead.
     scored = matcher.score(pool, prof, allow_llm=False, allow_embeddings=False)  # never raises
     scored.sort(key=lambda t: t[1], reverse=True)
-    if diverse and len(scored) > limit:
+    if uncertain:
+        # Active learning: reorder to the postings the model is least sure about
+        # (probability nearest 0.5). No model yet → keep the relevance sort.
+        from . import reranker
+
+        preds = reranker.predict(user_id, prof, scored)
+        if preds:
+            unc = {(p.source, p.external_id): abs(prob - 0.5) for p, prob in preds}
+            scored.sort(key=lambda t: unc.get((t[0].source, t[0].external_id), 1.0))
+    elif diverse and len(scored) > limit:
         # Spread evenly across the sorted range (strong → weak), then append the
         # full list so the dedup/cap loop below can still backfill to `limit`.
         spread = [scored[round(i * (len(scored) - 1) / (limit - 1))] for i in range(limit)]
@@ -308,6 +325,7 @@ _PAGE = r"""<!doctype html>
     <div class="modes">
       <button class="mode active" data-mode="best">&#127919; Best matches</button>
       <button class="mode" data-mode="mix">&#127922; Mix (train)</button>
+      <button class="mode" data-mode="learn">&#129504; Learn (smart)</button>
     </div>
     <div class="modehint" id="modehint">Showing your strongest matches.</div>
   </div>
@@ -322,7 +340,7 @@ _PAGE = r"""<!doctype html>
 const USER = "__USER__";
 let deck = [];
 let busy = false;
-let diverse = false;
+let mode = 'best';
 const $ = (id) => document.getElementById(id);
 function esc(s){ const d=document.createElement('div'); d.textContent = s==null?'':s; return d.innerHTML; }
 
@@ -401,7 +419,7 @@ function renderLoading(){
 async function loadDeck(){
   if (!deck.length) renderLoading();
   try{
-    const r = await fetch(`/train/deck?user=${encodeURIComponent(USER)}&n=8&diverse=${diverse}`);
+    const r = await fetch(`/train/deck?user=${encodeURIComponent(USER)}&n=8&mode=${mode}`);
     const data = await r.json();
     deck = deck.concat(data.cards || []);
     renderProgress(data.stats);
@@ -450,14 +468,17 @@ $('pass').onclick = () => swipe('pass');
 $('like').onclick = () => swipe('like');
 document.addEventListener('keydown', (e)=>{ if(e.key==='ArrowLeft') swipe('pass'); if(e.key==='ArrowRight') swipe('like'); });
 
+const MODE_HINT = {
+  best: 'Showing your strongest matches.',
+  mix: 'Showing a wide mix — reject the off-target ones to balance your training.',
+  learn: 'Showing the roles your matcher is least sure about — your swipes here teach it the most.',
+};
 document.querySelectorAll('.mode').forEach(b => b.onclick = () => {
-  const want = b.dataset.mode === 'mix';
-  if (want === diverse) return;
-  diverse = want;
+  const want = b.dataset.mode;
+  if (want === mode) return;
+  mode = want;
   document.querySelectorAll('.mode').forEach(x => x.classList.toggle('active', x === b));
-  $('modehint').textContent = diverse
-    ? 'Showing a wide mix — reject the off-target ones to balance your training.'
-    : 'Showing your strongest matches.';
+  $('modehint').textContent = MODE_HINT[mode] || MODE_HINT.best;
   deck = []; $('stack').innerHTML = ''; loadDeck();
 });
 

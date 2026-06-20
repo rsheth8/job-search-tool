@@ -56,14 +56,25 @@ def train_page(user: str | None = None) -> HTMLResponse:
 
 
 @app.get("/train/deck")
-def train_deck(user: str | None = None, n: int = 15, diverse: bool = False) -> dict:
+def train_deck(
+    user: str | None = None, n: int = 15, diverse: bool = False,
+    mode: str | None = None,
+) -> dict:
     """Return scored cards FAST (no summaries) so the deck shows instantly; the
-    client fetches summaries lazily via /train/summaries."""
+    client fetches summaries lazily via /train/summaries.
+
+    ``mode`` picks the deck strategy: 'best' (top matches), 'mix' (spread for
+    balanced training), or 'learn' (active learning — most-uncertain first).
+    ``diverse`` is kept for back-compat (== mode 'mix')."""
     from . import dashboard as dash
     from . import trainer
 
     uid = user or dash.default_user()
-    cards = trainer.build_deck(uid, limit=n, diverse=diverse)
+    cards = trainer.build_deck(
+        uid, limit=n,
+        diverse=diverse or mode == "mix",
+        uncertain=mode == "learn",
+    )
     return {"user": uid, "cards": cards, "stats": trainer.stats(uid)}
 
 
