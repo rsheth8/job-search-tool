@@ -187,6 +187,20 @@ def test_outcome_weighting_grades_applied_labels_by_stage():
     assert by_title["ML Engineer"] == reranker._DEFAULT_APPLIED_WEIGHT
 
 
+def test_outcome_weighting_credits_peak_stage_not_current():
+    """An application that reached an Onsite and was then Rejected is credited for
+    the Onsite (the furthest stage), not downgraded to the Rejected weight."""
+    from app import store
+
+    _seed_label("u1", "applied", ext="1", title="Software Engineer")
+    app = store.create_application("u1", "Acme", "Software Engineer", status="Applied")
+    store.update_status(app["id"], "Onsite")
+    store.update_status(app["id"], "Rejected")  # ends rejected, but reached onsite
+
+    grade = reranker._outcome_grader("u1")
+    assert grade("Acme", "Software Engineer") == reranker._OUTCOME_WEIGHTS["Onsite"]
+
+
 def test_outcome_weighting_disabled_keeps_baseline(monkeypatch):
     from app import config, store
 

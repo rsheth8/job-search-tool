@@ -142,6 +142,19 @@ def test_stats_counts_and_thresholds():
     assert st["model_trained"] is False
 
 
+def test_stats_flags_pass_imbalance():
+    # Like-heavy history past the minimum -> nudge for more passes.
+    for i in range(12):
+        trainer.record_label("u1", trainer._card(_posting("Eng", f"L{i}"), 0.8), "like")
+    for i in range(2):
+        trainer.record_label("u1", trainer._card(_posting("Sales", f"P{i}"), 0.2), "pass")
+    assert trainer.stats("u1")["nudge_passes"] is True
+    # A balanced history doesn't nudge.
+    for i in range(6):
+        trainer.record_label("u1", trainer._card(_posting("Ops", f"Q{i}"), 0.2), "pass")
+    assert trainer.stats("u1")["nudge_passes"] is False
+
+
 # ---------------------------------------------------------------------------
 # Swipes train the re-ranker
 # ---------------------------------------------------------------------------
