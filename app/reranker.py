@@ -40,6 +40,8 @@ from datetime import datetime, timezone
 
 from . import matcher
 from . import insights
+from . import posting_match
+from . import store
 from .config import get_settings
 from .db import connect
 from .jobsources import JobPosting
@@ -56,6 +58,23 @@ _BASE_FEATURES = ("relevance", "kw_overlap", "title_hit", "loc_match", "is_remot
 FEATURES = _BASE_FEATURES + insights.LLM_FEATURES
 _MODEL_VERSION = 3  # feature schema changed -> old models auto-invalidate + retrain
 _SNOOZE_WEIGHT = 0.5  # snoozed = mild negative, counts half as much as a dismiss
+
+# Graded positive weights by the application's real outcome stage (the CRM
+# funnel). All remain positive labels (you wanted them) — the weight rewards
+# traction: a role that reached an interview/offer teaches the model more than a
+# bare 'Applied', and one that was rejected/ghosted teaches it less. A plain
+# 'Applied' (or no matching CRM application) keeps the baseline 1.0, so this is
+# pure refinement — it never changes a label, only how much each one counts.
+_OUTCOME_WEIGHTS = {
+    "Applied": 1.0,
+    "Phone screen": 2.0,
+    "Interview": 2.0,
+    "Onsite": 2.5,
+    "Offer": 3.0,
+    "Rejected": 0.75,   # applied but didn't progress — still a weak positive
+    "Ghosted": 0.75,
+}
+_DEFAULT_APPLIED_WEIGHT = 1.0
 
 # Training hyperparameters — fixed, small data so these are uncritical.
 _LR = 0.3
@@ -167,6 +186,29 @@ def _predict(weights: list[float], bias: float, x: list[float]) -> float:
 # Labels + training
 # ---------------------------------------------------------------------------
 
+def _outcome_grader(user_id: str):
+    """Return ``f(company, title) -> weight`` for a positive ('applied') label,
+    graded by the furthest stage of the matching CRM application. Disabled, or no
+    matching application, yields the baseline weight. The match reuses
+    ``posting_match`` (same company+title logic the apply flow links them with)."""
+    if not get_settings().reranker_outcome_weighting:
+        return lambda company, title: _DEFAULT_APPLIED_WEIGHT
+    apps = store.application_outcomes(user_id)
+    if not apps:
+        return lambda company, title: _DEFAULT_APPLIED_WEIGHT
+
+    def grade(company: str | None, title: str | None) -> float:
+        best: float | None = None
+        for a in apps:
+            if posting_match.matches_application(a["company"], a["role"], company, title):
+                wt = _OUTCOME_WEIGHTS.get(a["status"], _DEFAULT_APPLIED_WEIGHT)
+                if best is None or wt > best:  # furthest stage among duplicates
+                    best = wt
+        return best if best is not None else _DEFAULT_APPLIED_WEIGHT
+
+    return grade
+
+
 def _labeled_examples(user_id: str) -> list[tuple]:
     """Normalized (title, location, description, source, external_id, relevance,
     y, weight) training rows from BOTH real applications (job_postings status) and
@@ -177,16 +219,17 @@ def _labeled_examples(user_id: str) -> list[tuple]:
         dismissed / swipe-'pass'-> y=0
         snoozed                 -> y=0 at half weight ('not now', milder)
     """
+    grade = _outcome_grader(user_id)
     out: list[tuple] = []
     with connect() as conn:
         for r in conn.execute(
             "SELECT title, location, description, source, external_id, "
-            "relevance_score, status FROM job_postings WHERE user_id = ? "
+            "relevance_score, company, status FROM job_postings WHERE user_id = ? "
             "AND status IN ('applied', 'dismissed', 'snoozed')",
             (user_id,),
         ):
             if r["status"] == "applied":
-                y, w = 1.0, 1.0
+                y, w = 1.0, grade(r["company"], r["title"])
             else:
                 y = 0.0
                 w = _SNOOZE_WEIGHT if r["status"] == "snoozed" else 1.0

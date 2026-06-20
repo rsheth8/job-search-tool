@@ -113,6 +113,11 @@ class Settings(BaseSettings):
     reranker_enabled: bool = False
     reranker_min_positive: int = 5   # min 'applied' labels before the model engages
     reranker_min_negative: int = 5   # min 'dismissed'/'snoozed' labels before engaging
+    # Grade applied labels by their real outcome stage (the CRM funnel): an
+    # application that reached a phone screen / onsite / offer is a STRONGER
+    # positive than one that's only 'Applied', and a rejected/ghosted one is a
+    # weaker positive. Learns what leads to traction, not just what you clicked.
+    reranker_outcome_weighting: bool = True
 
     # --- Eligibility / qualification gate (Matching v2) -------------------
     # Drop roles the candidate clearly isn't qualified for / couldn't realistically

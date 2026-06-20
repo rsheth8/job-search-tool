@@ -165,6 +165,16 @@ def last_application(user_id: str) -> sqlite3.Row | None:
     return rows[0] if rows else None
 
 
+def application_outcomes(user_id: str) -> list[sqlite3.Row]:
+    """(company, role, status) for every logged application — the re-ranker uses
+    the current stage to grade how strong an 'applied' label is."""
+    with connect() as conn:
+        return conn.execute(
+            "SELECT company, role, status FROM applications WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+
+
 def edit_application(
     app_id: int,
     *,

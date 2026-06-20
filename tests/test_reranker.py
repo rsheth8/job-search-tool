@@ -161,6 +161,42 @@ def test_rerank_reorders_by_learned_preference():
     assert out[0][0].source == "greenhouse"
 
 
+def test_outcome_weighting_grades_applied_labels_by_stage():
+    """An 'applied' posting whose CRM application progressed to an Onsite is a
+    stronger positive than a bare 'Applied'; a Rejected one is weaker."""
+    from app import store
+
+    _seed_label("u1", "applied", ext="1", title="Software Engineer")
+    _seed_label("u1", "applied", ext="2", title="Data Scientist", desc="Models.")
+    _seed_label("u1", "applied", ext="3", title="ML Engineer", desc="Pipelines.")
+    # Matching CRM applications carry the real outcome stage.
+    store.create_application("u1", "Acme", "Software Engineer", status="Onsite")
+    store.create_application("u1", "Acme", "Data Scientist", status="Rejected")
+    # ext=3 has no logged application -> baseline.
+
+    grade = reranker._outcome_grader("u1")
+    assert grade("Acme", "Software Engineer") == reranker._OUTCOME_WEIGHTS["Onsite"]
+    assert grade("Acme", "Data Scientist") == reranker._OUTCOME_WEIGHTS["Rejected"]
+    assert grade("Acme", "ML Engineer") == reranker._DEFAULT_APPLIED_WEIGHT
+
+    # And it flows through into the training weights.
+    rows = reranker._labeled_examples("u1")
+    by_title = {r[0]: r[7] for r in rows}  # title -> weight
+    assert by_title["Software Engineer"] == reranker._OUTCOME_WEIGHTS["Onsite"]
+    assert by_title["Data Scientist"] == reranker._OUTCOME_WEIGHTS["Rejected"]
+    assert by_title["ML Engineer"] == reranker._DEFAULT_APPLIED_WEIGHT
+
+
+def test_outcome_weighting_disabled_keeps_baseline(monkeypatch):
+    from app import config, store
+
+    _seed_label("u1", "applied", ext="1", title="Software Engineer")
+    store.create_application("u1", "Acme", "Software Engineer", status="Offer")
+    monkeypatch.setattr(config.get_settings(), "reranker_outcome_weighting", False)
+    grade = reranker._outcome_grader("u1")
+    assert grade("Acme", "Software Engineer") == reranker._DEFAULT_APPLIED_WEIGHT
+
+
 def test_auc_ranks_separable_scores():
     perfect = [(0.9, 1.0), (0.8, 1.0), (0.2, 0.0), (0.1, 0.0)]
     assert reranker._auc(perfect) == 1.0
