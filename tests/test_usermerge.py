@@ -69,3 +69,81 @@ def test_merge_skips_rows_that_would_collide():
 def test_same_id_is_noop():
     _seed("local")
     assert usermerge.merge_user("local", "local") == {}
+
+
+# ---------------------------------------------------------------------------
+# Cross-database export / import (local trained brain -> a separate "prod" DB)
+# ---------------------------------------------------------------------------
+
+def _train_local():
+    """Build a profile + 6/6 swipe labels + a trained model under 'local'."""
+    from app import trainer
+
+    profile.set_profile("local", roles="software engineer")
+    applicant.set_identity("local", {"email": "ada@x.com"})
+    for i in range(6):
+        trainer.record_label("local", {"source": "greenhouse", "external_id": f"p{i}",
+                             "title": "Software Engineer", "relevance_score": 0.6}, "like")
+    for i in range(6):
+        trainer.record_label("local", {"source": "rss", "external_id": f"n{i}",
+                             "title": "Sales Rep", "relevance_score": 0.2}, "pass")
+    assert reranker.train("local", profile.get_profile("local")) is not None
+
+
+def test_export_import_moves_trained_brain_to_a_fresh_db(tmp_path):
+    import sqlite3
+    from app.db import SCHEMA, _migrate_schema
+
+    _train_local()
+    brain = str(tmp_path / "brain.db")
+    counts = usermerge.export_user("local", brain)
+    assert counts["training_labels"] == 12 and counts["reranker_models"] == 1
+    assert counts["job_search_profile"] == 1
+
+    # A separate, schema-complete "production" DB.
+    prod = str(tmp_path / "prod.db")
+    pc = sqlite3.connect(prod)
+    pc.row_factory = sqlite3.Row
+    pc.executescript(SCHEMA)
+    _migrate_schema(pc)
+
+    added = usermerge.import_user(brain, "U07LVJVD4PL", conn=pc)
+    assert added["training_labels"] == 12 and added["reranker_models"] == 1
+
+    # The model, profile, identity, and labels all landed under the Slack id.
+    model = pc.execute("SELECT model_json FROM reranker_models WHERE user_id = ?",
+                       ("U07LVJVD4PL",)).fetchone()
+    assert model is not None
+    prof = pc.execute("SELECT roles, applicant_json FROM job_search_profile WHERE user_id = ?",
+                      ("U07LVJVD4PL",)).fetchone()
+    assert prof["roles"] == "software engineer" and "ada@x.com" in prof["applicant_json"]
+    n = pc.execute("SELECT COUNT(*) FROM training_labels WHERE user_id = ?",
+                   ("U07LVJVD4PL",)).fetchone()[0]
+    assert n == 12
+
+
+def test_import_is_idempotent_and_nondestructive(tmp_path):
+    import sqlite3
+    from app.db import SCHEMA, _migrate_schema
+
+    _train_local()
+    brain = str(tmp_path / "brain.db")
+    usermerge.export_user("local", brain)
+
+    prod = str(tmp_path / "prod.db")
+    pc = sqlite3.connect(prod)
+    pc.row_factory = sqlite3.Row
+    pc.executescript(SCHEMA)
+    _migrate_schema(pc)
+    # Destination already has its own profile — import must not clobber it.
+    pc.execute("INSERT INTO job_search_profile (user_id, roles, updated_at) VALUES (?,?,?)",
+               ("U07LVJVD4PL", "existing prod roles", "now"))
+
+    usermerge.import_user(brain, "U07LVJVD4PL", conn=pc)
+    usermerge.import_user(brain, "U07LVJVD4PL", conn=pc)  # twice — no dupes
+
+    assert pc.execute("SELECT COUNT(*) FROM training_labels WHERE user_id = ?",
+                      ("U07LVJVD4PL",)).fetchone()[0] == 12   # not 24
+    # Existing prod profile preserved (INSERT OR IGNORE kept it).
+    assert pc.execute("SELECT roles FROM job_search_profile WHERE user_id = ?",
+                      ("U07LVJVD4PL",)).fetchone()["roles"] == "existing prod roles"
