@@ -101,7 +101,9 @@ class Settings(BaseSettings):
     voyage_api_key: str = ""
     embedding_model: str = "voyage-3-lite"
     embedding_max_calls_per_day: int = 200   # billable embedding requests / UTC day
-    embedding_rate_limit_per_min: int = 60   # token-bucket on Voyage calls
+    # Token-bucket on Voyage calls. Default matches Voyage's FREE tier (~3 req/min)
+    # so the live app doesn't 429; raise it if you're on a paid tier.
+    embedding_rate_limit_per_min: int = 3
 
     # --- Personalized re-ranker (Matching v2, Phase 2) --------------------
     # Off by default. When on, a small logistic-regression model trained on the

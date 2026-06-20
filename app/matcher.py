@@ -161,8 +161,8 @@ def _heuristic_score(p: JobPosting, terms: set[str], locations: list[str]) -> fl
 
 # Chars of description fed to the embedder. Generous vs the LLM's _DESC_CHARS:
 # embeddings handle longer context cheaply and descriptions are already capped
-# at MAX_DESCRIPTION_CHARS upstream.
-_EMBED_DESC_CHARS = 1500
+# at MAX_DESCRIPTION_CHARS upstream — give the embedder the whole thing.
+_EMBED_DESC_CHARS = 3000
 
 
 def _embed_text(p: JobPosting) -> str:
@@ -313,6 +313,7 @@ def score(
     llm=None,
     embedder=None,
     allow_llm: bool = True,
+    allow_embeddings: bool = True,
 ) -> list[tuple[JobPosting, float]]:
     """Return [(posting, score)] for each posting.
 
@@ -321,16 +322,18 @@ def score(
       2. LLM (Haiku) when keyed (unless ``allow_llm=False``).
       3. Free keyword/location heuristic (the CI path, and the final fallback).
     Each layer degrades to the next on failure, so discovery never blocks.
-    ``allow_llm=False`` skips the paid LLM scorer entirely — used by the
-    interactive swipe deck, where the heuristic is a fine sort key and we'd rather
-    spend the LLM budget (and latency) on the card summaries.
+    ``allow_llm=False`` / ``allow_embeddings=False`` skip those paid scorers — the
+    interactive swipe deck sets both False, so its score is the free heuristic
+    (a fine sort key) with no API latency; the LLM budget goes to card summaries.
     ``llm`` / ``embedder`` inject scorers in tests.
     """
     if not postings:
         return []
     terms, locations = _terms(profile), _locations(profile)
 
-    embed_fn = embedder or (embeddings.embed if get_settings().embedding_active else None)
+    embed_fn = embedder or (
+        embeddings.embed if allow_embeddings and get_settings().embedding_active else None
+    )
     if embed_fn is not None:
         result = _embedding_score(postings, profile, embed_fn, terms, locations)
         if result is not None:

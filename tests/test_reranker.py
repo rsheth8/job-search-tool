@@ -51,6 +51,20 @@ def test_featurizer_shape_and_values():
     assert x[5] == 1.0                  # first_party (greenhouse)
 
 
+def test_featurizer_llm_features_from_cache_else_neutral():
+    from app.insights import LLM_FEATURES
+    base = len(reranker.FEATURES) - len(LLM_FEATURES)
+    feat = reranker.Featurizer(_profile(), {
+        "greenhouse:job1": {"fit_score": 0.9, "tech_overlap": 0.8, "stretch": 0.2}})
+    hit = feat.features(title="X", location="", description="", source="greenhouse",
+                        relevance=0.5, external_id="job1")
+    miss = feat.features(title="X", location="", description="", source="greenhouse",
+                         relevance=0.5, external_id="unknown")
+    assert hit[base + LLM_FEATURES.index("fit_score")] == 0.9      # from cache
+    assert hit[base + LLM_FEATURES.index("tech_overlap")] == 0.8
+    assert miss[base:] == [0.5, 0.5, 0.5]                          # all neutral defaults
+
+
 def test_featurizer_relevance_defaults_when_missing():
     feat = reranker.Featurizer(_profile())
     x = feat.features(title="X", location="", description="", source="rss", relevance=None)
@@ -145,6 +159,67 @@ def test_rerank_reorders_by_learned_preference():
     # Matcher ranked the rss one higher; the personal model should flip it.
     out = reranker.rerank("u1", prof, [(rss, 0.8), (gh, 0.6)])
     assert out[0][0].source == "greenhouse"
+
+
+def test_auc_ranks_separable_scores():
+    perfect = [(0.9, 1.0), (0.8, 1.0), (0.2, 0.0), (0.1, 0.0)]
+    assert reranker._auc(perfect) == 1.0
+    inverted = [(0.1, 1.0), (0.2, 1.0), (0.8, 0.0), (0.9, 0.0)]
+    assert reranker._auc(inverted) == 0.0
+    assert reranker._auc([(0.5, 1.0)]) == 0.5  # one class only -> uninformative
+
+
+def _wide(*vals) -> list[float]:
+    """A full-width feature vector with the given leading values, rest zero."""
+    x = [0.0] * len(reranker.FEATURES)
+    for i, v in enumerate(vals):
+        x[i] = v
+    return x
+
+
+def _incumbent(*weights) -> dict:
+    w = [0.0] * len(reranker.FEATURES)
+    for i, v in enumerate(weights):
+        w[i] = v
+    return {"version": reranker._MODEL_VERSION, "features": list(reranker.FEATURES),
+            "weights": w, "bias": 0.0}
+
+
+def test_beats_incumbent_promotes_on_schema_or_thin_data():
+    # Schema drift -> always promote.
+    assert reranker._beats_incumbent([_wide(1.0)], [1.0], [1.0],
+                                     {"features": ["only_one"], "weights": [1.0], "bias": 0.0})
+    # Too few labels to carve a balanced hold-out -> promote.
+    X = [_wide(1.0), _wide(0.0)]
+    assert reranker._beats_incumbent(X, [1.0, 0.0], [1.0, 1.0], _incumbent(5.0))
+
+
+def test_beats_incumbent_keeps_better_incumbent():
+    """A candidate that overfits a spurious train-only feature and ranks the
+    held-out rows worse than the incumbent is rejected."""
+    # feature0 is the true signal (separates hold-out); feature1 separates the
+    # TRAIN rows but is reversed on the hold-out, so a candidate that leans on it
+    # generalizes worse than the feature0-only incumbent.
+    holdout_pos, holdout_neg = {0, 5}, {10, 15}
+    X, y = [], []
+    for i in range(10):   # positives
+        f1 = 0.0 if i in holdout_pos else 1.0
+        X.append(_wide(1.0, f1)); y.append(1.0)
+    for i in range(10, 20):  # negatives
+        f1 = 1.0 if i in holdout_neg else 0.0
+        X.append(_wide(0.0, f1)); y.append(0.0)
+    w = [1.0] * len(X)
+    incumbent = _incumbent(5.0, 0.0)  # trusts only the true signal
+    assert reranker._beats_incumbent(X, y, w, incumbent) is False
+
+
+def test_beats_incumbent_promotes_clearly_better_candidate():
+    """An inverted incumbent (ranks backwards) is beaten by a fresh, correct fit."""
+    X = [_wide(1.0) for _ in range(8)] + [_wide(0.0) for _ in range(8)]
+    y = [1.0] * 8 + [0.0] * 8
+    w = [1.0] * 16
+    inverted = _incumbent(-5.0)  # ranks positives below negatives
+    assert reranker._beats_incumbent(X, y, w, inverted) is True
 
 
 def test_maybe_retrain_trains_then_skips_when_unchanged():

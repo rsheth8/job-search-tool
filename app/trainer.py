@@ -23,7 +23,6 @@ from .jobsources import JobPosting
 from .jobsources import directory, ghost, quality
 from .jobsources import rss as rss_src
 
-_SUMMARY_CHARS = 280
 # RSS feeds woven into the deck for company variety — these are startup/scale-up
 # heavy, balancing the big-name ATS directory.
 _DECK_RSS_FEEDS = ("remoteok", "weworkremotely")
@@ -61,16 +60,21 @@ def _default_sources() -> list[JobPosting]:
     return posts
 
 
-def build_deck(user_id: str, *, limit: int = 15, fetch=None) -> list[dict]:
-    """A batch of fresh, un-swiped real postings to judge, best-match first.
+def build_deck(user_id: str, *, limit: int = 15, fetch=None, diverse: bool = False) -> list[dict]:
+    """A batch of fresh, un-swiped real postings to judge.
 
     Runs the same gates discovery does — reputability, the eligibility rule tier
-    (drop roles above the candidate's level), and the profile pre-filter — so the
-    deck reflects roles that actually make sense for the user. ``fetch`` injects
-    the posting source in tests; in production it's ``_default_sources`` (ATS
-    directory + RSS, the directory advancing a cursor so repeat calls bring new
-    companies). Each card carries the matcher's relevance score, populating the
-    re-ranker's ``relevance`` feature from the swipe.
+    (drop roles above the candidate's level), and (in normal mode) the profile
+    pre-filter — so the deck reflects roles that make sense for the user. ``fetch``
+    injects the posting source in tests; in production it's ``_default_sources``
+    (ATS directory + RSS, the directory advancing a cursor so repeat calls bring
+    new companies). Each card carries the matcher's relevance score, populating
+    the re-ranker's ``relevance`` feature from the swipe.
+
+    ``diverse=True`` (the UI's "Mix" mode) is for *training*: it skips the profile
+    pre-filter and spreads cards across the whole relevance range (strong → weak)
+    instead of only the top matches — so the user actually sees roles worth
+    rejecting, which is what balances the apply/pass labels the re-ranker needs.
     """
     settings = get_settings()
     fetcher = fetch or _default_sources
@@ -97,14 +101,22 @@ def build_deck(user_id: str, *, limit: int = 15, fetch=None) -> list[dict]:
     fresh = [p for p in fresh if not ghost.is_ghost(p)]  # drop ghost/evergreen reqs
     if settings.eligibility_filter_enabled:           # drop over-qualified roles
         fresh, _ = eligibility.filter_eligible(fresh, prof)
-    pool = matcher.prefilter(fresh, prof) or fresh    # focus on profile terms
+    # Normal mode focuses on profile terms; Mix mode keeps the wider pool so there
+    # are off-target roles to reject.
+    pool = fresh if diverse else (matcher.prefilter(fresh, prof) or fresh)
     if not pool:
         return []
 
-    # Heuristic scoring (allow_llm=False): the deck's score is just a sort key, so
-    # we keep the deck fast/free and save the LLM budget for the card summaries.
-    scored = matcher.score(pool, prof, allow_llm=False)  # never raises
+    # Free heuristic scoring only (no LLM, no embeddings): the deck's score is
+    # just a sort key, so we keep it fast with no API latency/rate-limits and
+    # spend the LLM budget on the card summaries instead.
+    scored = matcher.score(pool, prof, allow_llm=False, allow_embeddings=False)  # never raises
     scored.sort(key=lambda t: t[1], reverse=True)
+    if diverse and len(scored) > limit:
+        # Spread evenly across the sorted range (strong → weak), then append the
+        # full list so the dedup/cap loop below can still backfill to `limit`.
+        spread = [scored[round(i * (len(scored) - 1) / (limit - 1))] for i in range(limit)]
+        scored = spread + scored
 
     # Collapse near-duplicates (same company + title, e.g. one role posted for
     # many locations) and cap how many roles any one company contributes, so the
@@ -135,9 +147,10 @@ def _clean_title(title: str, company: str) -> str:
 
 
 def _card(p: JobPosting, score: float) -> dict:
+    # Keep the FULL description (up to the source cap): it's stored as the training
+    # label and fed to embeddings, where truncating to a snippet badly hurt match
+    # quality. The card UI shows it in a scrollable box, so length is fine.
     desc = (p.description or "").strip()
-    if len(desc) > _SUMMARY_CHARS:
-        desc = desc[:_SUMMARY_CHARS].rstrip() + "…"
     return {
         "source": p.source,
         "external_id": p.external_id,
@@ -211,6 +224,12 @@ _PAGE = r"""<!doctype html>
              font-size:13px; color:var(--muted); }
   .pill{ padding:3px 10px; border-radius:999px; background:#20242f; border:1px solid var(--line); font-weight:600; }
   .pill.ok{ background:var(--greenbg); border-color:#1f7a44; color:var(--green); }
+  .modes{ display:inline-flex; gap:4px; background:#171a22; border:1px solid var(--line);
+          border-radius:10px; padding:3px; margin-top:12px; }
+  .mode{ flex:none; font-size:12.5px; font-weight:600; padding:6px 12px; border-radius:7px;
+         border:none; background:transparent; color:var(--muted); cursor:pointer; }
+  .mode.active{ background:#26304a; color:var(--ink); }
+  .modehint{ font-size:12px; color:var(--dim); margin:6px 0 0; }
   /* deck */
   #stack{ position:relative; width:min(620px,96vw); height:min(580px,70vh); }
   .card{ position:absolute; inset:0; background:var(--card); border:1px solid var(--line);
@@ -286,6 +305,11 @@ _PAGE = r"""<!doctype html>
       <span id="counts">loading&hellip;</span>
       <span class="pill" id="status">&mdash;</span>
     </div>
+    <div class="modes">
+      <button class="mode active" data-mode="best">&#127919; Best matches</button>
+      <button class="mode" data-mode="mix">&#127922; Mix (train)</button>
+    </div>
+    <div class="modehint" id="modehint">Showing your strongest matches.</div>
   </div>
   <div id="stack"></div>
   <div id="buttons">
@@ -298,6 +322,7 @@ _PAGE = r"""<!doctype html>
 const USER = "__USER__";
 let deck = [];
 let busy = false;
+let diverse = false;
 const $ = (id) => document.getElementById(id);
 function esc(s){ const d=document.createElement('div'); d.textContent = s==null?'':s; return d.innerHTML; }
 
@@ -368,14 +393,40 @@ function attachDrag(el){
   el.addEventListener('pointercancel', end);
 }
 
+function renderLoading(){
+  $('stack').innerHTML = '<div class="card"><div class="empty">Loading roles&hellip;'
+    + '<br><span style="font-size:13px;color:var(--dim)">writing quick summaries &mdash; a few seconds</span></div></div>';
+}
+
 async function loadDeck(){
+  if (!deck.length) renderLoading();
   try{
-    const r = await fetch(`/train/deck?user=${encodeURIComponent(USER)}&n=15`);
+    const r = await fetch(`/train/deck?user=${encodeURIComponent(USER)}&n=8&diverse=${diverse}`);
     const data = await r.json();
     deck = deck.concat(data.cards || []);
     renderProgress(data.stats);
   }catch(e){}
-  renderTop();
+  renderTop();         // show cards immediately (raw description)
+  ensureSummaries();   // fill in AI summaries a beat later
+}
+
+async function ensureSummaries(){
+  const need = deck.filter(c => !c._sumReq).slice(0, 6);
+  if (!need.length) return;
+  need.forEach(c => c._sumReq = true);  // don't re-request the same card
+  try{
+    const r = await fetch('/train/summaries', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({user: USER, items: need})
+    });
+    const map = (await r.json()).summaries || {};
+    let changed = false;
+    deck.forEach(c => {
+      const s = map[`${c.source}:${c.external_id}`];
+      if (s){ Object.assign(c, s); changed = true; }
+    });
+    if (changed) renderTop();  // refresh the visible card with its summary
+  }catch(e){ need.forEach(c => c._sumReq = false); }  // allow a retry on failure
 }
 
 async function swipe(label){
@@ -391,12 +442,25 @@ async function swipe(label){
   }catch(e){}
   setTimeout(renderTop, 200);
   if (deck.length < 3) loadDeck();
+  ensureSummaries();   // keep upcoming cards' summaries warm
   busy = false;
 }
 
 $('pass').onclick = () => swipe('pass');
 $('like').onclick = () => swipe('like');
 document.addEventListener('keydown', (e)=>{ if(e.key==='ArrowLeft') swipe('pass'); if(e.key==='ArrowRight') swipe('like'); });
+
+document.querySelectorAll('.mode').forEach(b => b.onclick = () => {
+  const want = b.dataset.mode === 'mix';
+  if (want === diverse) return;
+  diverse = want;
+  document.querySelectorAll('.mode').forEach(x => x.classList.toggle('active', x === b));
+  $('modehint').textContent = diverse
+    ? 'Showing a wide mix — reject the off-target ones to balance your training.'
+    : 'Showing your strongest matches.';
+  deck = []; $('stack').innerHTML = ''; loadDeck();
+});
+
 loadDeck();
 </script>
 </body>
