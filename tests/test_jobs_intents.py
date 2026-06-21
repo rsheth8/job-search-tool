@@ -107,6 +107,33 @@ def test_queue_job_unknown_id():
     assert "don't have job #999" in handle_sms("u", "queue 999")
 
 
+@pytest.mark.parametrize("text,spec", [
+    ("queue top 3", "top:3"),
+    ("stage the top 5", "top:5"),
+    ("queue all", "all"),
+])
+def test_queue_bulk_routes(text, spec):
+    p = R.parse(text)
+    assert p.intent == Intent.QUEUE_JOB and p.message == spec
+
+
+def test_queue_top_n_stages_best_matches():
+    from app import apply_queue
+    for i in range(4):
+        jobstore.save_posting(
+            "u", JobPosting("greenhouse", str(i), f"Engineer {i}", f"https://x/{i}",
+                            company=f"Co{i}", location="Remote", description="python"),
+            relevance_score=0.9 - i * 0.1, status="queued")
+    reply = handle_sms("u", "queue top 2")
+    assert "Staged 2" in reply
+    # The two best-scored matches were staged.
+    staged = {it["posting_id"] for it in apply_queue.list_queue("u")}
+    assert len(staged) == 2
+    # Running again stages the rest (idempotent on the already-staged).
+    handle_sms("u", "queue all")
+    assert len(apply_queue.list_queue("u")) == 4
+
+
 # --- engine wiring ---------------------------------------------------------
 
 def test_track_add_list_remove(monkeypatch):

@@ -148,6 +148,10 @@ _QUEUE_JOB_RE = re.compile(
     r"|\b(?:queue|stage)\b\s+(?:up\s+)?the\s+(.+?)\s+(?:one|posting|role|job|opening)\b",
     re.I,
 )
+# Batch staging: "queue top 3" / "stage the top 5" / "queue all".
+_QUEUE_BULK_RE = re.compile(
+    r"\b(?:queue|stage)\s+(?:the\s+)?(?:top\s+(\d+)|(all))\b", re.I,
+)
 
 # PROFILE: set search criteria, or show the saved profile.
 _PROFILE_SET_RE = re.compile(
@@ -517,6 +521,11 @@ class HeuristicRouter:
                 company=company, time_reference=time_ref,
                 confidence=0.9 if pid else 0.8,
             )
+
+        m = _QUEUE_BULK_RE.search(low)
+        if m:
+            spec = f"top:{int(m.group(1))}" if m.group(1) else "all"
+            return ParsedMessage(intent=Intent.QUEUE_JOB, message=spec, confidence=0.9)
 
         m = _QUEUE_JOB_RE.search(low)
         if m:

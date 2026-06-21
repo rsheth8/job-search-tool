@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     job_poll_seconds: int = 600
     # A posting must score >= this (0..1) to be alerted. Tune from Slack later.
     job_relevance_threshold: float = 0.6
+    # Auto-stage very-high-confidence matches straight into the apply queue (skip
+    # triage) — they're prepared and waiting at /apply. 0 = off; set e.g. 0.85 to
+    # only auto-queue your strongest matches.
+    job_auto_queue_threshold: float = 0.0
     # Cap how many *new* postings get LLM-scored per tick (token-cost guard).
     # Survivors of the free pre-filter beyond this carry over to the next tick.
     job_max_scored_per_tick: int = 60
