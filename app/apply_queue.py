@@ -18,6 +18,7 @@ re-opening an item never re-bills the LLM.
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -27,6 +28,16 @@ from .db import connect
 logger = logging.getLogger("apply_queue")
 
 STATUSES = ("staged", "ready", "submitted")
+
+# The free-text questions most applications ask, pre-answered so they're ready to
+# review/paste. Tailored per posting (company/title interpolated; answers grounded
+# in the JD). The browser extension still answers a form's *actual* questions live;
+# this gives the phone preview strong answers without the form in front of you.
+COMMON_QUESTIONS = (
+    "Why do you want to work at {company}?",
+    "Why are you a strong fit for the {title} role?",
+    "Tell us about a relevant project or accomplishment.",
+)
 
 
 def _now() -> str:
@@ -78,7 +89,7 @@ def list_queue(user_id: str, *, status: str | None = None) -> list[dict]:
     newest first. Optional ``status`` filter. Items whose posting was deleted are
     skipped."""
     sql = (
-        "SELECT q.posting_id, q.status, q.answers, q.resume_path, q.updated_at, "
+        "SELECT q.posting_id, q.status, q.questions_json, q.resume_path, q.updated_at, "
         "       p.company, p.title, p.url, p.source, p.relevance_score "
         "FROM apply_queue q JOIN job_postings p ON p.id = q.posting_id "
         "WHERE q.user_id = ? "
@@ -99,8 +110,8 @@ def list_queue(user_id: str, *, status: str | None = None) -> list[dict]:
             "url": r["url"],
             "source": r["source"],
             "score": r["relevance_score"],
-            "has_answers": bool(r["answers"]),
-            "has_resume": bool(r["resume_path"]),
+            "has_answers": bool(r["questions_json"]),
+            "has_resume": bool(r["resume_path"]) and r["resume_path"] != _RESUME_NONE,
             "updated_at": r["updated_at"],
         }
         for r in rows
@@ -108,12 +119,13 @@ def list_queue(user_id: str, *, status: str | None = None) -> list[dict]:
 
 
 def get_package(user_id: str, posting_id: int, *, prof=None) -> dict | None:
-    """Assemble (and cache) the full application package for one item: apply link,
-    drafted answers, and a tailored resume path. Best-effort — answers fall back to
-    a template, resume to None. Returns None if the item or its posting is gone."""
+    """Assemble (and cache) the full application package: apply link, a tailored
+    answer for each common question, the applicant identity, and a tailored resume.
+    Best-effort — answers fall back to templates, resume to None. Returns None if
+    the item or its posting is gone."""
     with connect() as conn:
         row = conn.execute(
-            "SELECT status, answers, resume_path FROM apply_queue "
+            "SELECT status, resume_path FROM apply_queue "
             "WHERE user_id = ? AND posting_id = ?",
             (user_id, posting_id),
         ).fetchone()
@@ -122,25 +134,14 @@ def get_package(user_id: str, posting_id: int, *, prof=None) -> dict | None:
     posting = jobstore.get_posting(user_id, posting_id)
     if posting is None:
         return None
+    if prof is None:
+        prof = profile_mod.get_profile(user_id)
 
     company = posting["company"] or "the company"
     title = posting["title"] or "Role"
-    answers = row["answers"]
-    resume = _resume_meta(row["resume_path"])
-
-    if answers is None:  # assemble once, then cache
-        if prof is None:
-            prof = profile_mod.get_profile(user_id)
-        answers = outreach.draft_application_answers(
-            company, title, posting["description"], prof
-        )
-        result = _build_resume(user_id, company, title, posting)
-        resume = (
-            {"filename": result.filename, "variant": result.variant,
-             "pages": result.pages}
-            if result else None
-        )
-        _cache_package(user_id, posting_id, answers, resume)
+    questions = get_questions(user_id, posting_id, prof=prof)
+    resume = _ensure_resume(user_id, posting_id, company, title, posting,
+                            row["resume_path"])
 
     from . import applicant
 
@@ -152,48 +153,97 @@ def get_package(user_id: str, posting_id: int, *, prof=None) -> dict | None:
         "url": posting["url"] or "",
         "source": posting["source"],
         "score": posting["relevance_score"],
-        "answers": answers,
-        "resume": resume,  # {filename, variant, pages} or None — bytes via build_resume_bytes
-        # The facts that will fill the form's simple fields — shown on the review
-        # page so the user can confirm them at a glance before applying.
+        "questions": questions,  # [{question, answer}] — one tailored answer each
+        "resume": resume,        # {filename, variant, pages} or None
+        # The facts that will fill the form's simple fields — shown so the user can
+        # confirm them at a glance before applying.
         "identity": applicant.autofill_map(user_id),
     }
 
 
-def save_answer(user_id: str, posting_id: int, answer: str) -> bool:
-    """Persist a user-edited drafted answer for a staged item. Returns False if the
-    item isn't in the queue."""
+def get_questions(user_id: str, posting_id: int, *, prof=None) -> list[dict]:
+    """The application's common questions with a tailored answer each — drafted
+    (one batched LLM call) on first request, then cached on the row. Returns
+    ``[{question, answer}]``; [] if the item/posting is gone."""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT questions_json FROM apply_queue WHERE user_id = ? AND posting_id = ?",
+            (user_id, posting_id),
+        ).fetchone()
+    if row is None:
+        return []
+    cached = _decode_json(row["questions_json"])
+    if cached:
+        return cached
+    posting = jobstore.get_posting(user_id, posting_id)
+    if posting is None:
+        return []
+    if prof is None:
+        prof = profile_mod.get_profile(user_id)
+    from . import applicant
+
+    company = posting["company"] or "the company"
+    title = posting["title"] or "Role"
+    prompts = [q.format(company=company, title=title) for q in COMMON_QUESTIONS]
+    answers = outreach.draft_question_answers(
+        prompts, company, title, posting["description"], prof,
+        identity_block=applicant.identity_block(user_id),
+    )
+    qs = [{"question": q, "answer": a} for q, a in zip(prompts, answers)]
+    _save_questions(user_id, posting_id, qs)
+    return qs
+
+
+def save_answer(user_id: str, posting_id: int, index: int, answer: str) -> bool:
+    """Persist a user-edited answer to question ``index``. False if the item or
+    index is out of range."""
+    qs = get_questions(user_id, posting_id)
+    if not (0 <= index < len(qs)):
+        return False
+    qs[index]["answer"] = answer
+    return _save_questions(user_id, posting_id, qs)
+
+
+def redraft_answer(user_id: str, posting_id: int, index: int, *, prof=None) -> str | None:
+    """Regenerate a fresh answer for question ``index`` only. None if the item or
+    index is gone."""
+    qs = get_questions(user_id, posting_id, prof=prof)
+    if not (0 <= index < len(qs)):
+        return None
+    posting = jobstore.get_posting(user_id, posting_id)
+    if posting is None:
+        return None
+    if prof is None:
+        prof = profile_mod.get_profile(user_id)
+    from . import applicant
+
+    answer = outreach.answer_application_question(
+        qs[index]["question"], posting["company"] or "the company",
+        posting["title"] or "Role", posting["description"], prof,
+        identity_block=applicant.identity_block(user_id),
+    )
+    qs[index]["answer"] = answer
+    _save_questions(user_id, posting_id, qs)
+    return answer
+
+
+def _save_questions(user_id: str, posting_id: int, qs: list[dict]) -> bool:
     with connect() as conn:
         cur = conn.execute(
-            "UPDATE apply_queue SET answers = ?, updated_at = ? "
+            "UPDATE apply_queue SET questions_json = ?, updated_at = ? "
             "WHERE user_id = ? AND posting_id = ?",
-            (answer, _now(), user_id, posting_id),
+            (json.dumps(qs), _now(), user_id, posting_id),
         )
         return cur.rowcount > 0
 
 
-def redraft_answer(user_id: str, posting_id: int, *, prof=None) -> str | None:
-    """Regenerate the drafted answer from scratch (the user asked for a fresh
-    take), cache it, and return it. None if the item/posting is gone."""
-    posting = jobstore.get_posting(user_id, posting_id)
-    if posting is None or not _is_staged(user_id, posting_id):
+def _decode_json(raw):
+    if not raw:
         return None
-    if prof is None:
-        prof = profile_mod.get_profile(user_id)
-    answer = outreach.draft_application_answers(
-        posting["company"] or "the company", posting["title"] or "Role",
-        posting["description"], prof,
-    )
-    save_answer(user_id, posting_id, answer)
-    return answer
-
-
-def _is_staged(user_id: str, posting_id: int) -> bool:
-    with connect() as conn:
-        return conn.execute(
-            "SELECT 1 FROM apply_queue WHERE user_id = ? AND posting_id = ?",
-            (user_id, posting_id),
-        ).fetchone() is not None
+    try:
+        return json.loads(raw)
+    except (ValueError, TypeError):
+        return None
 
 
 def build_resume_bytes(user_id: str, posting_id: int) -> tuple[bytes, str] | None:
@@ -223,29 +273,28 @@ def _build_resume(user_id: str, company: str, title: str, posting):
         return None
 
 
-def _resume_meta(stored: str | None) -> dict | None:
-    """Decode the cached resume metadata JSON (or None)."""
-    if not stored:
+_RESUME_NONE = "__none__"  # sentinel: tailoring was attempted and yielded nothing
+
+
+def _ensure_resume(user_id: str, posting_id: int, company: str, title: str,
+                   posting, cached: str | None) -> dict | None:
+    """Resume metadata for the item — build + cache it on first request, then reuse.
+    A sentinel records 'no resume' so we don't retry a disabled build every load."""
+    if cached == _RESUME_NONE:
         return None
-    import json
-
-    try:
-        return json.loads(stored)
-    except (ValueError, TypeError):
-        return None
-
-
-def _cache_package(user_id: str, posting_id: int, answers: str,
-                   resume: dict | None) -> None:
-    import json
-
+    meta = _decode_json(cached)
+    if meta is not None:
+        return meta
+    result = _build_resume(user_id, company, title, posting)
+    meta = ({"filename": result.filename, "variant": result.variant,
+             "pages": result.pages} if result else None)
     with connect() as conn:
         conn.execute(
-            "UPDATE apply_queue SET answers = ?, resume_path = ?, updated_at = ? "
+            "UPDATE apply_queue SET resume_path = ?, updated_at = ? "
             "WHERE user_id = ? AND posting_id = ?",
-            (answers, json.dumps(resume) if resume else None, _now(),
-             user_id, posting_id),
+            (json.dumps(meta) if meta else _RESUME_NONE, _now(), user_id, posting_id),
         )
+    return meta
 
 
 # ---------------------------------------------------------------------------
@@ -366,34 +415,37 @@ async function openPkg(pid){
         <a class="btn" href="/apply/resume?user=${encodeURIComponent(USER)}&id=${pid}">Download PDF</a></div>`
     : `<div class="note">No tailored resume (resume tailoring is off).</div>`;
 
+  const qs = pkg.questions || [];
+  const qHtml = qs.map((q,i)=>`
+    <h4>${esc(q.question)}</h4>
+    <textarea class="ans" id="ans${pid}_${i}">${esc(q.answer||'')}</textarea>
+    <div class="abtns">
+      <button onclick="saveAns(${pid},${i})">Save</button>
+      <button onclick="copyAns(${pid},${i})">Copy</button>
+      <button class="ghost" onclick="redraft(${pid},${i})">↻ Redraft</button>
+      <span id="msg${pid}_${i}" class="note" style="margin:0;align-self:center"></span>
+    </div>`).join('');
+
   box.innerHTML = identHtml
-    + `<h4>Your answer — edit if you like</h4>
-       <textarea class="ans" id="ans${pid}">${esc(pkg.answers||'')}</textarea>
-       <div class="abtns">
-         <button onclick="saveAns(${pid})">Save</button>
-         <button onclick="copyAns(${pid})">Copy</button>
-         <button class="ghost" onclick="redraft(${pid})">↻ Redraft</button>
-         <span id="msg${pid}" class="note" style="margin:0;align-self:center"></span>
-       </div>`
+    + (qHtml || '<div class="note">No drafted answers yet.</div>')
     + resumeHtml
     + (pkg.url ? `<a class="submit" href="${esc(pkg.url)}" target="_blank" rel="noopener"
           onclick="setTimeout(()=>mark(${pid},'submitted'),500)">Open &amp; submit ↗</a>
           <div class="note" style="text-align:center">Opens the real form — you click submit there. We'll mark it submitted.</div>`
         : '');
 }
-async function saveAns(pid){
-  const v=$('ans'+pid).value;
-  await jpost('/apply/answer/save',{user:USER,posting_id:pid,answer:v});
-  flash(pid,'Saved ✓');
+async function saveAns(pid,i){
+  await jpost('/apply/answer/save',{user:USER,posting_id:pid,index:i,answer:$('ans'+pid+'_'+i).value});
+  flash(pid,i,'Saved ✓');
 }
-function copyAns(pid){ navigator.clipboard.writeText($('ans'+pid).value).then(()=>flash(pid,'Copied ✓')); }
-async function redraft(pid){
-  flash(pid,'Redrafting…');
-  const r=await jpost('/apply/answer/redraft',{user:USER,posting_id:pid});
-  if(r.answer){ $('ans'+pid).value=r.answer; flash(pid,'Fresh draft ✓'); }
-  else flash(pid,'Could not redraft');
+function copyAns(pid,i){ navigator.clipboard.writeText($('ans'+pid+'_'+i).value).then(()=>flash(pid,i,'Copied ✓')); }
+async function redraft(pid,i){
+  flash(pid,i,'Redrafting…');
+  const r=await jpost('/apply/answer/redraft',{user:USER,posting_id:pid,index:i});
+  if(r.answer){ $('ans'+pid+'_'+i).value=r.answer; flash(pid,i,'Fresh draft ✓'); }
+  else flash(pid,i,'Could not redraft');
 }
-function flash(pid,t){ const m=$('msg'+pid); if(!m)return; m.textContent=t; m.className='note ok';
+function flash(pid,i,t){ const m=$('msg'+pid+'_'+i); if(!m)return; m.textContent=t; m.className='note ok';
   setTimeout(()=>{ if(m) m.textContent=''; }, 2500); }
 load();
 </script></div></body></html>"""

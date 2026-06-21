@@ -16,6 +16,7 @@ spec's "never send without explicit confirmation" is satisfied trivially today
 """
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from dataclasses import dataclass
@@ -290,6 +291,93 @@ def _draft_via_claude(company: str, name: str, role: str | None) -> str:
 # ---------------------------------------------------------------------------
 # Assisted apply (Phase 2): draft a "why I'm a fit" blurb for a posting
 # ---------------------------------------------------------------------------
+
+_QA_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "answers": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"id": {"type": "integer"}, "answer": {"type": "string"}},
+                "required": ["id", "answer"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["answers"],
+    "additionalProperties": False,
+}
+
+
+def draft_question_answers(
+    questions: list[str], company: str, title: str, description: str | None,
+    profile_row=None, *, identity_block: str = "",
+) -> list[str]:
+    """Draft a tailored answer for EACH question in one batched Haiku call (cheap;
+    one round-trip for the whole application). Grounded in the candidate's
+    background + identity + the JD. Falls back to per-question templates on any
+    failure — never hard-fails, and always returns one answer per question."""
+    if not questions:
+        return []
+    background = ""
+    if profile_row is not None:
+        from .profile import profile_text
+
+        background = profile_text(profile_row)
+    if get_settings().use_llm_router:
+        try:
+            return _draft_question_answers_via_claude(
+                questions, company, title, description, background, identity_block
+            )
+        except Exception:  # network/auth/parse — fall back, never block
+            logger.exception("Claude batched answers failed; using templates")
+    return [_answer_question_template(q, company, title) for q in questions]
+
+
+def _draft_question_answers_via_claude(
+    questions: list[str], company: str, title: str, description: str | None,
+    background: str, identity_block: str,
+) -> list[str]:
+    import anthropic
+
+    s = get_settings()
+    client = anthropic.Anthropic(api_key=s.anthropic_api_key)
+    desc = (description or "").strip()[:1100]
+    listing = "\n".join(f"[{i}] {q}" for i, q in enumerate(questions))
+    resp = client.messages.create(
+        model=s.anthropic_model,
+        max_tokens=min(2048, 220 * len(questions) + 120),
+        system=(
+            "You answer job-application questions in the candidate's own "
+            "first-person voice. For EACH question return a specific, honest answer "
+            "(<=120 words) grounded ONLY in the candidate's real background — never "
+            "invent employers, projects, or numbers. Tie answers to THIS company "
+            "and role where relevant. No preamble, no placeholders like [your name], "
+            "no sign-off. Return one entry per question id."
+        ),
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Role: {title} at {company}.\n"
+                f"Candidate: {identity_block or '(not provided)'}\n"
+                f"Background:\n{background or '(not provided)'}\n"
+                f"Job description (may be truncated):\n{desc or '(not provided)'}\n\n"
+                f"QUESTIONS:\n{listing}"
+            ),
+        }],
+        output_config={"format": {"type": "json_schema", "schema": _QA_SCHEMA}},
+    )
+    payload = next((b.text for b in resp.content if b.type == "text"), "")
+    out = [None] * len(questions)
+    for item in json.loads(payload).get("answers", []):
+        i = item.get("id")
+        if isinstance(i, int) and 0 <= i < len(questions):
+            out[i] = str(item.get("answer", "")).strip()
+    # Fill any the model skipped with a template so the list is always complete.
+    return [a or _answer_question_template(questions[i], company, title)
+            for i, a in enumerate(out)]
+
 
 def draft_application_answers(
     company: str, title: str, description: str | None, profile_row=None
