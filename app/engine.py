@@ -94,7 +94,7 @@ MENU = (
     "  \"any new jobs\" — quick list of queued matches\n"
     "  \"review jobs\" — go through new matches one by one (skip / apply / stop)\n"
     "  \"apply 2\" — get the link + a drafted blurb for posting #2 (I log it)\n"
-    "  \"queue 2\" — stage #2 to your apply queue (package ready to review at /apply)\n"
+    "  \"queue 2\" · \"queue top 3\" — stage matches to your apply queue (prepared at /apply)\n"
     "  \"dismiss 2\" · \"snooze 2 for a week\" — clear a posting you're not into\n"
     "  \"only show 80%+ matches\" · \"be less picky\" — tune match strictness\n"
     "\n"
@@ -1009,6 +1009,11 @@ def _do_queue_job(user_id: str, p: ParsedMessage) -> str:
     """Stage a surfaced posting into the apply queue. We pre-assemble the
     application package (draft answers + tailored resume) for review at /apply —
     nothing is applied or submitted here."""
+    spec = (p.message or "").strip()
+    if spec == "all" or spec.startswith("top:"):
+        n = None if spec == "all" else int(spec.split(":", 1)[1])
+        return _do_queue_bulk(user_id, n)
+
     posting = _resolve_posting(user_id, p)
     if posting is None:
         return _posting_not_found(p, "queue")
@@ -1023,6 +1028,23 @@ def _do_queue_job(user_id: str, p: ParsedMessage) -> str:
         "application package (draft answers + tailored resume) ready to review and "
         "submit at /apply — I never submit anything for you."
     )
+
+
+def _do_queue_bulk(user_id: str, n: int | None) -> str:
+    """Stage the top ``n`` un-staged queued matches (or all of them), best score
+    first — one-shot triage. Returns a count summary."""
+    from . import apply_queue
+
+    staged = {it["posting_id"] for it in apply_queue.list_queue(user_id)}
+    fresh = [r for r in jobstore.list_review_queue(user_id) if r["id"] not in staged]
+    if n is not None:
+        fresh = fresh[:n]
+    count = sum(1 for r in fresh if apply_queue.stage(user_id, r["id"]))
+    if not count:
+        return ("Nothing new to queue — your top matches are already staged. "
+                "Text 'any new jobs' to see what's there.")
+    return (f"📥 Staged {count} match{'es' if count != 1 else ''} to your apply "
+            "queue — each gets a prepared application to review & submit at /apply.")
 
 
 def _do_dismiss_job(user_id: str, p: ParsedMessage) -> str:

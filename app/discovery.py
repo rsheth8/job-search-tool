@@ -198,7 +198,9 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
     sender = sender or reminders.get_sender()
     threshold = profile.effective_threshold(prof, settings.job_relevance_threshold)
     mode = settings.job_alert_mode_normalized
+    auto_threshold = settings.job_auto_queue_threshold
     notify_batch: list[tuple[JobPosting, float, int]] = []
+    auto_stage_ids: list[int] = []
     messages_sent = 0
 
     for posting, sc in scored:
@@ -220,6 +222,24 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
         if row is None or not good:
             continue
         notify_batch.append((posting, sc, row["id"]))
+        # Auto-stage the strongest matches into the apply queue (skip triage).
+        if auto_threshold > 0 and sc >= auto_threshold:
+            auto_stage_ids.append(row["id"])
+
+    auto_staged = 0
+    if auto_stage_ids:
+        from . import apply_queue
+        for pid in auto_stage_ids:
+            try:
+                if apply_queue.stage(user_id, pid):
+                    auto_staged += 1
+            except Exception:  # noqa: BLE001 — staging is best-effort
+                logger.exception("auto-stage failed for posting %s", pid)
+
+    auto_note = (
+        f"\n\n📥 {auto_staged} top match(es) auto-staged — review & apply at /apply"
+        if auto_staged else ""
+    )
 
     if notify_batch and mode == "instant":
         for posting, sc, pid in notify_batch:
@@ -230,7 +250,7 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
                 logger.exception("alert send failed for posting %s", pid)
     elif notify_batch and mode == "digest":
         try:
-            sender.send(user_id, job_alerts.build_digest(notify_batch))
+            sender.send(user_id, job_alerts.build_digest(notify_batch) + auto_note)
             messages_sent = 1
         except Exception:  # noqa: BLE001
             logger.exception("digest send failed for %s", user_id)

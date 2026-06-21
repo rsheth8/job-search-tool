@@ -50,6 +50,22 @@ def test_tick_digest_mode_strong_match_only(monkeypatch):
     assert "greenhouse:acme:3" not in statuses
 
 
+def test_tick_auto_queues_strong_matches(monkeypatch):
+    from app import apply_queue, config
+    _setup(monkeypatch)
+    monkeypatch.setenv("JOB_AUTO_QUEUE_THRESHOLD", "0.9")  # only the 100% match
+    config.get_settings.cache_clear()
+    sender = FakeSender()
+    discovery.tick("u", sender=sender)
+
+    # The strong match auto-stages into the apply queue; the weak one doesn't.
+    staged = {it["title"] for it in apply_queue.list_queue("u")}
+    assert "Software Engineer" in staged
+    assert len(apply_queue.list_queue("u")) == 1
+    # The digest mentions it.
+    assert "auto-staged" in sender.sent[0][1]
+
+
 def test_tick_instant_mode_one_message_per_job(monkeypatch):
     _setup(monkeypatch)
     monkeypatch.setenv("JOB_ALERT_MODE", "instant")
