@@ -296,7 +296,8 @@ CREATE TABLE IF NOT EXISTS apply_queue (
     user_id      TEXT NOT NULL,
     posting_id   INTEGER NOT NULL REFERENCES job_postings(id) ON DELETE CASCADE,
     status       TEXT NOT NULL DEFAULT 'staged',  -- staged | ready | submitted
-    answers      TEXT,                            -- cached draft "why I'm a fit"
+    answers      TEXT,                            -- legacy single "why I'm a fit" blurb
+    questions_json TEXT,                          -- cached [{question, answer}] per posting
     resume_path  TEXT,                            -- cached tailored-resume PDF path
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL,
@@ -347,6 +348,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE job_search_profile ADD COLUMN min_relevance REAL")
     if prof_cols and "applicant_json" not in prof_cols:
         conn.execute("ALTER TABLE job_search_profile ADD COLUMN applicant_json TEXT")
+    aq_cols = {r[1] for r in conn.execute("PRAGMA table_info(apply_queue)")}
+    if aq_cols and "questions_json" not in aq_cols:
+        conn.execute("ALTER TABLE apply_queue ADD COLUMN questions_json TEXT")
     # posting_summaries moved from (tldr, fit) columns to a JSON blob; the old rows
     # are a regenerable cache, so just rebuild the table on the richer schema.
     sum_cols = {r[1] for r in conn.execute("PRAGMA table_info(posting_summaries)")}

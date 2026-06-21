@@ -37,18 +37,21 @@ def test_list_queue_joins_posting_fields():
     assert it["has_answers"] is False and it["has_resume"] is False
 
 
-def test_get_package_assembles_and_caches_answers():
+def test_get_package_assembles_tailored_questions():
     pid = _save()
     apply_queue.stage("u1", pid)
     pkg = apply_queue.get_package("u1", pid)
     assert pkg is not None
     assert pkg["url"] == "https://x/apply"
-    assert pkg["answers"]                      # template blurb (offline)
     assert pkg["resume"] is None               # tailoring disabled in tests
-    # Cached now: the answers are persisted on the row.
+    qs = pkg["questions"]
+    assert len(qs) == len(apply_queue.COMMON_QUESTIONS)
+    assert all(q["question"] and q["answer"] for q in qs)   # one answer each
+    assert "Acme" in qs[0]["question"]         # company interpolated
+    # Cached now, persisted on the row.
     assert apply_queue.list_queue("u1")[0]["has_answers"] is True
-    # Re-opening returns the same cached answers.
-    assert apply_queue.get_package("u1", pid)["answers"] == pkg["answers"]
+    # Re-opening returns the same cached questions (no re-draft).
+    assert apply_queue.get_package("u1", pid)["questions"] == qs
 
 
 def test_get_package_includes_identity():
@@ -62,23 +65,27 @@ def test_get_package_includes_identity():
     assert pkg["identity"]["location"] == "Chicago, IL"   # derived
 
 
-def test_save_answer_persists_edit():
+def test_save_answer_persists_one_question():
     pid = _save()
     apply_queue.stage("u1", pid)
     apply_queue.get_package("u1", pid)                     # assemble first
-    assert apply_queue.save_answer("u1", pid, "My edited answer.") is True
-    assert apply_queue.get_package("u1", pid)["answers"] == "My edited answer."
-    assert apply_queue.save_answer("u1", 99999, "x") is False  # not staged
+    assert apply_queue.save_answer("u1", pid, 1, "My edited answer.") is True
+    qs = apply_queue.get_package("u1", pid)["questions"]
+    assert qs[1]["answer"] == "My edited answer."
+    assert qs[0]["answer"] != "My edited answer."          # only #1 changed
+    assert apply_queue.save_answer("u1", pid, 99, "x") is False   # bad index
+    assert apply_queue.save_answer("u1", 99999, 0, "x") is False  # not staged
 
 
-def test_redraft_regenerates_answer():
+def test_redraft_regenerates_one_question():
     pid = _save()
     apply_queue.stage("u1", pid)
-    apply_queue.save_answer("u1", pid, "stale")
-    fresh = apply_queue.redraft_answer("u1", pid)
+    apply_queue.save_answer("u1", pid, 0, "stale")
+    fresh = apply_queue.redraft_answer("u1", pid, 0)
     assert fresh and fresh != "stale"
-    assert apply_queue.get_package("u1", pid)["answers"] == fresh   # cached
-    assert apply_queue.redraft_answer("u1", 99999) is None          # not staged
+    assert apply_queue.get_package("u1", pid)["questions"][0]["answer"] == fresh
+    assert apply_queue.redraft_answer("u1", pid, 99) is None      # bad index
+    assert apply_queue.redraft_answer("u1", 99999, 0) is None     # not staged
 
 
 def test_get_package_missing_item_returns_none():
@@ -128,7 +135,7 @@ def test_endpoints_stage_review_and_mark():
     assert data["queue"][0]["posting_id"] == pid             # now in the queue
 
     pkg = c.post("/apply/package", json={"user": "u1", "posting_id": pid}).json()
-    assert pkg["answers"] and pkg["url"] == "https://x/apply"
+    assert pkg["questions"] and pkg["url"] == "https://x/apply"
 
     assert c.post("/apply/mark", json={"user": "u1", "posting_id": pid,
                                        "status": "submitted"}).json()["ok"]
@@ -142,12 +149,13 @@ def test_answer_save_and_redraft_endpoints():
     c.post("/apply/package", json={"user": "u1", "posting_id": pid})
 
     assert c.post("/apply/answer/save",
-                  json={"user": "u1", "posting_id": pid, "answer": "edited"}).json()["ok"]
+                  json={"user": "u1", "posting_id": pid, "index": 0,
+                        "answer": "edited"}).json()["ok"]
     pkg = c.post("/apply/package", json={"user": "u1", "posting_id": pid}).json()
-    assert pkg["answers"] == "edited"
+    assert pkg["questions"][0]["answer"] == "edited"
 
     fresh = c.post("/apply/answer/redraft",
-                   json={"user": "u1", "posting_id": pid}).json()["answer"]
+                   json={"user": "u1", "posting_id": pid, "index": 0}).json()["answer"]
     assert fresh and fresh != "edited"
 
 

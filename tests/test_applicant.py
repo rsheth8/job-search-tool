@@ -80,6 +80,16 @@ def test_answer_question_template_is_grounded_and_safe():
     assert ans.strip()
 
 
+def test_draft_question_answers_one_per_question_offline():
+    qs = ["Why do you want to work at Stripe?",
+          "Why are you a strong fit for the Backend Engineer role?",
+          "Tell us about a relevant project."]
+    answers = outreach.draft_question_answers(qs, "Stripe", "Backend Engineer", "payments")
+    assert len(answers) == len(qs)               # always one answer per question
+    assert all(a and a.strip() for a in answers)
+    assert outreach.draft_question_answers([], "Stripe", "X", "") == []
+
+
 # --- endpoints -------------------------------------------------------------
 
 def test_identity_endpoints_roundtrip():
