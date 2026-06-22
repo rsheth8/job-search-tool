@@ -1,0 +1,200 @@
+"""Headless submit worker (Phase 2).
+
+A separate, on-demand service that fills — and, after you approve the preview,
+submits — public application forms (Greenhouse / Lever / Ashby; no login needed).
+It reuses the main app's field-matching brain (``app.fieldmatch``) so it makes the
+exact same decisions as the in-browser extension.
+
+Flow per job:
+  1. claim a pending fill request from the main app  (POST /worker/claim)
+  2. open the public form, fill every field it recognizes, screenshot
+  3. report the filled preview                        (POST /worker/preview)
+  4. poll until you approve (or cancel) on your phone  (GET  /apply/request)
+  5. on approval, click submit and report the result   (POST /worker/result)
+
+NOTHING is submitted without your explicit approval — step 4 is a human gate.
+
+Run:  BASE_URL=https://job-search-tool.fly.dev APPLY_API_TOKEN=… python -m worker.run
+      add --once to process a single job and exit (handy for testing).
+
+NOTE: the browser-driving here is the one piece that can't be unit-tested — run it
+against a real form with you watching the first few times and tune from there.
+"""
+from __future__ import annotations
+
+import os
+import sys
+import time
+
+import httpx
+
+from app import fieldmatch
+
+BASE_URL = os.environ.get("BASE_URL", "http://localhost:8000").rstrip("/")
+TOKEN = os.environ.get("APPLY_API_TOKEN", "")
+POLL_SECONDS = int(os.environ.get("WORKER_POLL_SECONDS", "5"))
+APPROVE_TIMEOUT = int(os.environ.get("WORKER_APPROVE_TIMEOUT", "900"))  # 15 min
+
+_HEADERS = {"X-Apply-Token": TOKEN} if TOKEN else {}
+
+# Injected into the page to read every fillable field's label + options, tagging
+# each with data-jaf-id so we can act on it afterward. Mirrors the extension's
+# label extraction.
+_EXTRACT_JS = r"""
+() => {
+  const lbl = (el) => {
+    const bits = [];
+    if (el.id){ const l=document.querySelector(`label[for="${CSS.escape(el.id)}"]`); if(l) bits.push(l.textContent); }
+    const w = el.closest('label'); if (w) bits.push(w.textContent);
+    if (el.getAttribute('aria-label')) bits.push(el.getAttribute('aria-label'));
+    const by = el.getAttribute('aria-labelledby');
+    if (by) by.split(/\s+/).forEach(id=>{const n=document.getElementById(id); if(n) bits.push(n.textContent);});
+    if (el.placeholder) bits.push(el.placeholder);
+    bits.push(el.name||'', el.id||'');
+    return bits.join(' ').replace(/\s+/g,' ').trim();
+  };
+  const out = [];
+  let i = 0;
+  document.querySelectorAll('input, textarea, select').forEach(el => {
+    const t = (el.type||'').toLowerCase();
+    if (['hidden','submit','button','file','checkbox','image','reset'].includes(t)) return;
+    if (!(el.offsetParent || el.getClientRects().length) || el.disabled || el.readOnly) return;
+    el.setAttribute('data-jaf-id', i);
+    const tag = el.tagName.toLowerCase();
+    out.push({ id: i, label: lbl(el), tag, type: t,
+      options: tag==='select' ? [...el.options].map(o=>o.text) : [] });
+    i++;
+  });
+  return out;
+}
+"""
+
+
+def _api(method: str, path: str, **kw) -> dict:
+    r = httpx.request(method, BASE_URL + path, headers=_HEADERS, timeout=30, **kw)
+    r.raise_for_status()
+    return r.json() if r.content else {}
+
+
+def _pick_answer(label: str, questions: list[dict]) -> str | None:
+    """Best drafted answer for an essay field: the question whose words overlap the
+    field label most, else the first answer."""
+    if not questions:
+        return None
+    words = set(label.lower().split())
+    best, score = None, -1
+    for q in questions:
+        overlap = len(words & set(q["question"].lower().split()))
+        if overlap > score:
+            best, score = q, overlap
+    return (best or questions[0]).get("answer")
+
+
+def fill_form(page, job: dict) -> dict:
+    """Fill the page from the job's identity + answers. Returns a preview summary."""
+    identity = job.get("identity", {})
+    questions = job.get("questions", [])
+    page.goto(job["url"], wait_until="domcontentloaded", timeout=45000)
+    page.wait_for_timeout(1500)
+    fields = page.evaluate(_EXTRACT_JS)
+
+    filled, skipped = [], []
+    for f in fields:
+        sel = f'[data-jaf-id="{f["id"]}"]'
+        label, tag = f["label"], f["tag"]
+        key = fieldmatch.match_key(label)
+        try:
+            if key and identity.get(key):
+                value = identity[key]
+                if tag == "select":
+                    opt = fieldmatch.select_value(f["options"], value)
+                    if opt:
+                        page.select_option(sel, label=opt)
+                        filled.append({"label": label, "value": opt})
+                    else:
+                        skipped.append(label)
+                else:
+                    page.fill(sel, str(value))
+                    filled.append({"label": label, "value": str(value)})
+            elif tag == "textarea" or fieldmatch.is_essay_label(label):
+                ans = _pick_answer(label, questions)
+                if ans:
+                    page.fill(sel, ans)
+                    filled.append({"label": label, "value": ans[:60] + "…"})
+                else:
+                    skipped.append(label)
+            elif label:
+                skipped.append(label)
+        except Exception as e:  # noqa: BLE001 — one stubborn field never aborts the fill
+            skipped.append(f"{label} ({e.__class__.__name__})")
+    return {"filled": filled, "skipped": skipped[:20]}
+
+
+def submit_form(page) -> None:
+    """Click the form's submit button. Heuristic; tune per ATS."""
+    for sel in ('button[type="submit"]', 'input[type="submit"]',
+                'button:has-text("Submit")', 'button:has-text("Apply")'):
+        btn = page.query_selector(sel)
+        if btn:
+            btn.click()
+            page.wait_for_timeout(3000)
+            return
+    raise RuntimeError("no submit button found")
+
+
+def handle_job(browser, job: dict) -> None:
+    rid = job["request_id"]
+    page = browser.new_page()
+    try:
+        preview = fill_form(page, job)
+        _api("POST", "/worker/preview", json={"request_id": rid, "preview": preview})
+        print(f"[worker] req {rid}: filled {len(preview['filled'])}, awaiting approval")
+
+        waited = 0
+        while waited < APPROVE_TIMEOUT:
+            time.sleep(POLL_SECONDS)
+            waited += POLL_SECONDS
+            req = _api("GET", "/apply/request",
+                       params={"user": job["user"], "posting_id": job["posting_id"]}).get("request")
+            status = (req or {}).get("status")
+            if status == "approved":
+                submit_form(page)
+                _api("POST", "/worker/result", json={"request_id": rid, "status": "submitted"})
+                print(f"[worker] req {rid}: submitted")
+                return
+            if status in ("failed", "submitted"):  # cancelled or already done
+                print(f"[worker] req {rid}: {status}, dropping")
+                return
+        _api("POST", "/worker/result",
+             json={"request_id": rid, "status": "failed", "error": "approval timed out"})
+    except Exception as e:  # noqa: BLE001
+        _api("POST", "/worker/result",
+             json={"request_id": rid, "status": "failed", "error": str(e)})
+        print(f"[worker] req {rid}: failed — {e}")
+    finally:
+        page.close()
+
+
+def main(once: bool = False) -> int:
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            while True:
+                job = _api("POST", "/worker/claim")
+                if job:
+                    handle_job(browser, job)
+                    if once:
+                        return 0
+                else:
+                    if once:
+                        print("[worker] nothing to do")
+                        return 0
+                    time.sleep(POLL_SECONDS)
+        finally:
+            browser.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(once="--once" in sys.argv))

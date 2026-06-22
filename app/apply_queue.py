@@ -345,6 +345,10 @@ _PAGE = """<!doctype html><html><head><meta charset="utf-8">
   .note{ color:var(--dim); font-size:12px; margin-top:10px; }
   .empty{ color:var(--dim); font-style:italic; padding:8px 0; }
   .ok{ color:var(--ok); }
+  .req{ margin-top:6px; }
+  .reqbar{ display:flex; justify-content:space-between; align-items:center; gap:8px;
+           font-size:13px; color:var(--ink); margin-top:8px; }
+  a.submit{ cursor:pointer; }
 </style></head><body><div class="wrap">
   <h1>Apply queue <span class="co">· __USER__</span></h1>
   <p class="sub">Each job is pre-assembled — your details, a drafted answer, and a
@@ -388,12 +392,63 @@ function renderQueue(items){
       <div class="score">${Math.round((it.score||0)*100)}%</div></div>
       <div class="actions">
         <button class="primary" onclick="openPkg(${it.posting_id})">Review &amp; apply</button>
+        <button onclick="autoSubmit(${it.posting_id})">🤖 Auto-fill &amp; submit</button>
         <button onclick="mark(${it.posting_id},'submitted')">✓ Submitted</button>
         <button class="ghost" onclick="remove(${it.posting_id})">Remove</button>
       </div>
+      <div class="req" id="r${it.posting_id}"></div>
       <div class="pkg" id="p${it.posting_id}"></div></div>`).join('');
+  items.forEach(it=>pollRequest(it.posting_id));
 }
+const REQ_LABEL = {pending:'⏳ Queued for the auto-filler…', filling:'⚙️ Filling the form…',
+  preview:'🖼️ Filled — review &amp; approve below', approved:'✅ Approved — submitting…',
+  submitting:'📤 Submitting…', submitted:'✅ Submitted', failed:'⚠️ Stopped'};
 async function stage(pid){ await jpost('/apply/stage',{user:USER,posting_id:pid}); load(); }
+async function autoSubmit(pid){
+  $('r'+pid).innerHTML='<div class="note">starting the auto-filler…</div>';
+  await jpost('/apply/autosubmit',{user:USER,posting_id:pid});
+  pollRequest(pid, true);
+}
+async function pollRequest(pid){
+  let req;
+  try{ req=(await (await fetch(`/apply/request?user=${encodeURIComponent(USER)}&posting_id=${pid}`)).json()).request; }
+  catch(e){ return; }
+  renderRequest(pid, req);
+  if(req && ['pending','filling','approved','submitting'].includes(req.status))
+    setTimeout(()=>pollRequest(pid), 3000);
+}
+function renderRequest(pid, req){
+  const box=$('r'+pid); if(!box) return;
+  if(!req || (req.status==='failed' && req.error==='cancelled')){ box.innerHTML=''; return; }
+  let html = `<div class="reqbar"><span>${REQ_LABEL[req.status]||req.status}</span>`;
+  if(['pending','filling','preview','approved','submitting'].includes(req.status))
+    html += ` <button class="ghost" onclick="cancelReq(${pid},${req.id})">Cancel</button>`;
+  html += `</div>`;
+  if(req.status==='failed' && req.error && req.error!=='cancelled')
+    html += `<div class="note">${esc(req.error)}</div>`;
+  const pv = req.preview;
+  if(req.status==='preview' && pv){
+    const filled=(pv.filled||[]).map(f=>`<span class="chip"><b>${esc(f.label)}:</b> ${esc(f.value)}</span>`).join('');
+    html += `<div class="note" style="margin-top:8px">It filled these — check them, then approve:</div>
+      <div class="ident">${filled||'<span class="note">no fields filled</span>'}</div>`;
+    if(pv.skipped && pv.skipped.length)
+      html += `<div class="note">Left for you: ${esc(pv.skipped.join(', '))}</div>`;
+    if(pv.screenshot_url)
+      html += `<div style="margin-top:8px"><img src="${esc(pv.screenshot_url)}" style="max-width:100%;border-radius:8px;border:1px solid var(--line)"></div>`;
+    html += `<a class="submit" onclick="approveReq(${pid},${req.id})">✅ Approve &amp; submit</a>
+      <div class="note" style="text-align:center">It submits the form for you. Nothing is sent until you tap this.</div>`;
+  }
+  box.innerHTML = html;
+}
+async function approveReq(pid, rid){
+  $('r'+pid).innerHTML='<div class="note">submitting…</div>';
+  await jpost('/apply/request/approve',{user:USER,request_id:rid});
+  pollRequest(pid);
+}
+async function cancelReq(pid, rid){
+  await jpost('/apply/request/cancel',{user:USER,request_id:rid});
+  pollRequest(pid);
+}
 async function mark(pid,st){ await jpost('/apply/mark',{user:USER,posting_id:pid,status:st}); load(); }
 async function remove(pid){ await jpost('/apply/remove',{user:USER,posting_id:pid}); load(); }
 

@@ -288,6 +288,22 @@ CREATE TABLE IF NOT EXISTS posting_summaries (
     created_at   TEXT NOT NULL
 );
 
+-- Phase 2 submit pipeline: a request for the headless worker to fill (and, after
+-- the user approves the preview, submit) a public application form. Status walks
+-- pending -> filling -> preview -> approved -> submitting -> submitted | failed.
+-- We NEVER submit without an explicit user approval of the filled preview.
+CREATE TABLE IF NOT EXISTS fill_requests (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      TEXT NOT NULL,
+    posting_id   INTEGER NOT NULL REFERENCES job_postings(id) ON DELETE CASCADE,
+    status       TEXT NOT NULL DEFAULT 'pending',
+    preview_json TEXT,            -- {screenshot_url, filled:[{label,value}], skipped:[...]}
+    error        TEXT,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fill_requests_status ON fill_requests(status);
+
 -- Semi-auto application queue (Track C): postings the user has staged to apply
 -- to, with a pre-assembled package (draft answers + tailored resume) ready for a
 -- final human review. Status walks staged -> ready -> submitted; we NEVER submit
