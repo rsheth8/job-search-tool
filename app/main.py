@@ -291,6 +291,122 @@ async def apply_answer(request: Request) -> dict:
     return {"question": question, "answer": answer}
 
 
+@app.post("/apply/autosubmit")
+async def apply_autosubmit(request: Request) -> dict:
+    """User asks the worker to fill (and, after they approve, submit) an item."""
+    from . import apply_queue, fill_requests
+    from . import dashboard as dash
+
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    pid = int(body["posting_id"])
+    apply_queue.stage(uid, pid)  # ensure it's staged + its package is ready
+    apply_queue.get_package(uid, pid)
+    req = fill_requests.create(uid, pid)
+    return {"request_id": req["id"], "status": req["status"]}
+
+
+@app.get("/apply/request")
+def apply_request_status(user: str | None = None, posting_id: int = 0) -> dict:
+    """Current fill-request state for a posting (drives the review-page polling)."""
+    from . import fill_requests
+    from . import dashboard as dash
+
+    uid = user or dash.default_user()
+    return {"request": fill_requests.for_posting(uid, posting_id)}
+
+
+@app.post("/apply/request/approve")
+async def apply_request_approve(request: Request) -> dict:
+    """User approves a filled preview — the worker may now submit it."""
+    from . import fill_requests
+    from . import dashboard as dash
+
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    return {"ok": fill_requests.approve(uid, int(body["request_id"]))}
+
+
+@app.post("/apply/request/cancel")
+async def apply_request_cancel(request: Request) -> dict:
+    from . import fill_requests
+    from . import dashboard as dash
+
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    return {"ok": fill_requests.cancel(uid, int(body["request_id"]))}
+
+
+# --- worker-facing API (token-gated) -------------------------------------
+
+@app.post("/worker/claim")
+async def worker_claim(request: Request) -> dict:
+    """Worker claims the next pending fill request and gets its prepared package
+    (url + identity + per-question answers + resume availability)."""
+    from . import apply_queue, fill_requests
+
+    _require_apply_token(request)
+    req = fill_requests.claim_next()
+    if req is None:
+        return {}
+    pkg = apply_queue.get_package(req["user_id"], req["posting_id"]) or {}
+    return {
+        "request_id": req["id"], "user": req["user_id"],
+        "posting_id": req["posting_id"], "url": pkg.get("url", ""),
+        "identity": pkg.get("identity", {}), "questions": pkg.get("questions", []),
+        "has_resume": bool(pkg.get("resume")),
+    }
+
+
+@app.post("/worker/claim_approved")
+async def worker_claim_approved(request: Request) -> dict:
+    """Worker claims the next approved request to submit it."""
+    from . import fill_requests
+
+    _require_apply_token(request)
+    req = fill_requests.claim_approved()
+    return {"request_id": req["id"], "user": req["user_id"],
+            "posting_id": req["posting_id"]} if req else {}
+
+
+@app.post("/worker/preview")
+async def worker_preview(request: Request) -> dict:
+    """Worker reports the filled form (screenshot + field summary) for approval."""
+    from . import fill_requests
+
+    _require_apply_token(request)
+    body = await request.json()
+    ok = fill_requests.set_preview(int(body["request_id"]), body.get("preview") or {})
+    return {"ok": ok}
+
+
+@app.post("/worker/result")
+async def worker_result(request: Request) -> dict:
+    """Worker reports the outcome of a submission (submitted | failed)."""
+    from . import fill_requests, store
+    from . import jobstore
+
+    _require_apply_token(request)
+    body = await request.json()
+    rid = int(body["request_id"])
+    if body.get("status") == "submitted":
+        fill_requests.mark_submitted(rid)
+        # Log it as applied + mark the posting + the queue item.
+        req = fill_requests.get(rid)
+        if req:
+            posting = jobstore.get_posting(req["user_id"], req["posting_id"])
+            if posting:
+                store.create_application(
+                    req["user_id"], posting["company"] or "Unknown",
+                    posting["title"] or "Role", source="discovery:autosubmit")
+                jobstore.mark_posting_status(posting["id"], "applied")
+                from . import apply_queue
+                apply_queue.mark(req["user_id"], req["posting_id"], "submitted")
+        return {"ok": True}
+    fill_requests.mark_failed(rid, body.get("error", "unknown error"))
+    return {"ok": True}
+
+
 @app.get("/apply/resume")
 def apply_resume(user: str | None = None, id: int = 0) -> Response:
     """Download the staged item's tailored resume PDF (rebuilt from cache)."""
