@@ -22,7 +22,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from . import jobstore, outreach, profile as profile_mod
+from . import ats, jobstore, outreach, profile as profile_mod
 from .db import connect
 
 logger = logging.getLogger("apply_queue")
@@ -110,6 +110,7 @@ def list_queue(user_id: str, *, status: str | None = None) -> list[dict]:
             "url": r["url"],
             "source": r["source"],
             "score": r["relevance_score"],
+            "auto_fillable": ats.is_fillable_form(r["url"]),
             "has_answers": bool(r["questions_json"]),
             "has_resume": bool(r["resume_path"]) and r["resume_path"] != _RESUME_NONE,
             "updated_at": r["updated_at"],
@@ -392,7 +393,11 @@ function renderQueue(items){
       <div class="score">${Math.round((it.score||0)*100)}%</div></div>
       <div class="actions">
         <button class="primary" onclick="openPkg(${it.posting_id})">Review &amp; apply</button>
-        <button onclick="autoSubmit(${it.posting_id})">🤖 Auto-fill &amp; submit</button>
+        ${it.auto_fillable
+          ? `<button onclick="autoSubmit(${it.posting_id})">🤖 Auto-fill &amp; submit</button>`
+          : (it.url ? `<a class="btn" href="${esc(it.url)}" target="_blank" rel="noopener"
+               title="Not a directly fillable form (aggregator / login / captcha) — finish it on your computer with the browser extension"
+               >↗ Open &amp; apply on desktop</a>` : '')}
         <button onclick="mark(${it.posting_id},'submitted')">✓ Submitted</button>
         <button class="ghost" onclick="remove(${it.posting_id})">Remove</button>
       </div>
@@ -406,7 +411,16 @@ const REQ_LABEL = {pending:'⏳ Queued for the auto-filler…', filling:'⚙️ 
 async function stage(pid){ await jpost('/apply/stage',{user:USER,posting_id:pid}); load(); }
 async function autoSubmit(pid){
   $('r'+pid).innerHTML='<div class="note">starting the auto-filler…</div>';
-  await jpost('/apply/autosubmit',{user:USER,posting_id:pid});
+  const res = await jpost('/apply/autosubmit',{user:USER,posting_id:pid});
+  if(res && res.fillable===false){
+    $('r'+pid).innerHTML = `<div class="note">This isn't a directly fillable form `
+      + `(aggregator / login / captcha). `
+      + (res.url?`<a href="${esc(res.url)}" target="_blank" rel="noopener">Open it on your computer ↗</a> `
+                +`and finish with the browser extension.`
+               :`Open it on your computer and finish with the browser extension.`)
+      + `</div>`;
+    return;
+  }
   pollRequest(pid, true);
 }
 async function pollRequest(pid){

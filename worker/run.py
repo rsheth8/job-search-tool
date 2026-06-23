@@ -29,7 +29,7 @@ import time
 
 import httpx
 
-from app import fieldmatch
+from app import ats, fieldmatch
 
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:8000").rstrip("/")
 TOKEN = os.environ.get("APPLY_API_TOKEN", "")
@@ -303,6 +303,15 @@ def submit_form(page) -> None:
 
 def handle_job(browser, job: dict) -> None:
     rid = job["request_id"]
+    # Safety net: the server gates this too, but never fill a non-first-party URL —
+    # aggregator/login/captcha pages have no form, so hand off to the desktop extension.
+    if not ats.is_fillable_form(job.get("url")):
+        _api("POST", "/worker/result", json={
+            "request_id": rid, "status": "failed",
+            "error": "Not a directly fillable form (aggregator / login / captcha) — "
+                     "open it on your computer and finish with the browser extension."})
+        print(f"[worker] req {rid}: {job.get('url')} isn't a first-party ATS form — handed off")
+        return
     job["resume"] = _fetch_resume(job)
     page = browser.new_page()
     try:

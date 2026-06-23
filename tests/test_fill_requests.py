@@ -14,7 +14,9 @@ def _client():
 
 
 def _posting(ext="1"):
-    return JobPosting("greenhouse", ext, "Software Engineer", "https://x/apply",
+    # A first-party ATS URL so /apply/autosubmit treats it as auto-fillable.
+    return JobPosting("greenhouse", ext, "Software Engineer",
+                      "https://boards.greenhouse.io/acme/jobs/1",
                       company="Acme", location="Remote", description="python")
 
 
@@ -83,9 +85,22 @@ def test_autosubmit_then_worker_claim_carries_package():
     assert r["status"] == "pending"
 
     job = c.post("/worker/claim").json()
-    assert job["posting_id"] == pid and job["url"] == "https://x/apply"
+    assert job["posting_id"] == pid and job["url"] == "https://boards.greenhouse.io/acme/jobs/1"
     assert job["identity"]["email"] == "ada@x.com"
     assert job["questions"]                       # per-question answers travel too
+
+
+def test_autosubmit_non_fillable_url_hands_off():
+    """An aggregator/non-ATS URL is not auto-filled: the endpoint reports it as
+    not fillable and creates no worker request."""
+    p = JobPosting("aggregator", "agg1", "SWE",
+                   "https://careersprint.7f.liveblog365.com/job/1?utm_campaign=google_jobs_apply",
+                   company="Acme", location="Remote", description="python")
+    pid = jobstore.save_posting("u1", p, relevance_score=0.8, status="queued")["id"]
+    c = _client()
+    r = c.post("/apply/autosubmit", json={"user": "u1", "posting_id": pid}).json()
+    assert r["fillable"] is False and "request_id" not in r
+    assert c.post("/worker/claim").json() == {}   # nothing queued for the worker
 
 
 def test_worker_preview_then_user_approve_then_submit_logs_application():

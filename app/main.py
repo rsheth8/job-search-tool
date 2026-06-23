@@ -297,13 +297,20 @@ async def apply_autosubmit(request: Request) -> dict:
     from . import apply_queue, fill_requests
     from . import dashboard as dash
 
+    from . import ats
+
     body = await request.json()
     uid = body.get("user") or dash.default_user()
     pid = int(body["posting_id"])
     apply_queue.stage(uid, pid)  # ensure it's staged + its package is ready
-    apply_queue.get_package(uid, pid)
+    pkg = apply_queue.get_package(uid, pid) or {}
+    url = pkg.get("url", "")
+    # Only first-party ATS forms (Greenhouse/Lever/Ashby) are auto-fillable. For
+    # aggregator/login/captcha links there's no form to fill — hand off to desktop.
+    if not ats.is_fillable_form(url):
+        return {"fillable": False, "url": url}
     req = fill_requests.create(uid, pid)
-    return {"request_id": req["id"], "status": req["status"]}
+    return {"request_id": req["id"], "status": req["status"], "fillable": True}
 
 
 @app.get("/apply/request")
