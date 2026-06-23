@@ -71,3 +71,6 @@ Known rough edges to tune against real forms:
 Run it on a few real Greenhouse/Lever/Ashby applications with `WORKER_HEADLESS=false`
 first, note what lands in "skipped", and tighten the rules in `app/fieldmatch.py`
 (shared with the extension) and `submit_form`.
+
+**Doing that live-test? Follow [`LIVE_TEST.md`](LIVE_TEST.md)** — a step-by-step
+checklist (setup, per-ATS coverage, and exactly where each kind of fix goes).
