@@ -55,6 +55,9 @@ _NEVER_FILL = re.compile(
     r"pronoun.{0,4}optional", re.I,
 )
 
+_RESUME_LABEL = re.compile(r"r[eé]sum[eé]|\bcv\b|curriculum vitae", re.I)
+_COVER_LABEL = re.compile(r"cover.?letter", re.I)
+
 
 def match_key(label: str) -> str | None:
     """The identity key a field's label maps to, or None. Returns None for
@@ -82,6 +85,16 @@ def select_value(options: list[str], value) -> str | None:
         if v in ol or ol in v:
             return o
     return None
+
+
+def is_resume_field(label: str) -> bool:
+    """True if a file-upload field is asking for a resume/CV (so the worker attaches
+    the tailored resume there). False for cover-letter or other attachment fields,
+    so we never put the resume in the wrong upload."""
+    text = (label or "").strip().lower()
+    if not text or _COVER_LABEL.search(text):
+        return False
+    return bool(_RESUME_LABEL.search(text))
 
 
 def is_essay_label(label: str) -> bool:

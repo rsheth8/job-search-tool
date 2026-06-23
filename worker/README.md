@@ -27,8 +27,8 @@ python -m playwright install chromium
 BASE_URL=http://localhost:8000 APPLY_API_TOKEN=<your token> \
   python -m worker.run --once     # process one job and exit
 ```
-Drop `--once` to run it as a continuous poller. Set `headless=False` in
-`worker/run.py` while testing so you can watch it fill.
+Drop `--once` to run it as a continuous poller. Set `WORKER_HEADLESS=false` while
+testing so you can watch it fill.
 
 ## Deploy as a separate Fly app
 
@@ -43,21 +43,31 @@ when idle (set `min_machines_running = 1` for instant fills).
 ## What it fills / doesn't
 
 - **Fills:** text facts (name, email, location, links, …), dropdowns, Yes/No
-  questions, and free-text questions (using your pre-drafted answers).
-- **Leaves for you:** file uploads, consent checkboxes, EEO/demographic questions,
-  and anything it can't confidently match — all listed in the preview.
+  questions, free-text questions (using your pre-drafted answers), and the
+  **tailored resume** — attached to the resume/CV upload field (`fieldmatch.is_resume_field`
+  picks it, never a cover-letter upload).
+- **Leaves for you:** cover-letter / other file uploads, consent checkboxes,
+  EEO/demographic questions, and anything it can't confidently match — all listed
+  in the preview.
+
+The preview sent to your phone includes a **full-page screenshot** of the filled
+form (`screenshot_url`, a JPEG data URL), so you approve against the actual form,
+not just a field list.
 
 ## Status / limitations (the honest part)
 
-This is the one piece that **can't be unit-tested** — it drives a live browser.
+This is the one piece that **can't be unit-tested** — it drives a live browser
+(the field-matching brain it calls, `app/fieldmatch.py`, *is* fully tested).
 Known rough edges to tune against real forms:
 - Submit-button detection is heuristic (`submit_form`); per-ATS selectors may need
   tightening.
-- File (resume) upload isn't wired yet — upload your resume manually for now.
+- Resume upload targets `<input type="file">` whose label reads as a resume/CV, or
+  the lone file input if there's exactly one. Multi-upload forms with an unlabeled
+  resume field may still need a manual attach.
 - Custom React dropdowns (some Ashby/Workday widgets) aren't native `<select>` and
   may not fill; the preview will list them as skipped.
 - Holds one job open while awaiting approval (fine for personal volume).
 
-Run it on a few real Greenhouse/Lever/Ashby applications with `headless=False`
+Run it on a few real Greenhouse/Lever/Ashby applications with `WORKER_HEADLESS=false`
 first, note what lands in "skipped", and tighten the rules in `app/fieldmatch.py`
 (shared with the extension) and `submit_form`.

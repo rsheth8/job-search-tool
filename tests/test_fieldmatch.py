@@ -57,3 +57,17 @@ def test_is_essay_label():
     assert fieldmatch.is_essay_label("Describe a project you're proud of")
     assert not fieldmatch.is_essay_label("Email")          # a fact, not an essay
     assert not fieldmatch.is_essay_label("First name")
+
+
+@pytest.mark.parametrize("label", [
+    "Resume", "Resume/CV", "Résumé", "Upload your CV", "Curriculum Vitae",
+])
+def test_is_resume_field_yes(label):
+    assert fieldmatch.is_resume_field(label)
+
+
+@pytest.mark.parametrize("label", [
+    "Cover letter", "Cover Letter (optional)", "Portfolio", "Other attachment", "",
+])
+def test_is_resume_field_no(label):
+    assert not fieldmatch.is_resume_field(label)

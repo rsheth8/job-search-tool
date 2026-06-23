@@ -22,6 +22,7 @@ against a real form with you watching the first few times and tune from there.
 """
 from __future__ import annotations
 
+import base64
 import os
 import sys
 import time
@@ -34,6 +35,8 @@ BASE_URL = os.environ.get("BASE_URL", "http://localhost:8000").rstrip("/")
 TOKEN = os.environ.get("APPLY_API_TOKEN", "")
 POLL_SECONDS = int(os.environ.get("WORKER_POLL_SECONDS", "5"))
 APPROVE_TIMEOUT = int(os.environ.get("WORKER_APPROVE_TIMEOUT", "900"))  # 15 min
+# Run with a visible browser for hands-on tuning: WORKER_HEADLESS=false.
+HEADLESS = os.environ.get("WORKER_HEADLESS", "true").lower() not in ("false", "0", "no")
 
 _HEADERS = {"X-Apply-Token": TOKEN} if TOKEN else {}
 
@@ -70,10 +73,81 @@ _EXTRACT_JS = r"""
 """
 
 
+# File-upload inputs, tagged so we can attach the resume to the right one. These
+# are skipped by _EXTRACT_JS (type=file), and are often visually hidden behind a
+# styled button, so we read them separately and match on their label.
+_FILE_EXTRACT_JS = r"""
+() => {
+  const lbl = (el) => {
+    const bits = [];
+    if (el.id){ const l=document.querySelector(`label[for="${CSS.escape(el.id)}"]`); if(l) bits.push(l.textContent); }
+    const w = el.closest('label'); if (w) bits.push(w.textContent);
+    if (el.getAttribute('aria-label')) bits.push(el.getAttribute('aria-label'));
+    bits.push(el.name||'', el.id||'');
+    return bits.join(' ').replace(/\s+/g,' ').trim();
+  };
+  const out = [];
+  let i = 0;
+  document.querySelectorAll('input[type="file"]').forEach(el => {
+    if (el.disabled) return;
+    el.setAttribute('data-jaf-file', i);
+    out.push({ id: i, label: lbl(el) });
+    i++;
+  });
+  return out;
+}
+"""
+
+
 def _api(method: str, path: str, **kw) -> dict:
     r = httpx.request(method, BASE_URL + path, headers=_HEADERS, timeout=30, **kw)
     r.raise_for_status()
     return r.json() if r.content else {}
+
+
+def _fetch_resume(job: dict) -> dict | None:
+    """Download the staged tailored resume PDF for this job, or None. Returns a
+    Playwright FilePayload ({name, mimeType, buffer}) ready for set_input_files."""
+    if not job.get("has_resume"):
+        return None
+    try:
+        r = httpx.get(
+            BASE_URL + "/apply/resume", headers=_HEADERS, timeout=60,
+            params={"user": job["user"], "id": job["posting_id"]},
+        )
+        r.raise_for_status()
+        if not r.content:
+            return None
+    except Exception as e:  # noqa: BLE001 — a missing resume never aborts the fill
+        print(f"[worker] resume fetch failed: {e}")
+        return None
+    name = "resume.pdf"
+    disp = r.headers.get("content-disposition", "")
+    if 'filename="' in disp:
+        name = disp.split('filename="', 1)[1].split('"', 1)[0] or name
+    return {"name": name, "mimeType": "application/pdf", "buffer": r.content}
+
+
+def _attach_resume(page, resume: dict | None) -> list[str]:
+    """Attach the resume to file-upload fields. Targets fields whose label reads as
+    a resume/CV; if none match but there's exactly one file input, uses that.
+    Returns labels of fields it filled (for the preview)."""
+    if not resume:
+        return []
+    files = page.evaluate(_FILE_EXTRACT_JS)
+    if not files:
+        return []
+    targets = [f for f in files if fieldmatch.is_resume_field(f["label"])]
+    if not targets and len(files) == 1:
+        targets = files  # a lone unlabeled upload is almost always the resume
+    attached = []
+    for f in targets:
+        try:
+            page.set_input_files(f'[data-jaf-file="{f["id"]}"]', files=[resume])
+            attached.append(f["label"] or "Resume")
+        except Exception as e:  # noqa: BLE001
+            print(f"[worker] resume attach failed for {f['label']!r}: {e}")
+    return attached
 
 
 def _pick_answer(label: str, questions: list[dict]) -> str | None:
@@ -127,7 +201,26 @@ def fill_form(page, job: dict) -> dict:
                 skipped.append(label)
         except Exception as e:  # noqa: BLE001 — one stubborn field never aborts the fill
             skipped.append(f"{label} ({e.__class__.__name__})")
-    return {"filled": filled, "skipped": skipped[:20]}
+
+    for label in _attach_resume(page, job.get("resume")):
+        filled.append({"label": label, "value": job["resume"]["name"]})
+
+    return {
+        "filled": filled,
+        "skipped": skipped[:20],
+        "screenshot_url": _screenshot(page),
+    }
+
+
+def _screenshot(page) -> str | None:
+    """A full-page JPEG of the filled form as a data: URL, so the phone preview
+    shows the actual form (not just a field list). None if capture fails."""
+    try:
+        png = page.screenshot(full_page=True, type="jpeg", quality=55)
+    except Exception as e:  # noqa: BLE001 — a screenshot is nice-to-have, not required
+        print(f"[worker] screenshot failed: {e}")
+        return None
+    return "data:image/jpeg;base64," + base64.b64encode(png).decode()
 
 
 def submit_form(page) -> None:
@@ -144,6 +237,7 @@ def submit_form(page) -> None:
 
 def handle_job(browser, job: dict) -> None:
     rid = job["request_id"]
+    job["resume"] = _fetch_resume(job)
     page = browser.new_page()
     try:
         preview = fill_form(page, job)
@@ -179,7 +273,7 @@ def main(once: bool = False) -> int:
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=HEADLESS)
         try:
             while True:
                 job = _api("POST", "/worker/claim")

@@ -169,8 +169,8 @@ only after explicit approval). `worker/` = separate **Playwright-Python** Fly ap
 6. **Deploy + live-test the submit worker** (the last mile — see `worker/README.md`):
    `fly launch --no-deploy --name job-search-worker --copy-config -c worker/fly.toml`,
    set `BASE_URL` + `APPLY_API_TOKEN` secrets, `fly deploy -c worker/fly.toml`. Run it
-   **headful** (`headless=False` in `worker/run.py`) against a few real Greenhouse/
-   Lever/Ashby forms first; note what lands in "skipped" and tune `app/fieldmatch.py`.
+   **headful** (`WORKER_HEADLESS=false`) against a few real Greenhouse/Lever/Ashby
+   forms first; note what lands in "skipped" and tune `app/fieldmatch.py`.
 
 ---
 
@@ -201,10 +201,11 @@ settings are `@lru_cache`d).
 
 ## 8. Known limitations / rough edges
 
-- **Submit worker** (the big one): submit-button detection is heuristic; **resume
-  file upload isn't wired** (upload manually for now); custom React dropdowns
-  (some Ashby/Workday) aren't native `<select>` and get skipped; holds one job open
-  while awaiting approval (fine for personal volume). All documented in `worker/README.md`.
+- **Submit worker** (the big one): submit-button detection is heuristic; custom
+  React dropdowns (some Ashby/Workday) aren't native `<select>` and get skipped;
+  holds one job open while awaiting approval (fine for personal volume). Resume
+  upload + phone-preview screenshot are now wired (see below); still needs a headful
+  live-test against real forms. All documented in `worker/README.md`.
 - **Embeddings** add ~0 to personalization (label imbalance was the bottleneck, not
   features) — don't expect magic.
 - **Login-gated sites** (Workday, LinkedIn Easy Apply) are out of scope for the
@@ -230,9 +231,12 @@ settings are `@lru_cache`d).
 ## 10. Roadmap / what's next (if continuing the build)
 
 The vision is **complete**; next steps are tuning + polish, not new architecture:
-1. **Tune the worker** against real forms (the actual last mile).
-2. **Wire resume upload** in the worker (`page.set_input_files` from `/apply/resume`).
-3. **Screenshot in the preview** (worker captures → host/serve → show on phone).
+1. **Tune the worker** against real forms (the actual last mile — run it
+   `WORKER_HEADLESS=false`, watch what lands in "skipped", tighten `fieldmatch`/`submit_form`).
+2. ✅ **Resume upload** is wired — the worker fetches `/apply/resume` and attaches it to
+   the resume/CV file input (`fieldmatch.is_resume_field`). Tune on multi-upload forms.
+3. ✅ **Preview screenshot** is wired — the worker sends a full-page JPEG data URL as
+   `preview.screenshot_url`; the `/apply` review page already renders it.
 4. Optional: cover-letter generation; more application question types; Slack-native
    approve (vs the web page); a batch triage swipe surface for real matches.
 
