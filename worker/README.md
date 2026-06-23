@@ -5,6 +5,18 @@ submits** public application forms (Greenhouse / Lever / Ashby; no login needed)
 It reuses `app/fieldmatch.py`, so it fills fields exactly like the browser
 extension does, and it **never submits without your explicit approval**.
 
+## Two fill engines
+
+- **Hard-coded filler** (default) — `app/fieldmatch.py` rules map labels → values.
+  Fast, free, deterministic; loses to iframes, multi-step flows, and label variety.
+- **LLM browser agent** (`WORKER_AGENT=true`, `worker/agent.py`) — Claude looks at the
+  page's interactive elements each step and picks one action (fill / choose / click /
+  upload / scroll) until the form is filled, then hands off to your approval gate.
+  Handles "Apply" buttons, multi-page forms, and odd fields the rules miss. Needs
+  `ANTHROPIC_API_KEY`; model is `AGENT_MODEL` (default `claude-opus-4-8`, drop to
+  `claude-haiku-4-5` for cost). It **never submits**, **never fills EEO fields**, and
+  calls `blocked` on a login/captcha (→ handed off to the extension).
+
 ## How it fits
 
 ```

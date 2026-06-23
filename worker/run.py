@@ -37,6 +37,9 @@ POLL_SECONDS = int(os.environ.get("WORKER_POLL_SECONDS", "5"))
 APPROVE_TIMEOUT = int(os.environ.get("WORKER_APPROVE_TIMEOUT", "900"))  # 15 min
 # Run with a visible browser for hands-on tuning: WORKER_HEADLESS=false.
 HEADLESS = os.environ.get("WORKER_HEADLESS", "true").lower() not in ("false", "0", "no")
+# WORKER_AGENT=true → drive the form with the LLM browser agent (worker/agent.py)
+# instead of the hard-coded fieldmatch filler. Needs ANTHROPIC_API_KEY.
+USE_AGENT = os.environ.get("WORKER_AGENT", "false").lower() in ("true", "1", "yes")
 
 _HEADERS = {"X-Apply-Token": TOKEN} if TOKEN else {}
 
@@ -315,7 +318,19 @@ def handle_job(browser, job: dict) -> None:
     job["resume"] = _fetch_resume(job)
     page = browser.new_page()
     try:
-        preview = fill_form(page, job)
+        if USE_AGENT:
+            from worker import agent
+            import anthropic
+            preview = agent.run_agent(page, job, anthropic.Anthropic())
+            if preview.get("status") == "blocked":
+                _api("POST", "/worker/result", json={
+                    "request_id": rid, "status": "failed",
+                    "error": f"Agent stopped: {preview.get('reason','')} — finish on "
+                             "your computer with the browser extension."})
+                print(f"[worker] req {rid}: agent blocked — {preview.get('reason','')}")
+                return
+        else:
+            preview = fill_form(page, job)
         _api("POST", "/worker/preview", json={"request_id": rid, "preview": preview})
         print(f"[worker] req {rid}: filled {len(preview['filled'])}, awaiting approval")
 
