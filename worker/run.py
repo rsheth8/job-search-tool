@@ -128,13 +128,13 @@ def _fetch_resume(job: dict) -> dict | None:
     return {"name": name, "mimeType": "application/pdf", "buffer": r.content}
 
 
-def _attach_resume(page, resume: dict | None) -> list[str]:
-    """Attach the resume to file-upload fields. Targets fields whose label reads as
-    a resume/CV; if none match but there's exactly one file input, uses that.
-    Returns labels of fields it filled (for the preview)."""
+def _attach_resume(frame, resume: dict | None) -> list[str]:
+    """Attach the resume to file-upload fields in the form's frame. Targets fields
+    whose label reads as a resume/CV; if none match but there's exactly one file
+    input, uses that. Returns labels of fields it filled (for the preview)."""
     if not resume:
         return []
-    files = page.evaluate(_FILE_EXTRACT_JS)
+    files = frame.evaluate(_FILE_EXTRACT_JS)
     if not files:
         return []
     targets = [f for f in files if fieldmatch.is_resume_field(f["label"])]
@@ -143,7 +143,7 @@ def _attach_resume(page, resume: dict | None) -> list[str]:
     attached = []
     for f in targets:
         try:
-            page.set_input_files(f'[data-jaf-file="{f["id"]}"]', files=[resume])
+            frame.set_input_files(f'[data-jaf-file="{f["id"]}"]', files=[resume])
             attached.append(f["label"] or "Resume")
         except Exception as e:  # noqa: BLE001
             print(f"[worker] resume attach failed for {f['label']!r}: {e}")
@@ -164,13 +164,75 @@ def _pick_answer(label: str, questions: list[dict]) -> str | None:
     return (best or questions[0]).get("answer")
 
 
+# Text on the button/link that opens the real application form when the URL lands
+# on a job *description* instead (Lever, some Greenhouse/Ashby description pages).
+_APPLY_TRIGGERS = (
+    'a.postings-btn',                              # Lever "Apply for this job"
+    'a:has-text("Apply for this job")',
+    'button:has-text("Apply for this job")',
+    'a:has-text("Apply now")', 'button:has-text("Apply now")',
+    'a[href*="/apply"]',
+    'a:has-text("Apply")', 'button:has-text("Apply")',
+)
+
+
+def _extract_frames(page) -> list:
+    """(frame, fields) for every frame that has fillable fields, most fields first.
+
+    Application forms are very often inside an <iframe> (embedded Greenhouse/Lever/
+    Ashby on a company careers page), so we look in EVERY frame, not just the top
+    one — that's the #1 reason a fill comes back empty."""
+    results = []
+    for fr in page.frames:
+        try:
+            fields = fr.evaluate(_EXTRACT_JS)
+        except Exception:  # noqa: BLE001 — a cross-origin/detached frame just gets skipped
+            continue
+        if fields:
+            results.append((fr, fields))
+    results.sort(key=lambda t: len(t[1]), reverse=True)
+    return results
+
+
+def _wait_for_form(page, timeout_ms: int = 20000) -> list:
+    """Poll until some frame exposes fillable fields (forms render after JS on SPAs),
+    up to timeout_ms. Returns the same shape as _extract_frames (possibly empty)."""
+    deadline = time.time() + timeout_ms / 1000
+    while True:
+        frames = _extract_frames(page)
+        if frames or time.time() >= deadline:
+            return frames
+        page.wait_for_timeout(500)
+
+
+def _reveal_form(page) -> bool:
+    """Click an 'Apply' button/link to open the real form when the URL landed on a
+    description page. Returns True if it clicked something."""
+    for sel in _APPLY_TRIGGERS:
+        try:
+            el = page.query_selector(sel)
+            if el and el.is_visible():
+                el.click()
+                page.wait_for_load_state("domcontentloaded")
+                page.wait_for_timeout(1500)
+                return True
+        except Exception:  # noqa: BLE001
+            continue
+    return False
+
+
 def fill_form(page, job: dict) -> dict:
     """Fill the page from the job's identity + answers. Returns a preview summary."""
     identity = job.get("identity", {})
     questions = job.get("questions", [])
     page.goto(job["url"], wait_until="domcontentloaded", timeout=45000)
-    page.wait_for_timeout(1500)
-    fields = page.evaluate(_EXTRACT_JS)
+
+    frames = _wait_for_form(page)
+    if not frames and _reveal_form(page):   # landed on a description — open the form
+        frames = _wait_for_form(page)
+    frame, fields = frames[0] if frames else (page.main_frame, [])
+    print(f"[worker] {page.url} — {len(fields)} fillable field(s) "
+          f"across {len(page.frames)} frame(s)")
 
     filled, skipped = [], []
     for f in fields:
@@ -183,17 +245,17 @@ def fill_form(page, job: dict) -> dict:
                 if tag == "select":
                     opt = fieldmatch.select_value(f["options"], value)
                     if opt:
-                        page.select_option(sel, label=opt)
+                        frame.select_option(sel, label=opt)
                         filled.append({"label": label, "value": opt})
                     else:
                         skipped.append(label)
                 else:
-                    page.fill(sel, str(value))
+                    frame.fill(sel, str(value))
                     filled.append({"label": label, "value": str(value)})
             elif tag == "textarea" or fieldmatch.is_essay_label(label):
                 ans = _pick_answer(label, questions)
                 if ans:
-                    page.fill(sel, ans)
+                    frame.fill(sel, ans)
                     filled.append({"label": label, "value": ans[:60] + "…"})
                 else:
                     skipped.append(label)
@@ -202,8 +264,12 @@ def fill_form(page, job: dict) -> dict:
         except Exception as e:  # noqa: BLE001 — one stubborn field never aborts the fill
             skipped.append(f"{label} ({e.__class__.__name__})")
 
-    for label in _attach_resume(page, job.get("resume")):
+    for label in _attach_resume(frame, job.get("resume")):
         filled.append({"label": label, "value": job["resume"]["name"]})
+
+    if not fields:
+        skipped.append("⚠️ no form fields found on this page — is the URL the "
+                       "application form (not the job description)?")
 
     return {
         "filled": filled,
