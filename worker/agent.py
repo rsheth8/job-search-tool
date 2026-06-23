@@ -58,7 +58,7 @@ _SNAPSHOT_JS = r"""
     if (!vis(el) || el.readOnly) return;
     const tag_ = el.tagName.toLowerCase();
     const rec = { aid: tag(el), label: lbl(el) };
-    if (tag_ === 'select') { rec.kind = 'select'; rec.options = [...el.options].map(o=>o.text).slice(0,40); }
+    if (tag_ === 'select') { rec.kind = 'select'; rec.options = [...el.options].map(o=>o.text).slice(0,40); rec.value = (el.options[el.selectedIndex]||{}).text || ''; }
     else if (t === 'file') { rec.kind = 'file'; }
     else if (t === 'checkbox') { rec.kind = 'checkbox'; rec.checked = el.checked; }
     else if (t === 'radio') { rec.kind = 'radio'; rec.checked = el.checked; rec.group = el.name||''; }
@@ -103,26 +103,27 @@ TOOLS = [
          "reason": {"type": "string"}}, "required": ["reason"]}},
 ]
 
-_SYSTEM = """You are an assistant that fills out a job application form in a real \
-browser on the applicant's behalf. Each turn you are given the page's interactive \
-elements (with stable `aid`s) and you take ONE action via a tool.
+_SYSTEM = """You help fill out a job application form in a real browser. A separate \
+deterministic step has ALREADY auto-filled the easy fields before your turn — basic \
+identity text fields (name, email, phone, links, location…), native dropdowns, and \
+the resume upload. Don't redo that work.
 
-Your goal: fill every field you can from the applicant's profile and drafted \
-answers, advancing through any "Apply"/"Next"/"Continue" steps, until the form is \
-complete — then call `ready_for_review`.
+You handle only what code can't: advancing through "Apply"/"Next"/"Continue" steps, \
+writing the free-text / "why do you want to work here" answers, picking Yes/No radio \
+options, and any field too ambiguous for the rules. Each turn you get the page's \
+remaining interactive elements (with stable `aid`s); take ONE action via a tool.
+
+When everything that needs a decision is handled, call `ready_for_review`.
 
 Hard rules:
-- NEVER submit. Do not click "Submit", "Send application", or similar. When the form \
-is filled, call `ready_for_review` — a human approves and submits.
+- NEVER submit. Don't click "Submit"/"Send application". Call `ready_for_review` — a \
+human approves and submits.
 - NEVER fill demographic / EEO / diversity questions (gender, race, ethnicity, \
-veteran, disability, sexual orientation). Skip them; they are the human's to answer.
-- If you hit a login wall, a captcha, a payment, or there is simply no application \
-form on the page, call `blocked` with the reason. Do not try to solve a captcha.
-- Use the drafted answers for free-text "why do you want to work here" style \
-questions. Use the identity values for everything factual.
-- Attach the resume with `upload_resume` on the resume/CV upload, if present.
-- Don't re-fill a field that already shows the right value. Work top to bottom; \
-`scroll` down when the page continues below what you can see.
+veteran, disability, sexual orientation). They are the human's to answer.
+- Login wall, captcha, payment, or no application form on the page → call `blocked`. \
+Never try to solve a captcha.
+- Use the drafted answers for free-text questions; the identity values for facts.
+- `scroll` down when the page continues below what you can see.
 
 Applicant profile (use these exact values):
 """
@@ -230,6 +231,61 @@ def _is_eeo(label: str) -> bool:
         label, re.I))
 
 
+def auto_fill(page, frames, elements: list[dict], identity: dict,
+              resume: dict | None, attempted: set) -> list[dict]:
+    """Deterministic pass — fill everything code can decide *without* an LLM: identity
+    text fields, native dropdowns (option matched to an identity value), and the
+    resume upload. Returns what it filled. ``attempted`` (per-field, persisted across
+    steps) guarantees we never act on the same field twice, so the pass terminates."""
+    acted = []
+    for e in elements:
+        aid, label, kind = e.get("aid", ""), e.get("label", ""), e.get("kind")
+        memo = (aid.split("_", 1)[0], label)   # (frame, label) — stable across snapshots
+        if memo in attempted:
+            continue
+        target = do = None
+        if kind == "text":
+            key = fieldmatch.match_key(label)
+            if key and identity.get(key) and e.get("value", "") != str(identity[key]):
+                target, do = str(identity[key]), "fill"
+        elif kind == "select":
+            key = fieldmatch.match_key(label)
+            if key and identity.get(key):
+                opt = fieldmatch.select_value(e.get("options", []), identity[key])
+                if opt and e.get("value", "") != opt:
+                    target, do = opt, "select"
+        elif kind == "file":
+            if resume and fieldmatch.is_resume_field(label):
+                do = "upload"
+        if not do:
+            continue
+        attempted.add(memo)
+        fr = _frame_for(aid, frames)
+        if fr is None:
+            continue
+        sel = f'[data-agent-id="{aid}"]'
+        try:
+            if do == "fill":
+                fr.fill(sel, target); acted.append({"label": label, "value": target})
+            elif do == "select":
+                fr.select_option(sel, label=target)
+                acted.append({"label": label, "value": target})
+            elif do == "upload":
+                fr.set_input_files(sel, files=[resume])
+                acted.append({"label": label or "Resume", "value": resume["name"]})
+        except Exception:  # noqa: BLE001 — a stubborn field falls through to the LLM
+            pass
+    return acted
+
+
+def _needs_llm(e: dict) -> bool:
+    """Trim already-satisfied identity/select fields from what the LLM sees, so it
+    only spends tokens on navigation, essays, radios, and ambiguous fields."""
+    if e.get("kind") in ("text", "select") and e.get("value"):
+        return False   # already has a value (auto-filled or pre-filled)
+    return True
+
+
 def run_agent(page, job: dict, client) -> dict:
     """Drive the form with the LLM agent. Returns a preview dict compatible with the
     worker's preview/approve flow: ``{filled, skipped, screenshot_url, status,
@@ -246,16 +302,29 @@ def run_agent(page, job: dict, client) -> dict:
 
     messages: list = []
     filled, skipped = [], []
+    attempted: set = set()
     outcome = {"status": "incomplete"}
 
     for step in range(MAX_STEPS):
         elements, frames = snapshot(page)
+
+        # 1) Deterministic pass — free, no LLM. Loop while it keeps making progress.
+        auto = auto_fill(page, frames, elements, identity, resume, attempted)
+        if auto:
+            filled.extend(auto)
+            print(f"[agent] step {step}: auto-filled {len(auto)} field(s) (no LLM)")
+            continue
+
+        # 2) Only the parts that need reasoning go to the LLM.
         labels = {e["aid"]: e["label"] for e in elements}
+        remaining = [e for e in elements if _needs_llm(e)]
         user_block = (
             f"URL: {page.url}\n"
-            f"Interactive elements on the page right now:\n"
-            f"{json.dumps(elements, ensure_ascii=False)}\n\n"
-            "Take the single next action toward filling this application."
+            "Identity fields and dropdowns have been auto-filled by code. "
+            "Elements still needing a decision (navigation, free-text answers, "
+            "Yes/No radios, ambiguous fields):\n"
+            f"{json.dumps(remaining, ensure_ascii=False)}\n\n"
+            "Take the single next action, or call ready_for_review if nothing is left."
         )
         messages.append({"role": "user", "content": user_block})
         resp = client.messages.create(

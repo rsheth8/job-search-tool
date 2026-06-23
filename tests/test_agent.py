@@ -104,22 +104,56 @@ def test_act_ready_and_blocked_are_terminal():
 
 # --- run_agent loop --------------------------------------------------------
 
-def test_run_agent_fills_then_hands_off_for_review():
+def test_identity_field_is_autofilled_by_code_not_the_llm():
     fr = FakeFrame([{"kind": "text", "label": "First name"}])
     page = FakePage(fr)
-    client = FakeClient([
-        _block("fill", {"aid": "f0_0", "text": "Ada"}, "a"),
-        _block("ready_for_review", {"summary": "filled name"}, "b"),
-    ])
+    # The LLM is only consulted for the handoff — the name is filled deterministically.
+    client = FakeClient([_block("ready_for_review", {"summary": "done"}, "b")])
     job = {"url": page.url, "identity": {"first_name": "Ada"}, "questions": []}
     preview = agent.run_agent(page, job, client)
 
     assert preview["status"] == "ready"
     assert preview["filled"] == [{"label": "First name", "value": "Ada"}]
+    assert fr.calls == [("fill", '[data-agent-id="f0_0"]', "Ada")]  # filled by code
+    assert len(client.calls) == 1                  # exactly one LLM call (efficiency)
     assert preview["screenshot_url"].startswith("data:image/jpeg")
     assert page.goto_url == job["url"]
     # The profile is cached on the system prompt (prompt caching).
     assert client.calls[0]["system"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_auto_fill_handles_text_select_and_resume_without_llm():
+    fr = FakeFrame([])
+    page = FakePage(fr)
+    elements = [
+        {"aid": "f0_0", "kind": "text", "label": "Email", "value": ""},
+        {"aid": "f0_1", "kind": "select", "label": "Are you authorized to work?",
+         "options": ["Select…", "Yes", "No"], "value": "Select…"},
+        {"aid": "f0_2", "kind": "file", "label": "Resume / CV"},
+        {"aid": "f0_3", "kind": "text", "label": "Why do you want this job?", "value": ""},
+        {"aid": "f0_4", "kind": "text", "label": "Email", "value": "a@x.com"},  # already set
+    ]
+    identity = {"email": "a@x.com", "work_authorized": "Yes"}
+    resume = {"name": "resume.pdf", "mimeType": "application/pdf", "buffer": b"x"}
+    acted = agent.auto_fill(page, [fr], elements, identity, resume, set())
+
+    assert {"label": "Email", "value": "a@x.com"} in acted
+    assert {"label": "Are you authorized to work?", "value": "Yes"} in acted
+    assert {"label": "Resume / CV", "value": "resume.pdf"} in acted
+    # The essay and the already-filled email are left alone (LLM / nothing to do).
+    assert not any(a["label"] == "Why do you want this job?" for a in acted)
+    assert ("fill", '[data-agent-id="f0_4"]', "a@x.com") not in fr.calls
+
+
+def test_auto_fill_attempted_set_prevents_refilling():
+    fr = FakeFrame([])
+    elements = [{"aid": "f0_0", "kind": "text", "label": "First name", "value": ""}]
+    attempted: set = set()
+    first = agent.auto_fill(FakePage(fr), [fr], elements, {"first_name": "Ada"},
+                            None, attempted)
+    second = agent.auto_fill(FakePage(fr), [fr], elements, {"first_name": "Ada"},
+                             None, attempted)
+    assert first and not second        # second pass is a no-op — no infinite loop
 
 
 def test_run_agent_blocked_is_surfaced():

@@ -9,13 +9,16 @@ extension does, and it **never submits without your explicit approval**.
 
 - **Hard-coded filler** (default) — `app/fieldmatch.py` rules map labels → values.
   Fast, free, deterministic; loses to iframes, multi-step flows, and label variety.
-- **LLM browser agent** (`WORKER_AGENT=true`, `worker/agent.py`) — Claude looks at the
-  page's interactive elements each step and picks one action (fill / choose / click /
-  upload / scroll) until the form is filled, then hands off to your approval gate.
-  Handles "Apply" buttons, multi-page forms, and odd fields the rules miss. Needs
-  `ANTHROPIC_API_KEY`; model is `AGENT_MODEL` (default `claude-opus-4-8`, drop to
-  `claude-haiku-4-5` for cost). It **never submits**, **never fills EEO fields**, and
-  calls `blocked` on a login/captcha (→ handed off to the extension).
+- **Hybrid agent** (`WORKER_AGENT=true`, `worker/agent.py`) — **code first, LLM only
+  when needed.** Each step a deterministic pass (`auto_fill`, the `fieldmatch` rules)
+  fills everything it can for free — identity text fields, native dropdowns, the
+  resume upload — and the LLM is consulted **only** when that pass makes no more
+  progress, to handle what code can't: clicking through "Apply"/"Next" steps, writing
+  the free-text answers, picking Yes/No radios, and ambiguous fields. So a clean
+  one-page form costs ~1–2 LLM calls (the essay + the handoff), not one per field.
+  Needs `ANTHROPIC_API_KEY`; model is `AGENT_MODEL` (default `claude-opus-4-8`, drop
+  to `claude-haiku-4-5` for cost). It **never submits**, **never fills EEO fields**,
+  and calls `blocked` on a login/captcha (→ handed off to the extension).
 
 ## How it fits
 
