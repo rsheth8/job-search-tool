@@ -223,6 +223,26 @@ async def apply_mark(request: Request) -> dict:
     return {"ok": apply_queue.mark(uid, int(body["posting_id"]), body.get("status", ""))}
 
 
+@app.post("/apply/applied")
+async def apply_applied(request: Request) -> dict:
+    """Mobile app: the user finished and submitted an application in the in-app
+    browser. Log it (application record + posting + queue), like the worker does."""
+    from . import apply_queue, jobstore, store
+    from . import dashboard as dash
+
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    pid = int(body["posting_id"])
+    posting = jobstore.get_posting(uid, pid)
+    if posting is None:
+        return {"ok": False}
+    store.create_application(uid, posting["company"] or "Unknown",
+                             posting["title"] or "Role", source="mobile")
+    jobstore.mark_posting_status(posting["id"], "applied")
+    apply_queue.mark(uid, pid, "submitted")
+    return {"ok": True}
+
+
 @app.post("/apply/remove")
 async def apply_remove(request: Request) -> dict:
     from . import apply_queue

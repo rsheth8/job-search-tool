@@ -1,0 +1,10 @@
+# XcodeGen generates these from project.yml — don't commit them.
+Apply.xcodeproj/
+Apply/Info.plist
+
+# Xcode user state / build output
+xcuserdata/
+*.xcuserstate
+build/
+DerivedData/
+.DS_Store

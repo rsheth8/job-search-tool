@@ -142,6 +142,16 @@ def test_endpoints_stage_review_and_mark():
     assert c.get("/apply/data?user=u1").json()["queue"][0]["status"] == "submitted"
 
 
+def test_applied_logs_application_and_marks_posting():
+    """The mobile 'I applied' button records the application and marks the posting."""
+    from app import store
+    pid = _save(company="Acme")
+    c = _client()
+    assert c.post("/apply/applied", json={"user": "u1", "posting_id": pid}).json()["ok"]
+    assert any(a["company"] == "Acme" for a in store.list_applications("u1"))
+    assert jobstore.get_posting("u1", pid)["status"] == "applied"
+
+
 def test_answer_save_and_redraft_endpoints():
     pid = _save()
     c = _client()

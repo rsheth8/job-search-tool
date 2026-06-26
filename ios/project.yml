@@ -1,0 +1,34 @@
+# XcodeGen project definition — the whole Xcode project is generated from this text.
+#   brew install xcodegen && cd ios && xcodegen generate && open Apply.xcodeproj
+# (or just create a new SwiftUI app in Xcode and drop the Apply/ sources in).
+name: Apply
+options:
+  bundleIdPrefix: com.rahil.apply
+  deploymentTarget:
+    iOS: "17.0"
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""        # set your Apple Team ID in Xcode → Signing
+    CODE_SIGN_STYLE: Automatic
+targets:
+  Apply:
+    type: application
+    platform: iOS
+    sources:
+      - Apply
+    info:
+      path: Apply/Info.plist
+      properties:
+        CFBundleDisplayName: Apply
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        # Let the in-app browser load any job site (http or https).
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoadsInWebContent: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rahil.apply
+        GENERATE_INFOPLIST_FILE: NO
