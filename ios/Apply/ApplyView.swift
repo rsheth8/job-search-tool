@@ -59,7 +59,7 @@ private struct ApplyBrowser: View {
         .navigationTitle(item.company ?? "Apply")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { model.load(package.url) }
-        .onChange(of: model.lastFill?.filled) { _ in showFillToast() }
+        .onChange(of: model.lastFill?.filled) { showFillToast() }
     }
 
     private var controls: some View {
