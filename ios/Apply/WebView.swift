@@ -4,7 +4,7 @@ import WebKit
 /// Owns the WKWebView for one application. The profile is injected on every page
 /// load (so it survives multi-step navigation and reaches iframes); the native
 /// ⚡ button calls `autofill()`.
-final class WebViewModel: NSObject, ObservableObject, WKNavigationDelegate, WKScriptMessageHandler {
+final class WebViewModel: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     let webView: WKWebView
     @Published var loading = false
     @Published var lastFill: (filled: Int, essays: Int)? = nil
@@ -24,7 +24,17 @@ final class WebViewModel: NSObject, ObservableObject, WKNavigationDelegate, WKSc
         super.init()
         controller.add(self, name: "applyfill")
         webView.navigationDelegate = self
+        webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
+    }
+
+    // "Apply" buttons on job sites often open a new tab (target="_blank" / window.open).
+    // A bare WKWebView has nowhere to put a new window, so it silently drops the nav —
+    // the button looks dead. Load such requests in the same view instead.
+    func webView(_ w: WKWebView, createWebViewWith config: WKWebViewConfiguration,
+                 for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if action.targetFrame == nil, action.request.url != nil { w.load(action.request) }
+        return nil
     }
 
     func load(_ urlString: String) {
