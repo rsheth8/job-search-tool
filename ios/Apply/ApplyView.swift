@@ -34,6 +34,8 @@ private struct ApplyBrowser: View {
     @StateObject private var model: WebViewModel
     @State private var toast: String?
     @State private var marking = false
+    @State private var resumeDoc: ResumeDoc?
+    @State private var fetchingResume = false
 
     init(item: QueueItem, package: Package) {
         self.item = item
@@ -60,6 +62,7 @@ private struct ApplyBrowser: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { model.load(package.url) }
         .onChange(of: model.lastFill?.filled) { showFillToast() }
+        .sheet(item: $resumeDoc) { doc in ShareSheet(items: [doc.url]) }
     }
 
     private var controls: some View {
@@ -68,6 +71,13 @@ private struct ApplyBrowser: View {
                 Label("Autofill", systemImage: "bolt.fill").frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+
+            Button { fetchResume() } label: {
+                Label(fetchingResume ? "…" : "Resume", systemImage: "doc.text")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(fetchingResume)
 
             Button {
                 marking = true
@@ -88,9 +98,37 @@ private struct ApplyBrowser: View {
     private func showFillToast() {
         guard let f = model.lastFill else { return }
         let more = f.essays > 0 ? " · \(f.essays) need you" : ""
-        withAnimation { toast = "Filled \(f.filled)\(more)" }
+        flashToast("Filled \(f.filled)\(more)")
+    }
+
+    /// Pull the tailored resume PDF and open the share sheet so it can be saved to
+    /// Files; from there it's one tap to attach in the form's upload field.
+    private func fetchResume() {
+        fetchingResume = true
+        Task {
+            defer { fetchingResume = false }
+            do { resumeDoc = ResumeDoc(url: try await APIClient(config: config).downloadResume(postingId: item.posting_id)) }
+            catch APIClient.APIError.http(404) { flashToast("No tailored resume yet") }
+            catch { flashToast("Couldn't fetch resume") }
+        }
+    }
+
+    private func flashToast(_ text: String) {
+        withAnimation { toast = text }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             withAnimation { toast = nil }
         }
     }
 }
+
+/// UIKit share sheet (Save to Files / AirDrop / …) for the tailored resume PDF.
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
+}
+
+/// Wraps the downloaded resume URL so it can drive `.sheet(item:)`.
+struct ResumeDoc: Identifiable { let id = UUID(); let url: URL }

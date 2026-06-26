@@ -27,6 +27,7 @@ enum Autofill {
     static let lib = #"""
     (() => {
       if (window.__applyAutofill) return;
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const RULES = [
         ["email", /e-?mail/i],
         ["preferred_name", /preferred (first )?name|nick.?name|known as|goes by/i],
@@ -70,6 +71,22 @@ enum Autofill {
         if (tag !== "input") return false;
         return ["text","email","tel","url","search",""].includes((el.type||"text").toLowerCase());
       };
+      // The question text for a field whose own label/placeholder is weak: walk up a
+      // few wrappers and take the nearest short label/legend/heading. Custom React
+      // widgets (Ashby/Greenhouse comboboxes) keep the question in an ancestor, not a
+      // <label for>, so without this they never match a rule.
+      function ancestorLabel(el) {
+        let n = el.parentElement, hops = 0;
+        while (n && hops < 5) {
+          const cand = n.querySelector('label, legend, [class*="label"], [class*="Label"], [class*="title"], [class*="question"]');
+          if (cand && !cand.contains(el)) {
+            const t = cand.textContent.replace(/\s+/g, " ").trim();
+            if (t && t.length <= 90) return t;
+          }
+          n = n.parentElement; hops++;
+        }
+        return "";
+      }
       function fieldLabel(el) {
         const bits = [];
         if (el.id) { const l = document.querySelector(`label[for="${cssEscape(el.id)}"]`); if (l) bits.push(l.textContent); }
@@ -79,7 +96,13 @@ enum Autofill {
         if (by) by.split(/\s+/).forEach((id) => { const n = document.getElementById(id); if (n) bits.push(n.textContent); });
         if (el.placeholder) bits.push(el.placeholder);
         bits.push(el.name || "", el.id || "");
-        return bits.join(" ").replace(/\s+/g, " ").trim().toLowerCase();
+        let s = bits.join(" ").replace(/\s+/g, " ").trim().toLowerCase();
+        // Placeholder-only labels ("start typing…", "select…") don't name the field.
+        if (s.length < 3 || /^(start typing|select|choose|search|type here)/.test(s)) {
+          const a = ancestorLabel(el);
+          if (a) s = (a + " " + s).replace(/\s+/g, " ").trim().toLowerCase();
+        }
+        return s;
       }
       function groupLabel(radios) {
         const first = radios[0];
@@ -112,6 +135,45 @@ enum Autofill {
       function setSelect(el, value) { const o = optFor(el, value); if (!o) return false; el.value = o.value; el.dispatchEvent(new Event("change",{bubbles:true})); flash(el); return true; }
       function flash(el) { try { el.style.outline = "2px solid #16a34a"; setTimeout(()=>{el.style.outline="";}, 800); } catch(e){} }
 
+      // A combobox is an input that opens its own popup list (React-select, Ashby/
+      // Greenhouse location & "how did you hear" widgets). Native <select> is handled
+      // separately. We detect it by role/aria, not class, so it works across ATSs.
+      const isCombobox = (el) => {
+        if (el.tagName.toLowerCase() !== "input") return false;
+        const role = (el.getAttribute("role") || "").toLowerCase();
+        if (role === "combobox") return true;
+        const pop = (el.getAttribute("aria-haspopup") || "").toLowerCase();
+        if (pop === "listbox" || pop === "true") return true;
+        if ((el.getAttribute("aria-autocomplete") || "").toLowerCase() === "list") return true;
+        return false;
+      };
+      // Type the value, let the popup render, then click the best-matching option.
+      // If nothing matches we leave the typed text so the human just taps a suggestion.
+      async function fillCombobox(el, value) {
+        el.focus();
+        setText(el, String(value));
+        el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "a" }));
+        await sleep(650);
+        const v = String(value).trim().toLowerCase();
+        const first = v.split(",")[0].trim();
+        const opts = [...document.querySelectorAll('[role="option"], li[id*="option"], [class*="option"], [class*="Option"]')]
+          .filter((o) => (o.offsetParent || o.getClientRects().length) && o.textContent.trim());
+        const txt = (o) => o.textContent.replace(/\s+/g, " ").trim().toLowerCase();
+        let pick = opts.find((o) => txt(o) === v)
+                || opts.find((o) => txt(o).startsWith(first) && first.length >= 2)
+                || opts.find((o) => txt(o).includes(v) && v.length >= 3);
+        if (pick) { pick.click(); flash(el); return true; }
+        return false;   // typed but unresolved — counts as "needs you"
+      }
+
+      function setEditable(el, value) {
+        el.focus();
+        el.textContent = value;
+        el.dispatchEvent(new InputEvent("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        flash(el);
+      }
+
       function bestAnswer(label) {
         const words = new Set(label.split(/\W+/).filter(Boolean));
         let best = null, score = -1;
@@ -132,7 +194,9 @@ enum Autofill {
         let n = 0;
         for (const name in groups) {
           const radios = groups[name];
-          const key = matchKey(groupLabel(radios));
+          const gl = groupLabel(radios);
+          if (EEO.test(gl)) continue;                         // never touch demographics
+          const key = matchKey(gl);
           const val = key && ID()[key];
           if (val == null || val === "") continue;
           const want = String(val).toLowerCase();
@@ -143,18 +207,33 @@ enum Autofill {
         return n;
       }
 
-      window.__applyAutofill = function () {
+      window.__applyAutofill = async function () {
         let filled = 0, essays = 0;
-        for (const el of document.querySelectorAll("input, textarea, select")) {
+        // Pass 1 — comboboxes/autocompletes first (they're async, and resolving them
+        // can insert hidden inputs the standard pass would otherwise double-handle).
+        for (const el of document.querySelectorAll("input")) {
+          if (!isVisible(el) || el.disabled || el.readOnly || !isCombobox(el)) continue;
+          const label = fieldLabel(el);
+          if (EEO.test(label)) continue;
+          const key = matchKey(label);
+          const val = key && ID()[key];
+          if (val == null || val === "") continue;
+          if (await fillCombobox(el, val)) filled++; else essays++;
+        }
+        // Pass 2 — plain inputs, textareas, native selects, contenteditable essays.
+        for (const el of document.querySelectorAll('input, textarea, select, [contenteditable="true"]')) {
           if (!isVisible(el) || el.disabled || el.readOnly) continue;
           const tag = el.tagName.toLowerCase(), type = (el.type||"").toLowerCase();
           if (["radio","checkbox","file","hidden","submit","button"].includes(type)) continue;
+          if (isCombobox(el)) continue;                       // handled in pass 1
           const label = fieldLabel(el);
           if (EEO.test(label)) continue;                      // never auto-fill demographics
-          if (tag === "textarea") {
-            if (el.value.trim()) continue;
+          const editable = el.isContentEditable;
+          if (tag === "textarea" || editable) {
+            const cur = (editable ? el.textContent : el.value).trim();
+            if (cur) continue;
             const a = bestAnswer(label);
-            if (a) { setText(el, a); filled++; } else essays++;
+            if (a) { editable ? setEditable(el, a) : setText(el, a); filled++; } else essays++;
             continue;
           }
           const key = matchKey(label);
