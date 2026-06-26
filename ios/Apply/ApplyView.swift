@@ -48,6 +48,17 @@ private struct ApplyBrowser: View {
         ZStack(alignment: .bottom) {
             WebViewContainer(model: model).ignoresSafeArea(edges: .bottom)
 
+            if !item.isFirstParty {
+                VStack {
+                    Label("Aggregator page — may require login. Autofill works best on the "
+                          + "company's own Greenhouse/Lever/Ashby form.", systemImage: "person.badge.key")
+                        .font(.caption).padding(8)
+                        .frame(maxWidth: .infinity)
+                        .background(.orange.opacity(0.15))
+                    Spacer()
+                }
+            }
+
             if let toast {
                 Text(toast)
                     .font(.subheadline.weight(.medium))

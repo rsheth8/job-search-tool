@@ -35,7 +35,7 @@ struct QueueView: View {
     }
 
     private func row(_ item: QueueItem) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(item.title ?? "Role").font(.headline)
             HStack(spacing: 6) {
                 Text(item.company ?? "—").foregroundStyle(.secondary)
@@ -43,7 +43,18 @@ struct QueueView: View {
                 Spacer()
                 if let sc = item.score { Text("\(Int(sc * 100))%").font(.caption).foregroundStyle(.secondary) }
             }.font(.subheadline)
+            fillBadge(item)
         }.padding(.vertical, 2)
+    }
+
+    @ViewBuilder private func fillBadge(_ item: QueueItem) -> some View {
+        if item.isFirstParty {
+            Label("Auto-fill ready", systemImage: "bolt.fill")
+                .font(.caption2.weight(.medium)).foregroundStyle(.green)
+        } else {
+            Label("Aggregator · may need login", systemImage: "person.badge.key")
+                .font(.caption2.weight(.medium)).foregroundStyle(.orange)
+        }
     }
 
     private func load() async {
