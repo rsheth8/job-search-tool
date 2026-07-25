@@ -253,6 +253,16 @@ async def apply_remove(request: Request) -> dict:
     return {"ok": apply_queue.remove(uid, int(body["posting_id"]))}
 
 
+@app.get("/apply/rules")
+def apply_rules(request: Request) -> dict:
+    """The field-matching rules, so the extension and the iOS browser stop carrying
+    hand-ported copies that drift out of date (see fieldmatch.rules_payload)."""
+    from . import fieldmatch
+
+    _require_apply_token(request)
+    return fieldmatch.rules_payload()
+
+
 @app.get("/apply/identity")
 def apply_identity(request: Request, user: str | None = None) -> dict:
     """The applicant identity map the extension paints onto simple form fields."""

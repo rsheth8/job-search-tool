@@ -33,6 +33,19 @@ struct QueueResponse: Codable {
     let queue: [QueueItem]?    // staged, ready to apply
 }
 
+/// The field-matching rules, from `GET /apply/rules`.
+///
+/// This app used to carry its own hand-ported copy of these, which drifted behind
+/// `app/fieldmatch.py` — including a narrower EEO list, so the phone would fill
+/// demographic questions the backend refuses. Fetching them keeps every autofill
+/// surface on one brain; `Autofill.lib` keeps a bundled copy only for offline.
+struct RulesPayload: Codable, Equatable {
+    let rules: [[String]]        // [[identity_key, regex_source], …], in priority order
+    let never_fill: String       // labels never auto-filled (EEO / demographic)
+    let flags: String?
+    let version: String?
+}
+
 /// One tailored question + drafted answer.
 struct Question: Codable, Hashable {
     let question: String

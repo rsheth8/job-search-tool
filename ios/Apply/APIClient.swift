@@ -32,6 +32,15 @@ struct APIClient {
         return decoded.queue ?? []
     }
 
+    /// The field-matching rules. Cached on disk so a launch with no connection still
+    /// autofills with the last known-good set rather than the older bundled copy.
+    func fetchRules() async throws -> RulesPayload {
+        let data = try await request("GET", "/apply/rules")
+        let payload = try JSONDecoder().decode(RulesPayload.self, from: data)
+        RulesCache.save(payload)
+        return payload
+    }
+
     /// The full package (url + identity + tailored answers) for one posting.
     func fetchPackage(postingId: Int) async throws -> Package {
         let data = try await request("POST", "/apply/package",

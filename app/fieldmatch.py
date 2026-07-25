@@ -11,6 +11,8 @@ network.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 
 # (identity key, label regex) — kept in lockstep with extension/content.js RULES.
@@ -69,6 +71,35 @@ _NEVER_FILL = re.compile(
 
 _RESUME_LABEL = re.compile(r"r[eé]sum[eé]|\bcv\b|curriculum vitae", re.I)
 _COVER_LABEL = re.compile(r"cover.?letter", re.I)
+
+
+def rules_payload() -> dict:
+    """The matching rules as data, for the clients that can't import this module.
+
+    The autofill brain runs in three places — here, the browser extension, and the
+    iOS in-app browser — and the two JavaScript copies were hand-ported, so they
+    drifted: both shipped an older, *narrower* EEO list than this file, meaning the
+    phone would fill demographic questions the worker refuses. Serving the rules
+    ends that: the clients fetch this and keep their bundled copy only as an
+    offline fallback.
+
+    Every pattern here is written in the subset of regex syntax that Python and
+    JavaScript share (no named groups, no inline flags, no lookbehind), and
+    ``tests/test_rules_parity.py`` runs the served rules through a real browser to
+    prove both engines agree label-for-label.
+
+    ``version`` changes whenever the rules do, so a client can cache on it.
+    """
+    payload = {
+        "rules": [[key, pattern] for key, pattern in FIELD_RULES],
+        "never_fill": _NEVER_FILL.pattern,
+        "resume": _RESUME_LABEL.pattern,
+        "cover": _COVER_LABEL.pattern,
+        "flags": "i",
+    }
+    blob = json.dumps(payload, sort_keys=True).encode()
+    payload["version"] = hashlib.sha256(blob).hexdigest()[:12]
+    return payload
 
 
 def is_eeo(label: str) -> bool:

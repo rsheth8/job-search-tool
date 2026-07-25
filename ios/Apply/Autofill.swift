@@ -14,13 +14,24 @@ enum Autofill {
 
     /// Profile payload for the page. Plain-interpolation string (no regex), so the
     /// values are JSON-encoded and dropped onto `window.__APPLY`.
-    static func dataScript(identity: [String: String], answers: [Question]) -> String {
+    ///
+    /// `rules` is the field-matching table fetched from the backend
+    /// (`GET /apply/rules`). Passing it keeps this app, the desktop extension, and
+    /// `app/fieldmatch.py` on one set of rules; when it's nil (offline, first
+    /// launch) the engine falls back to the copy bundled in `lib`.
+    static func dataScript(identity: [String: String], answers: [Question],
+                           rules: RulesPayload? = nil) -> String {
         let id = (try? JSONSerialization.data(withJSONObject: identity)) ?? Data("{}".utf8)
         let qs = answers.map { ["question": $0.question, "answer": $0.answer] }
         let an = (try? JSONSerialization.data(withJSONObject: qs)) ?? Data("[]".utf8)
         let idStr = String(data: id, encoding: .utf8) ?? "{}"
         let anStr = String(data: an, encoding: .utf8) ?? "[]"
-        return "window.__APPLY = { identity: \(idStr), answers: \(anStr) };"
+        var rulesStr = "null"
+        if let rules, let data = try? JSONEncoder().encode(rules),
+           let json = String(data: data, encoding: .utf8) {
+            rulesStr = json
+        }
+        return "window.__APPLY = { identity: \(idStr), answers: \(anStr), rules: \(rulesStr) };"
     }
 
     /// The matcher + filler. Raw string so the regexes survive verbatim.
@@ -28,38 +39,60 @@ enum Autofill {
     (() => {
       if (window.__applyAutofill) return;
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      const RULES = [
+      // Offline fallback, generated from app/fieldmatch.py (rules version
+      // 211cfb5d2aeb). The served rules below take priority — this exists only so a
+      // first launch or a dropped connection still fills safely. If you edit these
+      // by hand you've reintroduced the drift this design removes; regenerate them
+      // from fieldmatch.py instead.
+      const FALLBACK_RULES = [
         ["email", /e-?mail/i],
         ["preferred_name", /preferred (first )?name|nick.?name|known as|goes by/i],
-        ["first_name", /first.?name|given.?name|legal first/i],
-        ["last_name", /last.?name|family.?name|surname/i],
+        ["first_name", /first.?name|given.?name|legal first|name\s*\(?\s*first/i],
+        ["last_name", /last.?name|family.?name|surname|name\s*\(?\s*last/i],
         ["full_name", /full.?name|^\s*name\s*$|your name|legal name/i],
         ["pronouns", /pronouns/i],
-        ["phone", /phone|mobile|tel(ephone)?/i],
+        ["phone", /phone|mobile|tel(ephone)?|contact number/i],
         ["linkedin", /linked.?in/i],
         ["github", /git.?hub/i],
-        ["portfolio", /portfolio|personal (web)?site|^\s*website\s*$|^url$|other url|personal url/i],
-        ["location", /\blocation\b|where are you (based|located)|city.{0,5}state/i],
+        ["portfolio", /portfolio|personal (web)?site|^\s*website\s*$|^url$|other url|personal url|home ?page|personal page/i],
+        ["location", /\blocation\b|where are you (based|located)|city.{0,5}state|where do you (live|reside)|currently (based|located|reside)|based in/i],
         ["address", /street address|address line|mailing address|home address|^\s*address\b/i],
         ["city", /\bcity\b|town/i],
         ["state", /\bstate\b|province|region/i],
         ["zip", /\bzip\b|postal code|post.?code/i],
         ["country", /\bcountry\b|nation/i],
-        ["school", /school|university|college|institution|alma mater/i],
+        ["school", /school|university|college|institution|alma mater|where did you study/i],
         ["degree", /degree|qualification|level of (education|study)/i],
         ["discipline", /major|discipline|field of study|concentration/i],
         ["gpa", /\bgpa\b|grade point/i],
-        ["grad_year", /grad(uation)?.{0,8}(year|date)|class of|completion (year|date)/i],
+        ["grad_year", /grad(uation)?.{0,8}(year|date)|class of|completion (year|date)|year of grad/i],
         ["current_company", /current (employer|company)|present (employer|company)|where do you (currently )?work/i],
         ["current_title", /current (title|role|position)|present (title|role|position)/i],
-        ["years_experience", /years.{0,10}experience|experience.{0,10}years|\byoe\b/i],
+        ["years_experience", /years.{0,10}experience|experience.{0,10}years|\byoe\b|how many years/i],
         ["salary_expectation", /salary (expectation|requirement)|expected (salary|compensation|pay)|desired (salary|pay|compensation)|compensation expectation|pay expectation/i],
-        ["start_date", /start date|available to start|earliest (start|availability)|when can you start|date available/i],
+        ["start_date", /start date|available to start|earliest (start|availability)|when (can|could) you start|date available|notice period|availability date/i],
         ["willing_to_relocate", /willing to relocate|open to relocat|able to relocate|relocat/i],
         ["work_authorized", /authori[sz]ed to work|work authori[sz]ation|legally.{0,12}work|eligible to work|right to work/i],
         ["needs_sponsorship", /sponsor(ship)?|require.{0,12}visa|visa.{0,12}status|immigration status/i],
       ];
-      const EEO = /gender|sex\b|race|ethnic|hispanic|latino|veteran|disab|sexual orientation/i;
+      const FALLBACK_EEO = /gender|sex\b|race|ethnic|hispanic|latino|veteran|disab|sexual orientation|pronoun.{0,4}optional|national origin|self.?identif|\beeo\b|equal (employment|opportunity)|protected (class|category)|lgbt|marital status|religio|citizenship status|date of birth|\bdob\b/i;
+
+      // Prefer the rules the backend served (app/fieldmatch.py is the source of
+      // truth); tests/test_rules_parity.py proves they behave identically here.
+      let RULES = FALLBACK_RULES, EEO = FALLBACK_EEO, RULES_SRC = "bundled";
+      try {
+        const served = window.__APPLY && window.__APPLY.rules;
+        if (served && served.rules && served.rules.length && served.never_fill) {
+          const flags = served.flags || "i";
+          const compiled = served.rules.map(([k, p]) => [k, new RegExp(p, flags)]);
+          const eeo = new RegExp(served.never_fill, flags);
+          RULES = compiled; EEO = eeo; RULES_SRC = served.version || "served";
+        }
+      } catch (e) {
+        // A malformed payload must never leave the page unfillable *or* unsafe —
+        // the bundled copy above is already in place.
+        RULES = FALLBACK_RULES; EEO = FALLBACK_EEO; RULES_SRC = "bundled (bad payload)";
+      }
       const ID = () => (window.__APPLY && window.__APPLY.identity) || {};
       const ANS = () => (window.__APPLY && window.__APPLY.answers) || [];
 
@@ -242,7 +275,7 @@ enum Autofill {
           if (tag === "select" ? setSelect(el, val) : (setText(el, val), true)) filled++;
         }
         filled += fillRadios();
-        try { window.webkit.messageHandlers.applyfill.postMessage({ filled, essays }); } catch (e) {}
+        try { window.webkit.messageHandlers.applyfill.postMessage({ filled, essays, rules: RULES_SRC }); } catch (e) {}
         return filled;
       };
     })();

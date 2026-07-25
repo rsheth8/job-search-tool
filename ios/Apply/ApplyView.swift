@@ -5,12 +5,13 @@ struct ApplyView: View {
     let item: QueueItem
     @EnvironmentObject var config: Config
     @State private var package: Package?
+    @State private var rules: RulesPayload?
     @State private var error: String?
 
     var body: some View {
         Group {
             if let package {
-                ApplyBrowser(item: item, package: package)
+                ApplyBrowser(item: item, package: package, rules: rules)
             } else if let error {
                 ContentUnavailableView("Couldn't prepare this one", systemImage: "exclamationmark.triangle",
                                        description: Text(error))
@@ -19,7 +20,11 @@ struct ApplyView: View {
             }
         }
         .task {
-            do { package = try await APIClient(config: config).fetchPackage(postingId: item.posting_id) }
+            let api = APIClient(config: config)
+            // Rules first, and from the cache if the network is down — the fill runs
+            // with whichever set we have, never with none.
+            rules = await RulesCache.refresh(using: api)
+            do { package = try await api.fetchPackage(postingId: item.posting_id) }
             catch { self.error = "\(error)" }
         }
     }
@@ -29,6 +34,7 @@ struct ApplyView: View {
 private struct ApplyBrowser: View {
     let item: QueueItem
     let package: Package
+    let rules: RulesPayload?
     @EnvironmentObject var config: Config
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model: WebViewModel
@@ -37,11 +43,13 @@ private struct ApplyBrowser: View {
     @State private var resumeDoc: ResumeDoc?
     @State private var fetchingResume = false
 
-    init(item: QueueItem, package: Package) {
+    init(item: QueueItem, package: Package, rules: RulesPayload?) {
         self.item = item
         self.package = package
+        self.rules = rules
         _model = StateObject(wrappedValue: WebViewModel(
-            identity: package.identity ?? [:], answers: package.questions ?? []))
+            identity: package.identity ?? [:], answers: package.questions ?? [],
+            rules: rules))
     }
 
     var body: some View {
