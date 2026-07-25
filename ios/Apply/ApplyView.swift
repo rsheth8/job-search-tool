@@ -42,6 +42,9 @@ private struct ApplyBrowser: View {
     @State private var marking = false
     @State private var resumeDoc: ResumeDoc?
     @State private var fetchingResume = false
+    /// Downloaded in the background on open, so tapping Resume opens the share
+    /// sheet immediately instead of waiting on the network mid-application.
+    @State private var prefetchedResume: URL?
 
     init(item: QueueItem, package: Package, rules: RulesPayload?) {
         self.item = item
@@ -79,7 +82,10 @@ private struct ApplyBrowser: View {
         }
         .navigationTitle(item.company ?? "Apply")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { model.load(package.url) }
+        .onAppear {
+            model.load(package.url)
+            prefetchResume()
+        }
         .onChange(of: model.lastFill?.filled) { showFillToast() }
         .sheet(item: $resumeDoc) { doc in ShareSheet(items: [doc.url]) }
     }
@@ -117,12 +123,34 @@ private struct ApplyBrowser: View {
     private func showFillToast() {
         guard let f = model.lastFill else { return }
         let more = f.essays > 0 ? " · \(f.essays) need you" : ""
-        flashToast("Filled \(f.filled)\(more)")
+        // Say when the *bundled* rules ran: that means the served ones never
+        // arrived, so the fill used an older rule set. Silent staleness is exactly
+        // how the phone ended up behind the backend in the first place.
+        let stale = f.rules.hasPrefix("bundled") ? " · offline rules" : ""
+        flashToast("Filled \(f.filled)\(more)\(stale)")
+    }
+
+    /// Pull the tailored resume as soon as the form opens, so the Resume button is
+    /// instant when you reach the upload field. iOS won't let an app inject a file
+    /// into a web `<input type=file>`, so a tap-through to Files is the floor —
+    /// this removes the wait before it, not the tap itself.
+    private func prefetchResume() {
+        guard resumeDoc == nil, !fetchingResume else { return }
+        Task {
+            if let url = try? await APIClient(config: config)
+                .downloadResume(postingId: item.posting_id) {
+                prefetchedResume = url
+            }
+        }
     }
 
     /// Pull the tailored resume PDF and open the share sheet so it can be saved to
     /// Files; from there it's one tap to attach in the form's upload field.
     private func fetchResume() {
+        if let ready = prefetchedResume {        // already downloaded on open
+            resumeDoc = ResumeDoc(url: ready)
+            return
+        }
         fetchingResume = true
         Task {
             defer { fetchingResume = false }

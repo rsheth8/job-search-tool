@@ -33,7 +33,15 @@ struct QueueView: View {
             .navigationTitle("Apply")
             .navigationDestination(for: QueueItem.self) { ApplyView(item: $0) }
             .refreshable { await load() }
-            .task { await load() }
+            .task {
+                // Paint the last known list immediately, then refresh over it — on a
+                // phone the fetch often lands after your attention has moved on.
+                if queue.isEmpty && matches.isEmpty, let cached = QueueCache.load() {
+                    queue = cached.queue
+                    matches = cached.matches
+                }
+                await load()
+            }
         }
     }
 
@@ -117,6 +125,11 @@ struct QueueView: View {
             let data = try await api.fetchData()
             queue = data.queue
             matches = data.matches
-        } catch { self.error = "\(error)" }
+            QueueCache.save(queue: data.queue, matches: data.matches)
+        } catch {
+            // Only surface the failure if we have nothing to show; otherwise the
+            // cached list stands and an error banner would just be noise.
+            if queue.isEmpty && matches.isEmpty { self.error = "\(error)" }
+        }
     }
 }

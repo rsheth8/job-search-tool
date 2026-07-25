@@ -35,6 +35,18 @@ _GENERIC_COMPANY = frozenset({
     "recruiting agency", "recruitment agency", "consulting firm", "agency",
 })
 
+# Discussion-thread artifacts. RSS feeds of hiring threads (HN "Who is hiring?",
+# subreddit roundups) emit one item per *comment*, which arrives as a posting titled
+# "New comment by someone in 'Ask HN: Who is hiring? (July 2026)'" with a company
+# scraped out of the byline. They're never applyable and they crowd out real matches.
+# Caught live in the iOS app during testing.
+_THREAD_ARTIFACT = re.compile(
+    r"^\s*new comment\b|\bcomment by\b|\bask hn\b|\bwho is hiring\b|"
+    r"\bhiring thread\b|\bmonthly thread\b|\[hiring\]\s*$|"
+    r"^\s*re:\s|\bmegathread\b",
+    re.I,
+)
+
 # Obvious job-spam phrasing in titles.
 _SPAM_TITLE = re.compile(
     r"(earn \$|\$\d+\s*/?\s*(hr|hour|week|day)\b|work from home today|"
@@ -71,6 +83,10 @@ def is_reputable(p: JobPosting) -> bool:
     if not (p.url or "").strip():
         return False  # no apply link → can't verify or act on it
     if _SPAM_TITLE.search(p.title or ""):
+        return False
+    # A comment in a hiring thread is a discussion post, not an opening — and the
+    # "company" is whatever the byline happened to say.
+    if _THREAD_ARTIFACT.search(p.title or "") or _THREAD_ARTIFACT.search(p.company or ""):
         return False
     return True
 

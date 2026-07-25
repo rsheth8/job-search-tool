@@ -106,6 +106,29 @@ def test_spam_titles_are_dropped(title):
     assert not quality.is_reputable(_p(title=title))
 
 
+@pytest.mark.parametrize("title,company", [
+    # the exact shape that showed up live in the iOS app during testing
+    ('New comment by sent-hil in "Ask HN: Who is hiring? (July 2026)"',
+     "New Comment By Sent"),
+    ("Ask HN: Who is hiring? (July 2026)", "Hacker News"),
+    ("Who is hiring? Monthly thread", "Reddit"),
+    ("Re: Backend Engineer", "Acme"),
+    ("Software Engineer [HIRING]", "Acme"),
+    ("July 2026 hiring megathread", "Acme"),
+])
+def test_discussion_thread_artifacts_are_dropped(title, company):
+    """RSS feeds of hiring threads emit one item per *comment*. They aren't jobs,
+    they aren't applyable, and they crowd out real matches."""
+    assert not quality.is_reputable(_p(title=title, company=company))
+
+
+def test_a_genuine_posting_mentioning_hiring_is_kept():
+    """Don't over-reach: plenty of real postings say 'hiring' in the description."""
+    assert quality.is_reputable(_p(
+        title="Senior Backend Engineer", company="Stripe",
+        description="We're hiring! Join the payments team."))
+
+
 def test_a_real_posting_survives_the_filters():
     posting = _p(company="Stripe", title="Senior Backend Engineer")
     assert quality.is_reputable(posting)
