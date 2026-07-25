@@ -183,14 +183,26 @@ def get_questions(user_id: str, posting_id: int, *, prof=None) -> list[dict]:
         prof = profile_mod.get_profile(user_id)
     from . import applicant
 
+    from . import knowledge
+
     company = posting["company"] or "the company"
     title = posting["title"] or "Role"
     prompts = [q.format(company=company, title=title) for q in COMMON_QUESTIONS]
-    answers = outreach.draft_question_answers(
-        prompts, company, title, posting["description"], prof,
-        identity_block=applicant.identity_block(user_id),
-    )
-    qs = [{"question": q, "answer": a} for q, a in zip(prompts, answers)]
+
+    # Deterministic first: a question you've already answered well is reused
+    # verbatim — no model call, no cost, no variance. Only the rest get drafted.
+    answers: list[str | None] = [knowledge.canned_answer(user_id, q) for q in prompts]
+    todo = [i for i, a in enumerate(answers) if a is None]
+    if todo:
+        drafted = outreach.draft_question_answers(
+            [prompts[i] for i in todo], company, title, posting["description"], prof,
+            identity_block=applicant.identity_block(user_id),
+            knowledge_block=knowledge.knowledge_block(user_id),
+        )
+        for i, a in zip(todo, drafted):
+            answers[i] = a
+
+    qs = [{"question": q, "answer": a or ""} for q, a in zip(prompts, answers)]
     _save_questions(user_id, posting_id, qs)
     return qs
 
@@ -216,12 +228,13 @@ def redraft_answer(user_id: str, posting_id: int, index: int, *, prof=None) -> s
         return None
     if prof is None:
         prof = profile_mod.get_profile(user_id)
-    from . import applicant
+    from . import applicant, knowledge
 
     answer = outreach.answer_application_question(
         qs[index]["question"], posting["company"] or "the company",
         posting["title"] or "Role", posting["description"], prof,
         identity_block=applicant.identity_block(user_id),
+        knowledge_block=knowledge.knowledge_block(user_id),
     )
     qs[index]["answer"] = answer
     _save_questions(user_id, posting_id, qs)

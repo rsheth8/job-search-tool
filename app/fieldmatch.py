@@ -19,30 +19,37 @@ import re
 FIELD_RULES: list[tuple[str, str]] = [
     ("email", r"e-?mail"),
     ("preferred_name", r"preferred (first )?name|nick.?name|known as|goes by"),
-    ("first_name", r"first.?name|given.?name|legal first"),
-    ("last_name", r"last.?name|family.?name|surname"),
+    # "Name (First)" is as common on ATS forms as "First name", so match both orders.
+    ("first_name", r"first.?name|given.?name|legal first|name\s*\(?\s*first"),
+    ("last_name", r"last.?name|family.?name|surname|name\s*\(?\s*last"),
     ("full_name", r"full.?name|^\s*name\s*$|your name|legal name"),
     ("pronouns", r"pronouns"),
-    ("phone", r"phone|mobile|tel(ephone)?"),
+    ("phone", r"phone|mobile|tel(ephone)?|contact number"),
     ("linkedin", r"linked.?in"),
     ("github", r"git.?hub"),
-    ("portfolio", r"portfolio|personal (web)?site|^\s*website\s*$|^url$|other url|personal url"),
-    ("location", r"\blocation\b|where are you (based|located)|city.{0,5}state"),
+    ("portfolio", r"portfolio|personal (web)?site|^\s*website\s*$|^url$|other url|"
+                  r"personal url|home ?page|personal page"),
+    ("location", r"\blocation\b|where are you (based|located)|city.{0,5}state|"
+                 r"where do you (live|reside)|currently (based|located|reside)|based in"),
     ("address", r"street address|address line|mailing address|home address|^\s*address\b"),
     ("city", r"\bcity\b|town"),
     ("state", r"\bstate\b|province|region"),
     ("zip", r"\bzip\b|postal code|post.?code"),
     ("country", r"\bcountry\b|nation"),
-    ("school", r"school|university|college|institution|alma mater"),
+    ("school", r"school|university|college|institution|alma mater|where did you study"),
     ("degree", r"degree|qualification|level of (education|study)"),
     ("discipline", r"major|discipline|field of study|concentration"),
     ("gpa", r"\bgpa\b|grade point"),
-    ("grad_year", r"grad(uation)?.{0,8}(year|date)|class of|completion (year|date)"),
+    ("grad_year", r"grad(uation)?.{0,8}(year|date)|class of|completion (year|date)|"
+                  r"year of grad"),
     ("current_company", r"current (employer|company)|present (employer|company)|where do you (currently )?work"),
     ("current_title", r"current (title|role|position)|present (title|role|position)"),
-    ("years_experience", r"years.{0,10}experience|experience.{0,10}years|\byoe\b"),
+    ("years_experience", r"years.{0,10}experience|experience.{0,10}years|\byoe\b|"
+                         r"how many years"),
     ("salary_expectation", r"salary (expectation|requirement)|expected (salary|compensation|pay)|desired (salary|pay|compensation)|compensation expectation|pay expectation"),
-    ("start_date", r"start date|available to start|earliest (start|availability)|when can you start|date available"),
+    ("start_date", r"start date|available to start|earliest (start|availability)|"
+                   r"when (can|could) you start|date available|notice period|"
+                   r"availability date"),
     ("willing_to_relocate", r"willing to relocate|open to relocat|able to relocate|relocat"),
     ("work_authorized", r"authori[sz]ed to work|work authori[sz]ation|legally.{0,12}work|eligible to work|right to work"),
     ("needs_sponsorship", r"sponsor(ship)?|require.{0,12}visa|visa.{0,12}status|immigration status"),
@@ -50,9 +57,14 @@ FIELD_RULES: list[tuple[str, str]] = [
 _COMPILED = [(key, re.compile(pat, re.I)) for key, pat in FIELD_RULES]
 
 # Demographic / EEO fields we NEVER auto-fill (sensitive — left to the human).
+# Broad on purpose: a false positive costs one manually-filled field, a false
+# negative answers a protected-class question on the user's behalf.
 _NEVER_FILL = re.compile(
     r"gender|sex\b|race|ethnic|hispanic|latino|veteran|disab|sexual orientation|"
-    r"pronoun.{0,4}optional", re.I,
+    r"pronoun.{0,4}optional|national origin|self.?identif|\beeo\b|"
+    r"equal (employment|opportunity)|protected (class|category)|lgbt|"
+    r"marital status|religio|citizenship status|date of birth|\bdob\b",
+    re.I,
 )
 
 _RESUME_LABEL = re.compile(r"r[eé]sum[eé]|\bcv\b|curriculum vitae", re.I)

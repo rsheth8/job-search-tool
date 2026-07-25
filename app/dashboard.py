@@ -102,6 +102,7 @@ def render(user_id: str | None = None, *, now: datetime | None = None) -> str:
         f"{_deadlines_section(upcoming, now)}"
         f"{_reminders_section(pending, now)}"
         f"{_in_flight_section(user_id)}"
+        f"{_knowledge_section(user_id)}"
         f"{_discovery_section(user_id)}"
         f"{_applications_section(apps, now)}"
         f"{_recruiters_section(recruiters)}"
@@ -249,6 +250,28 @@ def _in_flight_section(user_id: str) -> str:
         )
     return ("<section><h2>🤖 In flight</h2>"
             f"<table>{''.join(body)}</table></section>")
+
+
+def _knowledge_section(user_id: str) -> str:
+    """How completely the assistant knows you — the lever on how much it can fill
+    without asking. Shown only while something's still missing."""
+    from . import knowledge
+
+    report = knowledge.audit(user_id)
+    if not report["identity_missing"] and not report["suggestions"]:
+        return ""
+    pct = int(report["score"] * 100)
+    flag = " warn" if pct < 70 else ""
+    missing = escape(", ".join(report["identity_missing"][:8])) or "—"
+    rows = [f"<tr><td>Identity</td><td class='muted'>{pct}% complete</td>"
+            f"<td class='muted{flag}'>{missing}</td></tr>"]
+    counts = report["knowledge_counts"]
+    known = ", ".join(f"{n} {c}{'s' if n != 1 else ''}"
+                      for c, n in counts.items() if n) or "nothing yet"
+    rows.append(f"<tr><td>Background</td><td class='muted'>{escape(known)}</td>"
+                f"<td class='muted'>{escape(report['suggestions'][0]) if report['suggestions'] else '—'}</td></tr>")
+    return ("<section><h2>🧠 What I know about you</h2>"
+            f"<table>{''.join(rows)}</table></section>")
 
 
 def _reminders_section(pending: list, now: datetime) -> str:

@@ -36,6 +36,9 @@ class Intent(str, Enum):
     # Submit pipeline, driven from the phone (Phase 2)
     APPROVE_FILL = "APPROVE_FILL"  # approve / cancel a filled application
     APPLY_STATUS = "APPLY_STATUS"  # what's in flight right now
+    # Personal knowledge — what makes a drafted answer specific to you
+    REMEMBER = "REMEMBER"          # store a project/achievement/strength/answer
+    KNOWLEDGE = "KNOWLEDGE"        # show what's known + what's missing
     UNKNOWN = "UNKNOWN"
 
 

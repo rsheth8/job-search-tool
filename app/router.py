@@ -179,6 +179,27 @@ _APPLY_STATUS_RE = re.compile(
     re.I,
 )
 
+# REMEMBER: teach it a durable fact about you. Two shapes — a reusable answer to a
+# named question, or a plain project/achievement/strength/preference.
+_REMEMBER_ANSWER_RE = re.compile(
+    r"^\s*(?:remember|save)\s+(?:this\s+|my\s+|the\s+)?answer\s+(?:to|for)\s+"
+    r"[\"“']?(.+?)[\"”']?\s*[:\-]\s*(.+)$",
+    re.I | re.S,
+)
+_REMEMBER_RE = re.compile(
+    r"^\s*remember\s*[:\-]?\s*(?:(?:that|my|this)\s+)?"
+    r"(?:(project|achievement|strength|preference)s?\s*[:\-]\s*)?(.+)$",
+    re.I | re.S,
+)
+# KNOWLEDGE: what do you actually know about me, and what's still missing.
+_KNOWLEDGE_SHOW_RE = re.compile(
+    r"\bwhat do you know about me\b|\bwhat you know about me\b|"
+    r"\bmy background\b|\bknowledge (?:audit|check|coverage|base)\b|"
+    r"\bhow (?:complete|much) is my (?:profile|info|identity)\b|"
+    r"\bwhat(?:'s| is) missing\b",
+    re.I,
+)
+
 # PROFILE: set search criteria, or show the saved profile.
 _PROFILE_SET_RE = re.compile(
     r"\b(looking for|i want|i'?m looking|interested in|search(?:ing)? for|"
@@ -532,6 +553,26 @@ class HeuristicRouter:
 
         if _APPLY_STATUS_RE.search(low):
             return ParsedMessage(intent=Intent.APPLY_STATUS, confidence=0.9)
+
+        # --- personal knowledge (before NOTE, which also claims "note down") ---
+        if _KNOWLEDGE_SHOW_RE.search(low):
+            return ParsedMessage(intent=Intent.KNOWLEDGE, confidence=0.9)
+
+        # Match on the ORIGINAL text, not the lowercased copy — a remembered fact
+        # is stored verbatim and its capitalisation is the user's.
+        m = _REMEMBER_ANSWER_RE.search(raw)
+        if m:
+            return ParsedMessage(
+                intent=Intent.REMEMBER,
+                message=f"answer|{m.group(1).strip()}|{m.group(2).strip()}",
+                confidence=0.9)
+
+        m = _REMEMBER_RE.search(raw)
+        if m:
+            category = (m.group(1) or "").lower()
+            return ParsedMessage(
+                intent=Intent.REMEMBER,
+                message=f"{category}|{m.group(2).strip()}", confidence=0.85)
 
         # --- Job discovery (before APPLY/QUERY/LIST, which share keywords) ----
         # APPLY_JOB first: "apply 2" must beat the generic APPLY ("applied …").

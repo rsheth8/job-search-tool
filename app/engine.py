@@ -276,6 +276,10 @@ def _start(user_id: str, p: ParsedMessage, raw: str) -> str:
         return _do_approve_fill(user_id, p)
     if p.intent == Intent.APPLY_STATUS:
         return _do_apply_status(user_id)
+    if p.intent == Intent.REMEMBER:
+        return _do_remember(user_id, p)
+    if p.intent == Intent.KNOWLEDGE:
+        return _do_knowledge(user_id)
     # UNKNOWN
     if convo.is_greeting(raw):
         return GREETING
@@ -1194,6 +1198,80 @@ def _do_apply_status(user_id: str) -> str:
     if waiting:
         out.append(f"\n📥 Staged and ready to review at /apply: {len(waiting)}")
     return "\n".join(out)
+
+
+# Words that hint at which kind of fact an un-categorised "remember …" is.
+_CATEGORY_HINTS = (
+    ("project", re.compile(r"\bi (?:built|made|created|wrote|shipped|designed)\b|"
+                           r"\bproject\b|\bapp\b|\bsystem\b", re.I)),
+    ("achievement", re.compile(r"\bi (?:led|won|grew|cut|reduced|improved|increased|"
+                               r"scaled|saved|launched)\b|\baward\b|\b\d+%", re.I)),
+    ("preference", re.compile(r"\bi (?:want|prefer|like|need|enjoy)\b|"
+                              r"\blooking for\b|\bideally\b", re.I)),
+)
+
+
+def _infer_category(text: str) -> str:
+    """Guess what kind of fact this is when the user didn't label it. Wrong guesses
+    are cheap — everything lands in the same grounding block either way."""
+    for category, rx in _CATEGORY_HINTS:
+        if rx.search(text):
+            return category
+    return "strength"
+
+
+def _do_remember(user_id: str, p: ParsedMessage) -> str:
+    """Store a durable fact about the user, so drafted answers get more specific
+    every time they tell it something."""
+    from . import knowledge
+
+    parts = (p.message or "").split("|", 2)
+    if parts[0] == "answer" and len(parts) == 3:
+        _, question, text = parts
+        if not knowledge.add(user_id, "answer", text, label=question):
+            return "I need both a question and an answer to save — try again?"
+        return (f"🧠 Saved your answer to “{question}”. I'll reuse it verbatim when "
+                "that question comes up — no redraft, no cost.")
+
+    category, text = (parts + [""])[:2] if len(parts) > 1 else ("", parts[0])
+    text = text.strip()
+    if not text:
+        return ("Tell me what to remember — e.g. \"remember project: I built a "
+                "real-time pricing service\" or \"remember I cut p99 latency 40%\".")
+    category = category or _infer_category(text)
+    if not knowledge.add(user_id, category, text):
+        return "I couldn't store that — try 'remember project: …'."
+    return (f"🧠 Got it ({category}). I'll use that when drafting your application "
+            "answers. Say 'what do you know about me' to see everything.")
+
+
+def _do_knowledge(user_id: str) -> str:
+    """What it knows, and what it still needs — the answer to "why are my drafted
+    answers generic?"."""
+    from . import knowledge
+
+    items = knowledge.list_all(user_id)
+    report = knowledge.audit(user_id)
+    lines = [f"🧠 What I know about you — identity {int(report['score'] * 100)}% complete."]
+
+    if items:
+        by_cat: dict[str, list[str]] = {}
+        for it in items:
+            label = f"“{it['label']}” → {it['text']}" if it["label"] else it["text"]
+            by_cat.setdefault(it["category"], []).append(label)
+        for category, texts in by_cat.items():
+            lines.append(f"\n{category.title()}s ({len(texts)}):")
+            lines += [f"  • {t[:110]}" for t in texts[:5]]
+            if len(texts) > 5:
+                lines.append(f"  …and {len(texts) - 5} more")
+    else:
+        lines.append("\nNothing stored yet — that's why drafted answers read generic.")
+
+    if report["identity_missing"]:
+        lines.append("\n📋 Missing details: " + ", ".join(report["identity_missing"][:8]))
+    for tip in report["suggestions"][:3]:
+        lines.append(f"  → {tip}")
+    return "\n".join(lines)
 
 
 def _do_tune(user_id: str, p: ParsedMessage) -> str:

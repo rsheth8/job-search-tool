@@ -28,9 +28,38 @@ def test_match_key(label, key):
 @pytest.mark.parametrize("label", [
     "Gender", "Race / Ethnicity", "Are you a protected veteran?",
     "Disability status", "Sexual orientation",
+    # broadened: a missed one answers a protected-class question for the user
+    "National origin", "Voluntary Self-Identification", "EEO information",
+    "Equal Employment Opportunity", "Marital status", "Religion",
+    "Do you identify as LGBTQ+?", "Date of birth", "DOB",
+    "Citizenship status",
 ])
 def test_never_fills_demographic_fields(label):
     assert fieldmatch.match_key(label) is None
+
+
+@pytest.mark.parametrize("label,key", [
+    # label variants real ATS forms use that the original rules missed
+    ("Name (First)", "first_name"),
+    ("Name (Last)", "last_name"),
+    ("Contact number", "phone"),
+    ("Where do you live?", "location"),
+    ("Currently based", "location"),
+    ("Homepage", "portfolio"),
+    ("Where did you study?", "school"),
+    ("Year of graduation", "grad_year"),
+    ("How many years of Python?", "years_experience"),
+    ("Notice period", "start_date"),
+    ("When could you start?", "start_date"),
+])
+def test_broadened_label_coverage(label, key):
+    assert fieldmatch.match_key(label) == key
+
+
+def test_current_salary_is_still_not_treated_as_an_expectation():
+    """We store a desired salary, never a current one — don't let a broadened
+    rule volunteer the wrong number."""
+    assert fieldmatch.match_key("Current salary") is None
 
 
 def test_match_key_unknown_returns_none():
