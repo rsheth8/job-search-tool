@@ -225,10 +225,9 @@ def act(page, frames, name: str, inp: dict, resume: dict | None,
 
 
 def _is_eeo(label: str) -> bool:
-    import re
-    return bool(re.search(
-        r"gender|sex\b|race|ethnic|hispanic|latino|veteran|disab|sexual orientation",
-        label, re.I))
+    """Delegates to the shared brain so the agent, the deterministic filler, and the
+    extension can't drift on what counts as a demographic field."""
+    return fieldmatch.is_eeo(label)
 
 
 def auto_fill(page, frames, elements: list[dict], identity: dict,

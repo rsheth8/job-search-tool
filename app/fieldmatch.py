@@ -59,11 +59,18 @@ _RESUME_LABEL = re.compile(r"r[eé]sum[eé]|\bcv\b|curriculum vitae", re.I)
 _COVER_LABEL = re.compile(r"cover.?letter", re.I)
 
 
+def is_eeo(label: str) -> bool:
+    """True for demographic / EEO / self-identification labels, which we never fill
+    on the user's behalf — as a *fact* or as a drafted answer. Public so every fill
+    path (extension, worker filler, LLM agent) shares one definition."""
+    return bool(_NEVER_FILL.search((label or "").strip().lower()))
+
+
 def match_key(label: str) -> str | None:
     """The identity key a field's label maps to, or None. Returns None for
     demographic/EEO fields so they're never auto-filled."""
     text = (label or "").strip().lower()
-    if not text or _NEVER_FILL.search(text):
+    if not text or is_eeo(text):
         return None
     for key, rx in _COMPILED:
         if rx.search(text):
@@ -87,6 +94,28 @@ def select_value(options: list[str], value) -> str | None:
     return None
 
 
+def option_for(label: str, options: list[str], identity: dict,
+               key: str | None = None) -> tuple[str | None, str | None]:
+    """``(identity key, option text)`` for a *choice* field.
+
+    One decision point shared by all three choice controls the worker meets —
+    native ``<select>``, custom ARIA combobox, and Yes/No radio group — so they
+    can't drift apart. ``(None, None)`` when the label is unknown or EEO;
+    ``(key, None)`` when the label is understood but the identity has no value or
+    no option matches (the caller logs that as the skip reason).
+
+    Pass ``key`` when the caller already resolved it from a richer signal than the
+    label alone (the worker also consults a field's name/id).
+    """
+    key = key or match_key(label)
+    if not key:
+        return None, None
+    value = (identity or {}).get(key)
+    if value in (None, ""):
+        return key, None
+    return key, select_value(options, value)
+
+
 def is_resume_field(label: str) -> bool:
     """True if a file-upload field is asking for a resume/CV (so the worker attaches
     the tailored resume there). False for cover-letter or other attachment fields,
@@ -99,9 +128,14 @@ def is_resume_field(label: str) -> bool:
 
 def is_essay_label(label: str) -> bool:
     """True for free-text/essay prompts (worth a drafted answer) vs short facts.
-    Mirrors the extension: long or question-shaped labels with no identity match."""
+    Mirrors the extension: long or question-shaped labels with no identity match.
+
+    EEO prompts are excluded outright. Without that, a long demographic question
+    ("Are you Hispanic or Latino?" plus its name/id) has no identity key, clears the
+    length bar, and gets a *drafted answer* written into it — filling an EEO field
+    through the back door."""
     text = (label or "").strip().lower()
-    if not text or match_key(text):
+    if not text or is_eeo(text) or match_key(text):
         return False
     return text.endswith("?") or len(text) > 40 or bool(
         re.search(r"\b(why|describe|tell us|cover letter|what (makes|interests)|"

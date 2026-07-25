@@ -60,6 +60,55 @@ def test_is_essay_label():
 
 
 @pytest.mark.parametrize("label", [
+    "Gender", "Race / Ethnicity", "Are you a protected veteran?",
+    "Disability status", "Sexual orientation", "Do you identify as transgender?",
+])
+def test_is_eeo(label):
+    assert fieldmatch.is_eeo(label)
+
+
+def test_is_eeo_leaves_ordinary_fields_alone():
+    assert not fieldmatch.is_eeo("First name")
+    assert not fieldmatch.is_eeo("Why do you want to work here?")
+    assert not fieldmatch.is_eeo("")
+
+
+def test_long_eeo_question_is_not_an_essay():
+    """A demographic question that is long and question-shaped clears the essay
+    bar on wording alone — and would then get a *drafted answer* written into it.
+    The EEO guard has to come first."""
+    label = "Are you Hispanic or Latino? hispanic hispanic"
+    assert len(label) > 40 and fieldmatch.match_key(label) is None
+    assert not fieldmatch.is_essay_label(label)
+
+
+def test_option_for_resolves_key_and_option():
+    identity = {"country": "United States", "needs_sponsorship": "No"}
+    assert fieldmatch.option_for("Country", ["Canada", "United States"], identity) == (
+        "country", "United States")
+    # Yes/No group, same decision path
+    assert fieldmatch.option_for("Do you require visa sponsorship?",
+                                 ["Yes", "No"], identity) == ("needs_sponsorship", "No")
+
+
+def test_option_for_reports_why_it_could_not_decide():
+    # unknown label -> no key at all
+    assert fieldmatch.option_for("Favorite color", ["Red"], {}) == (None, None)
+    # EEO never resolves, even with options present
+    assert fieldmatch.option_for("Gender", ["Male", "Female"], {"gender": "x"}) == (None, None)
+    # understood label, but nothing to say / nothing that matches -> (key, None)
+    assert fieldmatch.option_for("Country", ["Canada"], {}) == ("country", None)
+    assert fieldmatch.option_for("Country", ["Canada"],
+                                 {"country": "United States"}) == ("country", None)
+
+
+def test_option_for_accepts_a_precomputed_key():
+    """The worker resolves keys from label *and* name/id, so it passes its own."""
+    assert fieldmatch.option_for("", ["Yes", "No"], {"work_authorized": "Yes"},
+                                 key="work_authorized") == ("work_authorized", "Yes")
+
+
+@pytest.mark.parametrize("label", [
     "Resume", "Resume/CV", "Résumé", "Upload your CV", "Curriculum Vitae",
 ])
 def test_is_resume_field_yes(label):

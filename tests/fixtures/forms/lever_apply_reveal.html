@@ -1,0 +1,38 @@
+<!doctype html>
+<!-- Lever-shaped job *description* page: no form until you click "Apply for this
+     job", which reveals it. Exercises _reveal_form — and the reveal link must NOT
+     be mistaken for a submit button. -->
+<html>
+<head><meta charset="utf-8"><title>Software Engineer — Acme (Lever)</title></head>
+<body>
+  <div class="posting">
+    <h1>Software Engineer</h1>
+    <p>We are looking for a software engineer to join our team.</p>
+    <a class="postings-btn" href="#apply" id="reveal">Apply for this job</a>
+  </div>
+
+  <div id="application" style="display:none">
+    <form id="lever-form" action="/submitted" method="post">
+      <label for="name">Full name<input type="text" id="name" name="name"></label>
+      <label for="email">Email<input type="email" id="email" name="email"></label>
+      <label for="phone">Phone<input type="tel" id="phone" name="phone"></label>
+      <label for="org">Current company<input type="text" id="org" name="org"></label>
+      <label for="urls-github">GitHub URL<input type="text" id="urls-github" name="urls[GitHub]"></label>
+      <label for="resume">Resume<input type="file" id="resume" name="resume"></label>
+      <label for="comments">Why do you want to work at Acme?
+        <textarea id="comments" name="comments"></textarea></label>
+      <button type="submit" id="btn-submit">Submit application</button>
+    </form>
+  </div>
+
+  <script>
+    // The form renders only after the reveal click (and a tick later, like a SPA).
+    document.getElementById('reveal').addEventListener('click', function (e) {
+      e.preventDefault();
+      setTimeout(function () {
+        document.getElementById('application').style.display = 'block';
+      }, 250);
+    });
+  </script>
+</body>
+</html>
