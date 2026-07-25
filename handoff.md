@@ -1,10 +1,11 @@
 # Job Search Intelligence — Engineering Handoff
 
 > Pick-up doc for a fresh session. Last updated **2026-07-25**.
-> Test suite: **699 passed, 15 skipped**.
+> Test suite: **761 passed, 15 skipped**.
 > ⚠️ The newest work is on branch **`worker-robust-fill`**, not yet merged to
-> `main` — worker fixture tests, Slack-native approve, the knowledge store, and the
-> discovery accuracy pass. See `OVERNIGHT_NOTES.md` for what still needs you.
+> `main` — worker fixture tests, Slack-native approve, the knowledge store, the
+> discovery accuracy pass, and the **mobile build-out** (shared autofill rules, four
+> tabs, push). See `OVERNIGHT_NOTES.md` for what still needs you.
 
 ---
 
@@ -109,6 +110,14 @@ data, same as `applicant.py`.
   (SWE vs AI/ML variant), Tectonic-compiled, cached. Needs base `.tex` on the volume
   (see §5).
 
+### D2. The iPhone app — `ios/` (SwiftUI + WKWebView)
+Four tabs: **Apply** (matches + `Prepare application` to stage, each row showing
+*why* it surfaced), **In flight** (the worker's previews + the approve/cancel gate),
+**About me** (`knowledge` + the coverage audit), **Settings** (backend + push).
+An in-app browser opens the real form; ⚡ Autofill fills it. Push notifications
+(APNs) fire on new matches and on a preview awaiting approval, deep-linking to the
+right tab. See `ios/README.md`.
+
 ### E. The autofill extension — `extension/` (MV3, load unpacked)
 A browser extension (Chrome/Edge/desktop; Safari-packageable for iOS). Focus a
 field → inline chip with the value or a drafted answer. **⚡ Autofill this page**
@@ -116,9 +125,13 @@ button fills everything recognized at once (text, dropdowns, Yes/No radios). Opt
 page edits identity (syncs to server). Talks to `/apply/identity` + `/apply/answer`.
 
 ### F. Phase 2 submit worker — `worker/` + `app/fill_requests.py` + `app/fieldmatch.py`
-The phone-first auto-submit. `app/fieldmatch.py` = shared field-matching brain
-(label→identity key, select/Yes-No matching, EEO never-fill) reused by **both** the
-extension and the worker. `app/fill_requests.py` = state machine
+The phone-first auto-submit. `app/fieldmatch.py` = the **one** field-matching brain
+(label→identity key, select/Yes-No matching, EEO never-fill), now *served* to the
+other two surfaces via `GET /apply/rules` rather than hand-ported into them — the
+JS copies had drifted behind it, and the iOS one was filling demographic fields the
+worker refuses. `tests/test_rules_parity.py` proves Python and JS agree label-for-
+label in a real browser; `tests/test_ios_autofill.py` runs the iOS engine itself
+against the worker's fixtures. `app/fill_requests.py` = state machine
 `pending → filling → preview → approved → submitting → submitted | failed` (submit
 only after explicit approval). `worker/` = separate **Playwright-Python** Fly app
 (~2GB, scale-to-zero) that claims a request, opens the public form, fills via
@@ -142,6 +155,9 @@ and Yes/No radio groups, and logs one structured line per field.
 - `GET /apply/resume` (PDF) · `POST /apply/answer/save|redraft` (per-question, by `index`)
 - `GET/POST /apply/identity` · `POST /apply/answer` (single question; used by extension)
 - **Submit pipeline:** `POST /apply/autosubmit`, `GET /apply/request`, `POST /apply/request/approve|cancel`
+- **Mobile:** `GET /apply/rules` (shared autofill rules) · `GET /apply/inflight` ·
+  `GET/POST /apply/knowledge` + `/apply/knowledge/remove` · `POST /apply/device`
+  (+`/remove`) for push tokens. `/apply/data` rows now carry `why`/`reasons`/`concerns`.
 - **Worker (token-gated `X-Apply-Token`):** `POST /worker/claim`, `/worker/claim_approved`, `/worker/preview`, `/worker/result`
 
 ---
@@ -204,7 +220,9 @@ and Yes/No radio groups, and logs one structured line per field.
 (true) · `ELIGIBILITY_FILTER_ENABLED` (true) · `ELIGIBILITY_LLM_ENABLED` (false) ·
 `JOB_RELEVANCE_THRESHOLD` (0.6) · `JOB_AUTO_QUEUE_THRESHOLD` (0.0 = off) ·
 `JOB_ALERT_MODE` (digest) · `JOB_ALERT_USER` ("") · `RESUME_TAILOR_ENABLED` (true) ·
-`APPLY_API_TOKEN` ("") · `APPLY_CORS_ORIGINS` ("*") · SerpApi/Apollo gates.
+`APPLY_API_TOKEN` ("") · `APPLY_CORS_ORIGINS` ("*") · SerpApi/Apollo gates ·
+`PUSH_ENABLED` (false) + `APNS_KEY_ID`/`APNS_TEAM_ID`/`APNS_BUNDLE_ID`/
+`APNS_KEY_PATH`/`APNS_USE_SANDBOX` (push is a no-op until all are set).
 
 ---
 

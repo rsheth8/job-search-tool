@@ -79,12 +79,56 @@ questions from your tailored answers, **skips EEO/demographic fields**, and repo
 how many it filled (and how many still need you). It's the same field-matching brain
 as the desktop extension (`extension/content.js` / `app/fieldmatch.py`).
 
-## Known limitations / next steps
+## The four tabs
+
+- **Apply** — matches ready to apply to, plus the top matches you can stage with
+  *Prepare application*. Each row says **why** it surfaced ("matches 'backend
+  engineer' · python, go · remote · apply direct") and flags concerns. Paints from a
+  local cache instantly, so a slow network never shows you an empty screen.
+- **In flight** — what the submit worker is doing, and the **approval gate**: the
+  filled fields, what was left for you, the worker's screenshot, and Approve /
+  Cancel. Nothing is ever submitted without that tap.
+- **About me** — how completely the assistant knows you (the lever on how much it
+  can fill unattended), and the facts it draws on. Add projects, achievements, and
+  reusable answers here; a saved answer is reused verbatim, with no model call.
+- **Settings** — backend, user, token, and notifications.
+
+## Autofill rules come from the backend
+
+`app/fieldmatch.py` is the one source of truth for all three autofill surfaces (this
+app, the desktop extension, the submit worker). The app fetches the rules from
+`GET /apply/rules` and caches them; the copy bundled in `Autofill.swift` is only an
+offline fallback, generated from the Python.
+
+This matters because the hand-ported copy had **drifted**: it carried a narrower EEO
+list than the backend, so the phone would fill marital status, religion, citizenship
+status, and date of birth — fields the worker refuses. `tests/test_ios_autofill.py`
+now runs this app's actual JavaScript engine against real form fixtures in headless
+Chromium and proves it never fills those, on served *or* bundled rules. The fill
+toast says "offline rules" when the bundled set ran, so staleness is visible.
+
+If you edit the fallback rules by hand you've reintroduced the drift — regenerate
+them from `app/fieldmatch.py` instead (a test fails if they diverge).
+
+## Notifications
+
+Turn them on in **Settings** (asked on demand, not at launch). You get told when new
+matches land, and when a filled application is waiting on your approval; tapping
+either lands on the tab that answers it.
+
+Requires the backend to have APNs credentials (`PUSH_ENABLED` + `APNS_KEY_ID`,
+`APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_KEY_PATH`), which needs the paid Apple
+Developer Program. Until then Settings tells you notifications won't arrive rather
+than registering into a void. The `aps-environment` entitlement in `project.yml` is
+`development`, which pairs with `APNS_USE_SANDBOX=true`; switch **both** for
+TestFlight or you'll get `BadDeviceToken`.
+
+## Known limitations
 
 - **Resume = one tap.** iOS won't let an app inject a file into a web `<input
-  type=file>` (security). You tap the upload and pick the PDF from Files. *Next:* a
-  "Save tailored resume to Files" button that pulls `GET /apply/resume`.
-- **Custom React dropdowns** (some Ashby/Workday widgets) aren't native `<select>`
-  and may not fill — same limitation as the extension; you set those by hand.
-- No push notifications yet — open the app and pull to refresh. *Next:* a "new
-  matches" notification that deep-links straight into the apply browser.
+  type=file>` (security). The PDF is pre-downloaded when the form opens, so the
+  Resume button opens the share sheet instantly — but you still pick it from Files
+  yourself. That tap is the floor; it can't be removed.
+- **Exotic custom dropdowns** may still not fill. ARIA comboboxes
+  (`role=combobox`/`listbox`) do; widgets that expose neither role don't, and you
+  set those by hand.

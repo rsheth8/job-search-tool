@@ -155,3 +155,75 @@ no API key. Shown on the review card.
 - `verify.sh` fixed — it used `timeout`, which macOS doesn't ship.
 - I did not push, PR, deploy, or touch prod, Fly, a live ATS, or a real Slack
   workspace.
+
+---
+
+# Session 2 — the mobile build-out
+
+Four more phases, all verified by **building and running the app** in the iOS 18.5
+simulator against a seeded local backend, not just compiling it.
+**Suite: 699 → 761 passed, 15 skipped.**
+
+## Phase 1 — one field-matching brain (the safety fix)
+
+The rules lived in three hand-ported copies and the two JavaScript ones had drifted.
+Concretely: **the iPhone would autofill marital status, religion, citizenship
+status, and date of birth** — fields the backend refuses. The extension had *no EEO
+guard at all*; it was only accidentally safe because no rule happened to match.
+
+`GET /apply/rules` now serves them from `fieldmatch.py`. Both clients fetch and
+cache; the bundled copies are offline fallbacks generated from the Python.
+
+- `tests/test_rules_parity.py` — runs the served rules through real Chromium across
+  70 real ATS labels and asserts JS returns exactly what Python does.
+- `tests/test_ios_autofill.py` — extracts the JS out of `Autofill.swift` and runs
+  **the actual mobile engine** against the worker's fixtures. It had zero tests.
+- Drift can't return silently: tests pin each client's fallback against Python, and
+  both engines report which rule set ran.
+
+## Phase 2 — mobile parity
+
+Four tabs (Apply / In flight / About me / Settings). Browse and stage on the phone
+(`/apply/data` already returned the data; the app was discarding it), fit
+explanations per row, the approval gate with the worker's screenshot, and the
+knowledge store + coverage audit.
+
+## Phase 3 — push (server half live, client wired)
+
+`app/push.py`: gated, fail-open, lazily imported so the suite runs without
+`cryptography`/`h2`. The APNs JWT is cached (Apple rejects one regenerated too
+often); dead tokens are dropped rather than retried forever.
+
+## Phase 4 — friction
+
+Offline-first queue cache, resume prefetched on open, and the fill toast says
+"offline rules" when the bundled set ran.
+
+## Bugs found by actually running it
+
+1. **Notification taps did nothing.** The `UNUserNotificationCenter` delegate was
+   assigned inside `enable()`, after permission was granted. iOS resolves it at
+   launch, so taps were silently dropped. Moved to `didFinishLaunchingWithOptions`.
+2. **"Approve & submit" wrapped to two lines** beside Cancel on a phone.
+3. **A live garbage listing.** An RSS tick surfaced *"New comment by sent-hil in
+   'Ask HN: Who is hiring? (July 2026)'"* as an 80% match, company "New Comment By
+   Sent". Hiring-thread feeds emit one item per comment. `quality.is_reputable` now
+   drops thread artifacts — this one only showed up because the app was pointed at
+   real data.
+
+## ⚠️ Still needs you
+
+1. **Mirror `fieldmatch` into `extension/content.js`'s remaining logic** — *done for
+   the rules* (it now fetches them), so the EEO gap is closed on all three surfaces.
+   Nothing outstanding here anymore; the earlier warning is resolved.
+2. **Live headful worker test** — unchanged, still the acceptance step.
+3. **Deploy** — schema gained `user_knowledge` and `device_tokens`; migrations are
+   idempotent and run at import.
+4. **Push needs the paid Apple Developer Program.** Set `PUSH_ENABLED` +
+   `APNS_KEY_ID`/`APNS_TEAM_ID`/`APNS_BUNDLE_ID`/`APNS_KEY_PATH`. The
+   `aps-environment` entitlement is `development`, which pairs with
+   `APNS_USE_SANDBOX=true` — switch **both** for TestFlight or you get
+   `BadDeviceToken`. Until configured the app says notifications won't arrive
+   rather than pretending they will.
+5. **Teach it about you.** The knowledge store is still empty; drafted answers stay
+   generic until it isn't. The About-me tab is the fastest way in now.
