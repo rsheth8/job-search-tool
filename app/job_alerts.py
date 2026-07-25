@@ -75,6 +75,7 @@ def build_review_card(
     *,
     position: int,
     total: int,
+    profile=None,
 ) -> str:
     """One job in the interactive review walkthrough."""
     pct = round((score or 0) * 100)
@@ -84,6 +85,15 @@ def build_review_card(
         f"📋 Job {position} of {total} · {pct}% match · #{posting_id}",
         f"{title} @ {co}",
     ]
+    # Why this one surfaced, in words — a percentage alone can't be argued with.
+    if profile is not None:
+        from . import fit
+
+        detail = fit.explain(posting, profile, score=score)
+        if detail["reasons"]:
+            lines.append("✅ " + " · ".join(detail["reasons"]))
+        for concern in detail["concerns"][:2]:
+            lines.append(f"⚠️ {concern}")
     if posting.location:
         lines.append(f"📍 {posting.location}")
     lines.append(f"🔎 via {_source_label(posting.source)}")
