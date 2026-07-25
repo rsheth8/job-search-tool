@@ -272,6 +272,10 @@ def _start(user_id: str, p: ParsedMessage, raw: str) -> str:
         return _do_snooze_job(user_id, p)
     if p.intent == Intent.TUNE:
         return _do_tune(user_id, p)
+    if p.intent == Intent.APPROVE_FILL:
+        return _do_approve_fill(user_id, p)
+    if p.intent == Intent.APPLY_STATUS:
+        return _do_apply_status(user_id)
     # UNKNOWN
     if convo.is_greeting(raw):
         return GREETING
@@ -1066,6 +1070,130 @@ def _do_snooze_job(user_id: str, p: ParsedMessage) -> str:
     jobstore.snooze_posting(posting["id"], when.isoformat())
     return (f"😴 Snoozed #{posting['id']} ({_posting_label(posting)}) until "
             f"{when.date().isoformat()} — it'll resurface in 'any new jobs' then.")
+
+
+def fill_preview_message(user_id: str, req: dict, preview: dict) -> str:
+    """The Slack message that puts the approval gate on the phone: what got filled,
+    what was left for the human, and the two words that decide it."""
+    label = _fill_label(user_id, req)
+    filled = preview.get("filled") or []
+    skipped = [s for s in (preview.get("skipped") or []) if s]
+
+    if preview.get("status") == "blocked":
+        return (f"🚧 Couldn't fill {label} — {preview.get('reason', 'blocked')}. "
+                "Open it on your computer and finish with the browser extension.")
+
+    plural = "" if len(filled) == 1 else "s"
+    lines = [f"🤖 Filled {label} — {len(filled)} field{plural} ready for review."]
+    lines += [f"  ✓ {e.get('label', '?')}: {str(e.get('value', ''))[:40]}"
+              for e in filled[:8]]
+    if len(filled) > 8:
+        lines.append(f"  …and {len(filled) - 8} more")
+    if skipped:
+        lines.append(f"\n⚠️ Left for you ({len(skipped)}): " + ", ".join(skipped[:6]))
+    lines.append("\nReply 'approve' to submit it, or 'cancel' to stop. "
+                 "Screenshot + full preview: /apply")
+    return "\n".join(lines)
+
+
+def _fill_label(user_id: str, req: dict) -> str:
+    """"#12 (Backend Engineer @ Acme)" for a fill request, falling back to the
+    posting id when the posting has since been cleaned up."""
+    posting = jobstore.get_posting(user_id, req["posting_id"])
+    if posting is None:
+        return f"#{req['posting_id']}"
+    return f"#{posting['id']} ({_posting_label(posting)})"
+
+
+def _do_approve_fill(user_id: str, p: ParsedMessage) -> str:
+    """The human gate, answered from Slack: approve a filled application so the
+    worker may submit it, or cancel it outright.
+
+    This is the *only* thing that moves a request to `approved` — the worker
+    submits nothing until it sees that. Answering here rather than on the web page
+    is what lets the whole flow happen from a phone.
+    """
+    from . import fill_requests
+
+    action, _, pid = (p.message or "approve").partition(":")
+    if pid.isdigit():
+        req = fill_requests.for_posting(user_id, int(pid))
+        if req is None:
+            return (f"I don't have a fill request for #{pid}. Text 'in flight' to "
+                    "see what's actually waiting.")
+    else:
+        req = (fill_requests.latest_awaiting(user_id) if action == "approve"
+               else fill_requests.latest_active(user_id))
+        if req is None and action == "approve":
+            # Nothing at the gate. Fall back to the most recent request so we can
+            # say *why* — "still filling" / "already submitted" is far more useful
+            # than "nothing is waiting". A cancelled one explains nothing, so skip it.
+            req = fill_requests.latest_active(user_id) or fill_requests.latest(user_id)
+            if req is not None and req["status"] == fill_requests.FAILED:
+                req = None
+        if req is None:
+            return ("Nothing is waiting for your approval right now. Queue a match "
+                    "('queue 3'), then tap 🤖 Auto-fill & submit to start one.")
+
+    label = _fill_label(user_id, req)
+    if action == "cancel":
+        if not fill_requests.cancel(user_id, req["id"]):
+            return f"{label} is already {req['status']} — nothing to cancel."
+        return f"🚫 Cancelled {label}. Nothing was submitted."
+
+    if req["status"] != fill_requests.PREVIEW:
+        if req["status"] in (fill_requests.SUBMITTED, fill_requests.SUBMITTING):
+            return f"{label} is already {req['status']} — no action needed."
+        return (f"{label} isn't ready for approval yet (it's {req['status']}). "
+                "I'll message you the moment the filled form is ready to check.")
+    if not fill_requests.approve(user_id, req["id"]):
+        return f"Couldn't approve {label} — check 'in flight' for its current state."
+    return (f"✅ Approved {label} — submitting now. I'll confirm when it's in, "
+            "and log it as Applied.")
+
+
+# How each fill state reads in the in-flight list.
+_FILL_STATE_LABELS = {
+    "pending": "⏳ queued for the worker",
+    "filling": "🤖 filling the form",
+    "preview": "👀 waiting on your approval",
+    "approved": "✅ approved — submitting",
+    "submitting": "📤 submitting",
+}
+
+
+def _do_apply_status(user_id: str) -> str:
+    """Everything in flight, in one glance — the phone-side answer to "where are
+    my applications right now?"."""
+    from . import apply_queue, fill_requests
+
+    active = fill_requests.list_active(user_id)
+    lines = []
+    for req in active:
+        state = _FILL_STATE_LABELS.get(req["status"], req["status"])
+        lines.append(f"• {_fill_label(user_id, req)} — {state}")
+
+    staged = [it for it in apply_queue.list_queue(user_id)
+              if it.get("status") != "submitted"]
+    in_flight_ids = {r["posting_id"] for r in active}
+    waiting = [it for it in staged if it["posting_id"] not in in_flight_ids]
+
+    if not lines and not waiting:
+        return ("Nothing in flight. Text 'any new jobs' to see matches, then "
+                "'queue <#>' to prepare an application.")
+
+    out = []
+    if lines:
+        awaiting = sum(1 for r in active if r["status"] == "preview")
+        header = f"📋 In flight ({len(active)})"
+        out.append(header + ":")
+        out.extend(lines)
+        if awaiting:
+            out.append(f"\nReply 'approve' to send the {'one' if awaiting == 1 else 'first'} "
+                       "waiting on you, or 'cancel' to call it off.")
+    if waiting:
+        out.append(f"\n📥 Staged and ready to review at /apply: {len(waiting)}")
+    return "\n".join(out)
 
 
 def _do_tune(user_id: str, p: ParsedMessage) -> str:

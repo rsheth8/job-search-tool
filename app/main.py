@@ -403,8 +403,33 @@ async def worker_preview(request: Request) -> dict:
 
     _require_apply_token(request)
     body = await request.json()
-    ok = fill_requests.set_preview(int(body["request_id"]), body.get("preview") or {})
+    preview = body.get("preview") or {}
+    ok = fill_requests.set_preview(int(body["request_id"]), preview)
+    if ok:
+        _notify_preview_ready(int(body["request_id"]), preview)
     return {"ok": ok}
+
+
+def _notify_preview_ready(request_id: int, preview: dict) -> None:
+    """Push the approval gate to the user's phone, so approving never requires
+    opening the web page.
+
+    Fail-open: a messaging problem must not strand the worker or lose the fill —
+    the /apply review page still shows the same preview.
+    """
+    import logging
+
+    try:
+        from . import engine, fill_requests, reminders
+
+        req = fill_requests.get(request_id)
+        if req is None:
+            return
+        reminders.get_sender().send(
+            req["user_id"], engine.fill_preview_message(req["user_id"], req, preview))
+    except Exception:  # noqa: BLE001
+        logging.getLogger("apply").exception(
+            "preview notification failed; the /apply page still has it")
 
 
 @app.post("/worker/result")

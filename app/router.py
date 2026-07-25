@@ -153,6 +153,32 @@ _QUEUE_BULK_RE = re.compile(
     r"\b(?:queue|stage)\s+(?:the\s+)?(?:top\s+(\d+)|(all))\b", re.I,
 )
 
+# APPROVE_FILL: the human gate on the submit pipeline, answered from Slack so the
+# whole phone flow (alert → fill → preview → approve) never needs the web page.
+# Anchored at the start of the message: "approve" mid-sentence is usually prose.
+_APPROVE_FILL_RE = re.compile(
+    r"^\s*(?:approve|submit it|send it|ship it|go ahead|looks good|lgtm)"
+    r"(?:\s+(?:the\s+)?(?:fill|application|app))?\s*#?(\d+)?\s*[.!]?\s*$",
+    re.I,
+)
+# Cancelling a *fill* specifically — "cancel" alone is ambiguous, so require the
+# object (or a bare "cancel"/"don't submit", which only makes sense here).
+_CANCEL_FILL_RE = re.compile(
+    r"^\s*(?:cancel|abort|stop|don'?t submit|do not submit|nope?)"
+    r"(?:\s+(?:the\s+)?(?:fill|application|app|submission|it))?\s*#?(\d+)?\s*[.!]?\s*$",
+    re.I,
+)
+# APPLY_STATUS: what's in flight. Deliberately phrase-based — a bare "status" is
+# claimed by UPDATE ("status: rejected"), so we never match that alone.
+_APPLY_STATUS_RE = re.compile(
+    r"\b(?:what'?s|whats|anything)?\s*(?:in[- ]flight|in flight)\b|"
+    r"\b(?:application|apply|submission)\s+status\b|"
+    r"\bstatus\s+of\s+(?:my\s+)?(?:application|applications|fills?|queue)\b|"
+    r"\bwhat'?s\s+(?:pending|waiting)\b|\bpending\s+(?:applications?|approvals?)\b|"
+    r"\bwaiting\s+(?:on|for)\s+(?:my\s+)?approval\b",
+    re.I,
+)
+
 # PROFILE: set search criteria, or show the saved profile.
 _PROFILE_SET_RE = re.compile(
     r"\b(looking for|i want|i'?m looking|interested in|search(?:ing)? for|"
@@ -486,6 +512,26 @@ class HeuristicRouter:
             return ParsedMessage(
                 intent=Intent.LIST, time_reference=window, confidence=0.85
             )
+
+        # --- Submit pipeline (before everything: these are short, exact replies
+        # to a preview we just sent, and "submit it"/"approve" must not be read as
+        # an APPLY or an UPDATE) -------------------------------------------------
+        m = _APPROVE_FILL_RE.search(low)
+        if m:
+            pid = m.group(1)
+            return ParsedMessage(
+                intent=Intent.APPROVE_FILL,
+                message=f"approve:{int(pid)}" if pid else "approve", confidence=0.95)
+
+        m = _CANCEL_FILL_RE.search(low)
+        if m:
+            pid = m.group(1)
+            return ParsedMessage(
+                intent=Intent.APPROVE_FILL,
+                message=f"cancel:{int(pid)}" if pid else "cancel", confidence=0.9)
+
+        if _APPLY_STATUS_RE.search(low):
+            return ParsedMessage(intent=Intent.APPLY_STATUS, confidence=0.9)
 
         # --- Job discovery (before APPLY/QUERY/LIST, which share keywords) ----
         # APPLY_JOB first: "apply 2" must beat the generic APPLY ("applied …").
@@ -923,6 +969,16 @@ def _build_system_prompt() -> str:
         "matches' -> 'set:0.8'), 'loosen' (less picky / show more), 'tighten' (more "
         "picky / only the best), 'all' (show everything), or 'reset' (back to "
         "default).\n"
+        "- APPROVE_FILL: user is answering the approval gate on an application the "
+        "worker already filled ('approve', 'submit it', 'looks good, send it', "
+        "'cancel', \"don't submit\"). Put 'approve' or 'cancel' in `message`, "
+        "suffixed with ':<number>' if they named a posting ('approve #7' -> "
+        "'approve:7'). NOTE: this is about a form already filled and waiting — a "
+        "request to apply to a new posting is APPLY_JOB.\n"
+        "- APPLY_STATUS: user asks what applications are in flight right now "
+        "('what's in flight', 'anything waiting on me', 'application status'). No "
+        "entities. NOTE: asking about ONE company's stage is CHECK, and their "
+        "overall funnel numbers are STATS.\n"
         "- UNKNOWN: none of the above.\n\n"
         "Rules:\n"
         "- `confidence` is 0.0-1.0: your certainty about the intent + entities.\n"

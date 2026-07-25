@@ -161,6 +161,51 @@ def for_posting(user_id: str, posting_id: int) -> dict | None:
     return _to_dict(row) if row else None
 
 
+def latest_awaiting(user_id: str) -> dict | None:
+    """The user's most recent request sitting at ``preview`` — what a bare
+    "approve" from Slack refers to when they don't name a posting."""
+    return _latest_in(user_id, (PREVIEW,))
+
+
+def latest_active(user_id: str) -> dict | None:
+    """The most recent request that hasn't finished yet — what a bare "cancel"
+    refers to (you can call off a fill before it ever reaches preview)."""
+    return _latest_in(user_id, _ACTIVE)
+
+
+def latest(user_id: str) -> dict | None:
+    """The user's most recent request whatever its state — used only to explain
+    *why* nothing is at the gate ("already submitted" beats "nothing is waiting")."""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM fill_requests WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+    return _to_dict(row) if row else None
+
+
+def list_active(user_id: str) -> list[dict]:
+    """Every unfinished request, newest first — the "what's in flight" view."""
+    with connect() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM fill_requests WHERE user_id = ? "
+            f"AND status IN ({','.join('?' * len(_ACTIVE))}) ORDER BY id DESC",
+            (user_id, *_ACTIVE),
+        ).fetchall()
+    return [_to_dict(r) for r in rows]
+
+
+def _latest_in(user_id: str, statuses: tuple[str, ...]) -> dict | None:
+    with connect() as conn:
+        row = conn.execute(
+            f"SELECT * FROM fill_requests WHERE user_id = ? "
+            f"AND status IN ({','.join('?' * len(statuses))}) "
+            "ORDER BY id DESC LIMIT 1",
+            (user_id, *statuses),
+        ).fetchone()
+    return _to_dict(row) if row else None
+
+
 def list_for_user(user_id: str) -> list[dict]:
     with connect() as conn:
         rows = conn.execute(
