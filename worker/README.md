@@ -69,23 +69,48 @@ The preview sent to your phone includes a **full-page screenshot** of the filled
 form (`screenshot_url`, a JPEG data URL), so you approve against the actual form,
 not just a field list.
 
+## Tests
+
+The fill logic **is** tested — `tests/test_worker_fill.py` drives real headless
+Chromium against hand-written fixtures in `tests/fixtures/forms/` served from a
+local HTTP server. No network, no credentials, no live ATS site. The module skips
+cleanly where Playwright/Chromium isn't installed, so a browserless CI still passes.
+
+Fixtures reproduce the shapes real forms take: a plain Greenhouse-style form, a
+Lever description page that reveals its form on click, a form inside an `<iframe>`,
+an ARIA combobox + Yes/No radios + essay, a late-rendering SPA, and an EEO section.
+
+Two invariants have tests that fail if they ever regress:
+
+1. **`fill_form` never submits** — asserted across every fixture.
+2. **EEO/demographic fields are never filled** — on every control type, including
+   the back door where a long demographic question ("Are you Hispanic or Latino?")
+   looked enough like an essay to get a drafted answer written into it.
+
+```bash
+.venv/bin/python -m pytest tests/test_worker_fill.py -q      # ~60s
+```
+
 ## Status / limitations (the honest part)
 
-This is the one piece that **can't be unit-tested** — it drives a live browser
-(the field-matching brain it calls, `app/fieldmatch.py`, *is* fully tested).
-Known rough edges to tune against real forms:
-- Submit-button detection is heuristic (`submit_form`); per-ATS selectors may need
-  tightening.
+What the fixtures **can't** prove is that real ATS DOMs match the shapes they
+imitate. A live headful run is still the acceptance test — it's just no longer the
+*first* place bugs are found. Remaining rough edges:
+
+- Submit-button detection is heuristic (`submit_form`) — now searches every frame
+  and refuses reveal/navigation buttons, but per-ATS selectors may need tightening.
 - Resume upload targets `<input type="file">` whose label reads as a resume/CV, or
   the lone file input if there's exactly one. Multi-upload forms with an unlabeled
   resume field may still need a manual attach.
-- Custom React dropdowns (some Ashby/Workday widgets) aren't native `<select>` and
-  may not fill; the preview will list them as skipped.
+- Custom dropdowns now fill via click-open → click-option (ARIA
+  `role=combobox`/`listbox`). Widgets that render neither role still get skipped
+  and are listed in the preview.
 - Holds one job open while awaiting approval (fine for personal volume).
 
-Run it on a few real Greenhouse/Lever/Ashby applications with `WORKER_HEADLESS=false`
-first, note what lands in "skipped", and tighten the rules in `app/fieldmatch.py`
-(shared with the extension) and `submit_form`.
+Run it on a few real Greenhouse/Lever/Ashby applications with `WORKER_HEADLESS=false`,
+watch the per-field log (`label → key → action → result`), and tighten the rules in
+`app/fieldmatch.py` (shared with the extension) or add a fixture reproducing whatever
+broke.
 
 **Doing that live-test? Follow [`LIVE_TEST.md`](LIVE_TEST.md)** — a step-by-step
 checklist (setup, per-ATS coverage, and exactly where each kind of fix goes).
