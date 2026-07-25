@@ -10,6 +10,11 @@ struct QueueItem: Codable, Identifiable, Hashable {
     let source: String?
     let status: String?
     let auto_fillable: Bool?
+    /// Why this surfaced, in words — a bare percentage can't be argued with.
+    /// Computed server-side by `app/fit.py`.
+    let why: String?
+    let reasons: [String]?
+    let concerns: [String]?
 
     var id: Int { posting_id }
 
@@ -31,6 +36,51 @@ struct QueueItem: Codable, Identifiable, Hashable {
 struct QueueResponse: Codable {
     let queued: [QueueItem]?   // top matches not yet staged
     let queue: [QueueItem]?    // staged, ready to apply
+}
+
+/// One application the submit worker is handling, from `GET /apply/inflight`.
+struct InFlightRow: Codable, Identifiable, Hashable {
+    let id: Int                  // posting id
+    let label: String
+    let state: String            // human-readable ("waiting on your approval")
+    let awaiting: Bool           // true when it's the human's turn
+    let request_id: Int?
+    let status: String?          // pending | filling | preview | approved | submitting
+    let preview: FillPreview?
+}
+
+/// What the worker filled, and what it left for you.
+struct FillPreview: Codable, Hashable {
+    let filled: [FilledField]?
+    let skipped: [String]?
+    let screenshot_url: String?
+}
+
+struct FilledField: Codable, Hashable {
+    let label: String
+    let value: String
+}
+
+/// One stored fact about you, from `GET /apply/knowledge`.
+struct KnowledgeItem: Codable, Identifiable, Hashable {
+    let id: Int
+    let category: String
+    let label: String?
+    let text: String
+}
+
+/// How completely the assistant knows you — the lever on how much it can fill
+/// without asking.
+struct KnowledgeAudit: Codable, Hashable {
+    let identity_have: [String]
+    let identity_missing: [String]
+    let suggestions: [String]
+    let score: Double
+}
+
+struct KnowledgeResponse: Codable {
+    let items: [KnowledgeItem]
+    let audit: KnowledgeAudit
 }
 
 /// The field-matching rules, from `GET /apply/rules`.
