@@ -331,6 +331,33 @@ async def apply_remove(request: Request) -> dict:
     return {"ok": apply_queue.remove(uid, int(body["posting_id"]))}
 
 
+@app.post("/apply/device")
+async def apply_register_device(request: Request) -> dict:
+    """Register this phone for push notifications (new matches, approval ready)."""
+    from . import dashboard as dash
+    from . import push
+
+    _require_apply_token(request)
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    ok = push.register_device(uid, body.get("token") or "",
+                              body.get("platform") or "ios")
+    # `configured` tells the app whether pushes will actually arrive, so it can say
+    # so in Settings instead of silently registering into a void.
+    return {"ok": ok, "configured": push.configured()}
+
+
+@app.post("/apply/device/remove")
+async def apply_forget_device(request: Request) -> dict:
+    from . import dashboard as dash
+    from . import push
+
+    _require_apply_token(request)
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    return {"ok": push.forget_device(uid, body.get("token") or "")}
+
+
 @app.get("/apply/rules")
 def apply_rules(request: Request) -> dict:
     """The field-matching rules, so the extension and the iOS browser stop carrying
@@ -508,13 +535,17 @@ def _notify_preview_ready(request_id: int, preview: dict) -> None:
     import logging
 
     try:
-        from . import engine, fill_requests, reminders
+        from . import engine, fill_requests, push, reminders
 
         req = fill_requests.get(request_id)
         if req is None:
             return
-        reminders.get_sender().send(
-            req["user_id"], engine.fill_preview_message(req["user_id"], req, preview))
+        uid = req["user_id"]
+        reminders.get_sender().send(uid, engine.fill_preview_message(uid, req, preview))
+        # …and a push, so the phone surfaces it without Slack being open.
+        push.notify_preview_ready(
+            uid, engine.fill_label(uid, req),
+            len(preview.get("filled") or []), len(preview.get("skipped") or []))
     except Exception:  # noqa: BLE001
         logging.getLogger("apply").exception(
             "preview notification failed; the /apply page still has it")

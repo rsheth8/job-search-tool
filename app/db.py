@@ -323,6 +323,18 @@ CREATE TABLE IF NOT EXISTS user_knowledge (
 );
 CREATE INDEX IF NOT EXISTS idx_user_knowledge_user ON user_knowledge(user_id, category);
 
+-- APNs device tokens for the iPhone app. iOS hands the app the same token on every
+-- launch, so registration upserts rather than duplicating; a token APNs reports as
+-- dead (app deleted / wrong environment) is dropped on the spot.
+CREATE TABLE IF NOT EXISTS device_tokens (
+    user_id    TEXT NOT NULL,
+    token      TEXT NOT NULL,
+    platform   TEXT NOT NULL DEFAULT 'ios',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, token)
+);
+
 CREATE TABLE IF NOT EXISTS apply_queue (
     user_id      TEXT NOT NULL,
     posting_id   INTEGER NOT NULL REFERENCES job_postings(id) ON DELETE CASCADE,

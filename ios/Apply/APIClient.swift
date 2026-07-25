@@ -80,6 +80,18 @@ struct APIClient {
                               body: ["user": config.user, "id": id])
     }
 
+    /// Register this device for push. Returns whether the *server* has APNs
+    /// credentials — false means notifications won't actually arrive yet, which the
+    /// app says out loud rather than pretending it worked.
+    @discardableResult
+    func registerDevice(token: String) async throws -> Bool {
+        struct Response: Codable { let ok: Bool; let configured: Bool }
+        let data = try await request("POST", "/apply/device",
+                                     body: ["user": config.user, "token": token,
+                                            "platform": "ios"])
+        return try JSONDecoder().decode(Response.self, from: data).configured
+    }
+
     /// The field-matching rules. Cached on disk so a launch with no connection still
     /// autofills with the last known-good set rather than the older bundled copy.
     func fetchRules() async throws -> RulesPayload {

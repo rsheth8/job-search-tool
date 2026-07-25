@@ -1079,7 +1079,7 @@ def _do_snooze_job(user_id: str, p: ParsedMessage) -> str:
 def fill_preview_message(user_id: str, req: dict, preview: dict) -> str:
     """The Slack message that puts the approval gate on the phone: what got filled,
     what was left for the human, and the two words that decide it."""
-    label = _fill_label(user_id, req)
+    label = fill_label(user_id, req)
     filled = preview.get("filled") or []
     skipped = [s for s in (preview.get("skipped") or []) if s]
 
@@ -1100,7 +1100,7 @@ def fill_preview_message(user_id: str, req: dict, preview: dict) -> str:
     return "\n".join(lines)
 
 
-def _fill_label(user_id: str, req: dict) -> str:
+def fill_label(user_id: str, req: dict) -> str:
     """"#12 (Backend Engineer @ Acme)" for a fill request, falling back to the
     posting id when the posting has since been cleaned up."""
     posting = jobstore.get_posting(user_id, req["posting_id"])
@@ -1139,7 +1139,7 @@ def _do_approve_fill(user_id: str, p: ParsedMessage) -> str:
             return ("Nothing is waiting for your approval right now. Queue a match "
                     "('queue 3'), then tap 🤖 Auto-fill & submit to start one.")
 
-    label = _fill_label(user_id, req)
+    label = fill_label(user_id, req)
     if action == "cancel":
         if not fill_requests.cancel(user_id, req["id"]):
             return f"{label} is already {req['status']} — nothing to cancel."
@@ -1175,7 +1175,7 @@ def _do_apply_status(user_id: str) -> str:
     lines = []
     for req in active:
         state = _FILL_STATE_LABELS.get(req["status"], req["status"])
-        lines.append(f"• {_fill_label(user_id, req)} — {state}")
+        lines.append(f"• {fill_label(user_id, req)} — {state}")
 
     staged = [it for it in apply_queue.list_queue(user_id)
               if it.get("status") != "submitted"]

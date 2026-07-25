@@ -262,6 +262,20 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
             logger.exception("digest send failed for %s", user_id)
     # silent: queued rows only, no outbound message
 
+    # A push alongside the chat message, so the phone surfaces new matches without
+    # Slack open. Fail-open and no-op until push is configured — a notification
+    # problem must never cost us the tick's work.
+    if notify_batch and mode != "silent":
+        try:
+            from . import push
+
+            best = max(notify_batch, key=lambda m: m[1])[0]
+            push.notify_new_matches(
+                user_id, len(notify_batch),
+                f"{best.title or 'Role'} @ {best.company or best.source}")
+        except Exception:  # noqa: BLE001
+            logger.exception("push notify failed for %s", user_id)
+
     if messages_sent:
         logger.info(
             "discovery: %d message(s), %d match(es) for %s (mode=%s)",
