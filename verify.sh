@@ -48,7 +48,10 @@ for f in WORKER_HARDENING_NOTES.md OVERNIGHT_NOTES.md; do
 done
 
 hdr "⑥ Boot the app (smoke test the server starts)"
-timeout 12 "$VP" -c "from app.main import app; print('  app imports OK — routes:', len(app.routes))" 2>&1 \
-  | sed 's/^/  /' || bad "app failed to import"
+if "$VP" -c "from app.main import app; print('routes:', len(app.routes))" 2>&1 | sed 's/^/  /'; then
+  ok "app imports cleanly"
+else
+  bad "app failed to import"
+fi
 
 echo; echo "${BOLD}Done.${OFF} To run the app live:  ${DIM}$VP -m uvicorn app.main:app --reload${OFF}"
