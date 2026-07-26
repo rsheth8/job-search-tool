@@ -75,16 +75,21 @@ struct QueueView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(Theme.backgroundColor)
     }
 
     private func row(_ item: QueueItem) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(item.title ?? "Role").font(.headline)
+            Text(item.title ?? "Role").font(.headline).foregroundStyle(Theme.inkColor)
             HStack(spacing: 6) {
-                Text(item.company ?? "—").foregroundStyle(.secondary)
+                Text(item.company ?? "—").foregroundStyle(Theme.dimColor)
                 if let s = item.source { Text("· \(s)").font(.caption).foregroundStyle(.tertiary) }
                 Spacer()
-                if let sc = item.score { Text("\(Int(sc * 100))%").font(.caption).foregroundStyle(.secondary) }
+                if let sc = item.score {
+                    Text("\(Int(sc * 100))%")
+                        .font(.caption.weight(.bold)).foregroundStyle(Theme.accentColor)
+                }
             }.font(.subheadline)
 
             // Why this one surfaced. A percentage on its own can't be argued with.
@@ -95,7 +100,7 @@ struct QueueView: View {
             }
             ForEach(item.concerns ?? [], id: \.self) { concern in
                 Label(concern, systemImage: "exclamationmark.triangle")
-                    .font(.caption2).foregroundStyle(.orange).lineLimit(1)
+                    .font(.caption2).foregroundStyle(Theme.warnColor).lineLimit(1)
             }
             fillBadge(item)
         }.padding(.vertical, 2)
@@ -104,7 +109,7 @@ struct QueueView: View {
     @ViewBuilder private func fillBadge(_ item: QueueItem) -> some View {
         if item.isFirstParty {
             Label("Auto-fill ready", systemImage: "bolt.fill")
-                .font(.caption2.weight(.medium)).foregroundStyle(.green)
+                .font(.caption2.weight(.medium)).foregroundStyle(Theme.okColor)
         } else {
             Label("Aggregator · may need login", systemImage: "person.badge.key")
                 .font(.caption2.weight(.medium)).foregroundStyle(.orange)

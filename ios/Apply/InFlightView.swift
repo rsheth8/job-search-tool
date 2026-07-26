@@ -29,7 +29,10 @@ struct InFlightView: View {
                     ContentUnavailableView("Nothing in flight", systemImage: "checkmark.circle",
                         description: Text("Prepare a match, then tap Auto-fill & submit to start one."))
                 } else {
-                    List(rows) { row in card(row) }.listStyle(.insetGrouped)
+                    List(rows) { row in card(row) }
+                        .listStyle(.insetGrouped)
+                        .scrollContentBackground(.hidden)
+                        .background(Theme.backgroundColor)
                 }
             }
             .navigationTitle("In flight")
@@ -43,7 +46,7 @@ struct InFlightView: View {
             Text(row.label).font(.headline)
             Label(row.state, systemImage: row.awaiting ? "hand.raised.fill" : "clock")
                 .font(.subheadline)
-                .foregroundStyle(row.awaiting ? .orange : .secondary)
+                .foregroundStyle(row.awaiting ? Theme.warnColor : Theme.dimColor)
 
             if let preview = row.preview {
                 if let filled = preview.filled, !filled.isEmpty {
@@ -56,7 +59,7 @@ struct InFlightView: View {
                 }
                 if let skipped = preview.skipped, !skipped.isEmpty {
                     Text("Left for you: \(skipped.prefix(5).joined(separator: ", "))")
-                        .font(.caption2).foregroundStyle(.orange).lineLimit(2)
+                        .font(.caption2).foregroundStyle(Theme.warnColor).lineLimit(2)
                 }
                 // The screenshot is a JPEG data: URL, so you approve against the real
                 // form rather than a list of field names.

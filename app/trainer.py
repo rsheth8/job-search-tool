@@ -16,7 +16,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-from . import eligibility, matcher, profile
+from . import eligibility, matcher, profile, theme
 from .config import get_settings
 from .db import connect
 from .jobsources import JobPosting
@@ -205,27 +205,31 @@ def record_label(user_id: str, item: dict, label: str) -> bool:
 def render_page(user_id: str) -> str:
     """Self-contained swipe UI (no external deps). Talks to /train/* endpoints."""
     safe_user = user_id.replace("\\", "\\\\").replace('"', '\\"')
-    return _PAGE.replace("__USER__", safe_user)
+    return (_PAGE
+            .replace("__HEAD__", theme.head("Train your matcher"))
+            .replace("__TOGGLE__",
+                     theme.toggle_html() + f"<script>{theme.toggle_js()}</script>")
+            .replace("__USER__", safe_user))
 
 
 _PAGE = r"""<!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Train your matcher</title>
+<head>__HEAD__
 <style>
+  /* Page-local aliases. The trainer was written against its own colour names before
+     the shared tokens existed; mapping them here reskins the page without rewriting
+     every rule, and keeps its semantic pairs (green/greenbg) intact. */
   :root{
-    color-scheme: dark;
-    --bg:#0b0d12; --card:#171a22; --card2:#1f2330; --line:#2a2f3c;
-    --ink:#eef1f6; --muted:#9aa4b4; --dim:#6b7383;
-    --blue:#6ea8ff; --green:#39d98a; --greenbg:#0f2b1d; --red:#ff6b6b; --redbg:#2c1417;
-    --amber:#ffce6b;
+    --card:var(--panel); --card2:var(--panel-2); --muted:var(--dim);
+    --blue:var(--accent);
+    --green:var(--ok);  --greenbg:var(--ok-soft);
+    --red:var(--bad);   --redbg:var(--bad-soft);
+    --amber:var(--warn);
   }
   *{ box-sizing:border-box; }
   html,body{ height:100%; }
   body{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,sans-serif;
-        background:radial-gradient(1200px 600px at 50% -10%, #141826 0%, var(--bg) 60%);
+        background:var(--bg);
         color:var(--ink); display:flex; flex-direction:column; align-items:center;
         min-height:100%; padding:20px 16px 28px; }
   .head{ width:min(620px,96vw); }
@@ -234,18 +238,18 @@ _PAGE = r"""<!doctype html>
   h1 span{ color:var(--muted); font-weight:500; }
   /* progress */
   .prog{ width:min(620px,96vw); margin:16px 0 18px; }
-  .progbar{ height:8px; border-radius:999px; background:#20242f; overflow:hidden; border:1px solid var(--line); }
+  .progbar{ height:8px; border-radius:999px; background:var(--panel-2); overflow:hidden; border:1px solid var(--line); }
   .progfill{ height:100%; width:0%; border-radius:999px;
              background:linear-gradient(90deg,var(--blue),var(--green)); transition:width .35s ease; }
   .progmeta{ display:flex; justify-content:space-between; align-items:center; margin-top:8px;
              font-size:13px; color:var(--muted); }
-  .pill{ padding:3px 10px; border-radius:999px; background:#20242f; border:1px solid var(--line); font-weight:600; }
-  .pill.ok{ background:var(--greenbg); border-color:#1f7a44; color:var(--green); }
-  .modes{ display:inline-flex; gap:4px; background:#171a22; border:1px solid var(--line);
+  .pill{ padding:3px 10px; border-radius:999px; background:var(--panel-2); border:1px solid var(--line); font-weight:600; }
+  .pill.ok{ background:var(--greenbg); border-color:transparent; color:var(--green); }
+  .modes{ display:inline-flex; gap:4px; background:var(--panel); border:1px solid var(--line);
           border-radius:10px; padding:3px; margin-top:12px; }
   .mode{ flex:none; font-size:12.5px; font-weight:600; padding:6px 12px; border-radius:7px;
          border:none; background:transparent; color:var(--muted); cursor:pointer; }
-  .mode.active{ background:#26304a; color:var(--ink); }
+  .mode.active{ background:var(--accent-soft); color:var(--ink); }
   .modehint{ font-size:12px; color:var(--dim); margin:6px 0 0; }
   /* deck */
   #stack{ position:relative; width:min(620px,96vw); height:min(580px,70vh); }
@@ -257,28 +261,28 @@ _PAGE = r"""<!doctype html>
   .card.behind{ z-index:1; transform:scale(.94) translateY(16px); opacity:.55; filter:saturate(.7); }
   .crow{ display:flex; justify-content:space-between; align-items:center; gap:10px; }
   .src{ font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--dim);
-        background:#20242f; border:1px solid var(--line); border-radius:8px; padding:3px 9px; }
+        background:var(--panel-2); border:1px solid var(--line); border-radius:8px; padding:3px 9px; }
   .match{ font-size:13px; font-weight:800; border-radius:10px; padding:5px 11px; }
   .match.hi{ background:var(--greenbg); color:var(--green); }
-  .match.mid{ background:#2a2410; color:var(--amber); }
-  .match.lo{ background:#20242f; color:var(--muted); }
+  .match.mid{ background:var(--warn-soft); color:var(--amber); }
+  .match.lo{ background:var(--panel-2); color:var(--muted); }
   .title{ font-size:27px; font-weight:800; line-height:1.15; margin:16px 0 6px; }
   .company{ font-size:16px; color:var(--ink); font-weight:600; }
   .loc{ font-size:14px; color:var(--muted); margin-top:3px; }
   .chips{ display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
-  .chip{ font-size:12.5px; color:var(--muted); background:#20242f; border:1px solid var(--line);
+  .chip{ font-size:12.5px; color:var(--muted); background:var(--panel-2); border:1px solid var(--line);
          border-radius:9px; padding:6px 11px; }
   .chip b{ color:var(--ink); font-weight:600; }
   .chip .k{ color:var(--dim); font-weight:700; font-size:10.5px; letter-spacing:.06em;
             text-transform:uppercase; margin-right:6px; }
   .fit{ display:inline-flex; align-items:center; gap:8px; margin:14px 0 0; align-self:flex-start;
         font-size:14px; font-weight:600; color:var(--green);
-        background:var(--greenbg); border:1px solid #1f7a44; border-radius:999px; padding:7px 14px; }
+        background:var(--greenbg); border:1px solid transparent; border-radius:999px; padding:7px 14px; }
   .about{ margin-top:14px; font-size:13.5px; line-height:1.5; color:var(--muted); }
   .about .k{ display:block; font-size:10.5px; font-weight:800; letter-spacing:.1em;
              text-transform:uppercase; color:var(--dim); margin-bottom:3px; }
   .tldr{ margin-top:14px; font-size:16px; line-height:1.5; color:var(--ink);
-         background:linear-gradient(180deg,#13243f,#101b30); border:1px solid #244674;
+         background:var(--accent-soft); border:1px solid var(--line);
          border-radius:14px; padding:14px 16px; }
   .tldr .lbl{ display:block; font-size:11px; font-weight:800; letter-spacing:.1em; color:var(--blue); margin-bottom:4px; }
   .content{ flex:1; display:flex; flex-direction:column; min-height:0; }
@@ -301,17 +305,22 @@ _PAGE = r"""<!doctype html>
   /* buttons */
   #buttons{ display:flex; gap:16px; width:min(620px,96vw); margin-top:20px; }
   button{ flex:1; font-size:16px; font-weight:700; padding:16px; border-radius:16px;
-          border:1px solid var(--line); cursor:pointer; background:var(--card2); color:var(--ink);
+          cursor:pointer; color:var(--ink);
           transition:transform .08s, background .15s, border-color .15s; }
   button:active{ transform:scale(.97); }
-  #pass:hover{ background:var(--redbg); border-color:var(--red); color:#ffb3b3; }
-  #like:hover{ background:var(--greenbg); border-color:var(--green); color:#9bedc4; }
+  /* These two are the whole page — carry their meaning at rest, not only on hover.
+     A neutral grey resting state disappeared against the light background and left
+     the primary action of the screen looking disabled. */
+  #pass{ background:var(--bad-soft); border:1px solid var(--bad); color:var(--bad); }
+  #like{ background:var(--ok-soft); border:1px solid var(--ok); color:var(--ok); }
+  #pass:hover{ background:var(--bad); color:var(--panel); }
+  #like:hover{ background:var(--ok); color:var(--panel); }
   .hint{ font-size:12.5px; color:var(--dim); margin-top:16px; text-align:center; }
-  kbd{ background:#20242f; border:1px solid var(--line); border-bottom-width:2px; border-radius:6px;
+  kbd{ background:var(--panel-2); border:1px solid var(--line); border-bottom-width:2px; border-radius:6px;
        padding:1px 7px; font-family:inherit; font-size:12px; color:var(--muted); }
 </style>
 </head>
-<body>
+<body>__TOGGLE__
   <div class="head">
     <div class="kicker">Train your matcher</div>
     <h1>Would you apply? <span>&middot; __USER__</span></h1>
@@ -351,7 +360,7 @@ function renderProgress(st){
   const have = Math.min(5,st.likes||0) + Math.min(5,st.passes||0);
   $('progfill').style.width = (st.model_trained ? 100 : Math.round(have/10*100)) + '%';
   $('counts').innerHTML = `&#128077; ${st.likes||0} would-apply &nbsp;&middot;&nbsp; &#128078; ${st.passes||0} pass`
-    + (st.nudge_passes ? ` &nbsp;&middot;&nbsp; <span style="color:#f59e0b">add a few passes to sharpen your matcher</span>` : '');
+    + (st.nudge_passes ? ` &nbsp;&middot;&nbsp; <span style="color:var(--warn)">add a few passes to sharpen your matcher</span>` : '');
   const s = $('status');
   if (st.model_trained){ s.className='pill ok'; s.innerHTML = `&#9989; Trained on ${st.model_n_labels}`; }
   else { s.className='pill'; s.innerHTML = `${need} more to train`; }

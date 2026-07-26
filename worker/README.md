@@ -20,6 +20,41 @@ extension does, and it **never submits without your explicit approval**.
   to `claude-haiku-4-5` for cost). It **never submits**, **never fills EEO fields**,
   and calls `blocked` on a login/captcha (→ handed off to the extension).
 
+## What it costs, and what stops it
+
+Every run logs its own bill:
+
+```
+[agent] done: status=ready model=claude-opus-4-8 tokens=48,213 of 150,000 budget
+```
+
+The controls, in order of how much they actually matter:
+
+| Knob | Default | Effect |
+|---|---|---|
+| `AGENT_MODEL` | `claude-opus-4-8` | The big one. `claude-haiku-4-5` is ~5x cheaper per token. |
+| `AGENT_TOKEN_BUDGET` | 150000 | Hard ceiling for **one form**. On hitting it the agent stops and hands you what it filled, with `status: incomplete` and a reason saying so. ~$0.50–1.00/form on Opus, ~a fifth on Haiku. |
+| `AGENT_KEEP_STEPS` | 6 | Conversation window. Lower = cheaper on long multi-step forms. |
+| `AGENT_MAX_STEPS` | 40 | Give-up point, in actions rather than tokens. |
+| `AGENT_RATE_LIMIT_PER_MIN` | 30 | Pacing only; rarely binds, since each step waits on the browser. |
+
+### Why there's no daily cap
+
+The rest of the project caps paid work per UTC day (`app/jobstore.py`, backed by
+tables like `job_api_calls`). That pattern can't be reused here: this worker is a
+**scale-to-zero app with no volume and no database**, so a machine typically starts,
+handles one form, and exits. An in-process day counter would reset on every job and
+cap nothing, while looking like it did.
+
+The per-form token budget is the control that actually survives restarts, which is why
+it's the one that's implemented.
+
+A real daily cap has to be server-side, and the shape is straightforward if you want
+it: have the worker report `tokens` on `POST /worker/result`, sum today's usage in the
+main app's DB, and have `POST /worker/claim` hand out nothing once the day's budget is
+spent. That puts the counter next to the existing caps and next to the DB that already
+persists — roughly a migration, two endpoint edits, and a config value.
+
 ## How it fits
 
 ```

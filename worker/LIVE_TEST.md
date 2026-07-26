@@ -34,14 +34,28 @@ cd ~/Documents/job-search-tool
 .venv/bin/python -m playwright install chromium
 ```
 
-Point the worker at **prod** (so it claims the same fill requests your phone creates)
-and run it **headful** so you can watch:
+Put the run settings in **`.env`** (gitignored) rather than typing secrets on the
+command line each time:
 
 ```bash
-BASE_URL=https://job-search-tool.fly.dev \
-APPLY_API_TOKEN=<the same APPLY_API_TOKEN set as a Fly secret> \
-WORKER_HEADLESS=false \
-  .venv/bin/python -m worker.run --once
+BASE_URL=https://job-search-tool.fly.dev
+APPLY_API_TOKEN=<the same APPLY_API_TOKEN set as a Fly secret>
+WORKER_HEADLESS=false      # watch it fill in a real window
+WORKER_AGENT=true          # see "Which engine" below
+```
+
+> ⚠️ **`.env`, never `.env.example`.** `.env.example` is tracked by git — a real key
+> pasted there is one `git add` away from being committed. `.env` is gitignored and is
+> the only place a live token belongs. Every worker/agent variable is documented in
+> `.env.example` with empty values, so there's no reason to edit it to run a test.
+
+Then point the worker at **prod**, so it claims the same fill requests your phone
+creates:
+
+```bash
+cd ~/Documents/job-search-tool
+set -a; . ./.env; set +a
+.venv/bin/python -m worker.run --once
 ```
 
 - `--once` = claim one job, fill it, wait for your approve/cancel, exit. Re-run for
@@ -50,6 +64,35 @@ WORKER_HEADLESS=false \
 - Resume upload needs the base `.tex` files on the volume (`/data/resumes/swe.tex` +
   `aiml.tex`) — see handoff §5.4. Without them the resume just shows as skipped; the
   rest still works.
+
+### Which engine — and which one you're testing
+
+| | `WORKER_AGENT=false` (default) | `WORKER_AGENT=true` |
+|---|---|---|
+| Fills with | `fieldmatch` rules only | Rules first, model only for what's left |
+| Costs money | No | Yes — ~1–2 Claude calls on a clean one-page form |
+| Handles multi-step / "Apply" reveal / odd labels | Poorly | That's the point of it |
+| A miss is fixed by | Adding a regex to `FIELD_RULES` | Usually nothing — but check it didn't just *guess* |
+
+**Test both, in that order.** Run the deterministic engine first: everything it fills
+is a field the agent then never has to spend a call on, and every gap you close in
+`fieldmatch.py` improves the extension too. Then re-run the same form with the agent
+on and see what it picks up.
+
+Both engines share the same safety gate, so "Cancel instead of Approve" holds for
+both. Agent-specific things to watch:
+
+- **It must never submit.** It should end on `ready_for_review`. If you see it click a
+  Submit button, stop the run and treat that as a bug in `agent.py`, not a tuning issue.
+- **Check what it wrote, not just that it filled.** The rules engine can only insert
+  values you gave it; the agent writes prose. Read the free-text answers in the
+  preview before approving — that's the failure mode the fixtures can't catch.
+- **Watch the per-step log** (`[agent] step N: tool(args) -> result`). `auto-filled N
+  field(s) (no LLM)` lines are the free pass working; a run that's all model calls
+  means `fieldmatch` matched nothing and is worth investigating.
+- **`status: incomplete` in the preview now says why** — out of steps, or the model
+  stopped without acting (with its `stop_reason`). A `max_tokens` stop means
+  `AGENT_MAX_TOKENS` is too low for that form, not that the form is unfillable.
 
 > Local-only variant: run `uvicorn app.main:app` and set `BASE_URL=http://localhost:8000`,
 > but then you must create the fill request locally (open `/apply?user=<you>` on the

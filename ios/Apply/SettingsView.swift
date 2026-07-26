@@ -29,7 +29,7 @@ struct SettingsView: View {
                             Label("The server has no APNs key yet, so nothing will "
                                   + "arrive until that's configured.",
                                   systemImage: "exclamationmark.triangle")
-                                .font(.caption).foregroundStyle(.orange)
+                                .font(.caption).foregroundStyle(Theme.warnColor)
                         }
                     } else {
                         // Asked on demand, not at launch: a prompt before the app has
@@ -48,9 +48,17 @@ struct SettingsView: View {
                     }
                 }
                 Section {
-                    Text("Tap a match → it opens in an in-app browser. Hit **Autofill** to "
-                         + "fill your details and answers, attach your resume, solve any "
-                         + "captcha yourself, then submit on the site. Tap **I applied** to log it.")
+                    // One literal, joined with trailing backslashes rather than `+`.
+                    // Text only parses markdown from a *literal* (LocalizedStringKey);
+                    // concatenating with `+` produces a runtime String, which selects
+                    // the plain initializer and renders the asterisks verbatim —
+                    // "Hit **Autofill**" was showing on screen exactly like that.
+                    Text("""
+                         Tap a match → it opens in an in-app browser. Hit **Autofill** \
+                         to fill your details and answers, attach your resume, solve \
+                         any captcha yourself, then submit on the site. \
+                         Tap **I applied** to log it.
+                         """)
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

@@ -113,6 +113,24 @@ _EXTRACT_JS = r"""
       const by = els[0].getAttribute('aria-labelledby');
       if (by) by.split(/\s+/).forEach(id=>{const n=document.getElementById(id); if(n) glabel += ' ' + n.textContent;});
     }
+    // Ashby wraps the group in a <fieldset> but ships no <legend> and no aria-
+    // labelledby: the question is simply the first <label> in the fieldset that
+    // isn't one of the options' own labels. Without this the fallback below used
+    // the input's `name`, which on Ashby is a UUID — so a live work-authorisation
+    // question logged "no identity key" and was skipped. A UUID can never match a
+    // rule, so the field was unfillable by construction, not by a matching failure.
+    if (!clean(glabel)) {
+      const scope = fs || els[0].parentElement;
+      if (scope) {
+        const optionLabels = new Set(els.map(el => el.closest('label')).filter(Boolean));
+        for (const cand of scope.querySelectorAll('legend,label')) {
+          if (optionLabels.has(cand)) continue;                 // an option, not the question
+          if (cand.querySelector('input[type="radio"]')) continue;
+          const t = clean(cand.textContent || '');
+          if (t.length >= 8) { glabel = t; break; }
+        }
+      }
+    }
     if (!clean(glabel)) glabel = name;
     const radios = els.map(el => ({ id: tagit(el), text: optLabel(el) }));
     out.push({ id: null, label: clean(glabel), hint: name, tag: 'radiogroup',

@@ -22,7 +22,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from . import ats, jobstore, outreach, profile as profile_mod
+from . import ats, jobstore, outreach, profile as profile_mod, theme
 from .db import connect
 
 logger = logging.getLogger("apply_queue")
@@ -315,44 +315,39 @@ def _ensure_resume(user_id: str, posting_id: int, company: str, title: str,
 # Web review surface
 # ---------------------------------------------------------------------------
 
-_PAGE = """<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Apply queue</title>
+_PAGE = """<!doctype html><html lang="en"><head>__HEAD__
 <style>
-  :root{ --bg:#0f1117; --panel:#171a22; --line:#262b38; --ink:#e8ecf5;
-         --dim:#9aa3b5; --acc:#6ea8fe; --ok:#16a34a; }
-  *{ box-sizing:border-box; }
-  body{ margin:0; background:var(--bg); color:var(--ink);
-        font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; }
+  /* Page-local alias: this page was written against --acc before the shared tokens
+     existed. Mapping it here rather than renaming every use keeps the reskin from
+     silently changing a colour it didn't mean to. */
+  :root{ --acc:var(--accent); }
   .wrap{ max-width:640px; margin:0 auto; padding:20px 14px 80px; }
   h1{ font-size:20px; margin:0 0 2px; } .sub{ color:var(--dim); font-size:13px; margin:0 0 18px; }
-  h2{ font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:var(--dim);
-      margin:24px 0 10px; }
-  .card{ background:var(--panel); border:1px solid var(--line); border-radius:14px;
-         padding:14px 15px; margin:0 0 11px; }
+  h2{ margin:24px 0 10px; }
+  .card{ padding:14px 15px; margin:0 0 11px; }
   .row{ display:flex; justify-content:space-between; gap:10px; align-items:baseline; }
   .title{ font-weight:600; font-size:16px; } .co{ color:var(--dim); font-size:13px; }
   .score{ color:var(--acc); font-size:12px; font-weight:700; white-space:nowrap; }
-  .pill{ font-size:10px; padding:2px 8px; border-radius:999px; border:1px solid var(--line);
-         color:var(--dim); text-transform:uppercase; letter-spacing:.4px; vertical-align:middle; }
-  .pill.ready{ color:#fbbf24; border-color:#5b4a1f; } .pill.submitted{ color:var(--ok); border-color:#1f4a2f; }
+  .pill{ font-size:10px; padding:2px 8px; text-transform:uppercase; letter-spacing:.4px;
+         vertical-align:middle; }
+  .pill.ready{ background:var(--warn-soft); border-color:transparent; color:var(--warn); }
+  .pill.submitted{ background:var(--ok-soft); border-color:transparent; color:var(--ok); }
   .actions{ margin-top:11px; display:flex; flex-wrap:wrap; gap:8px; }
-  button,a.btn{ font:inherit; font-size:14px; font-weight:600; cursor:pointer; border-radius:9px;
-          border:1px solid var(--line); background:#222838; color:var(--ink);
-          padding:9px 13px; text-decoration:none; display:inline-block; }
-  button.primary,a.primary{ background:#26406b; border-color:#34507f; }
-  button.ghost{ background:transparent; color:var(--dim); }
-  a.submit{ display:block; text-align:center; background:#1f6f43; border-color:#2f7d52;
-            color:#fff; font-size:15px; padding:13px; margin-top:14px; border-radius:11px; }
+  button,a.btn{ font-size:14px; padding:9px 13px; }
+  /* The one full-width commit action on the page. It reads as "submitted" rather
+     than "primary" so it can't be mistaken for the reversible buttons above it. */
+  a.submit{ display:block; text-align:center; background:var(--ok); border:1px solid var(--ok);
+            color:var(--panel); font-size:15px; padding:13px; margin-top:14px;
+            border-radius:11px; font-weight:600; text-decoration:none; }
   .pkg{ margin-top:12px; border-top:1px solid var(--line); padding-top:12px; display:none; }
   .pkg.show{ display:block; }
   .pkg h4{ margin:14px 0 7px; font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.4px; }
   .pkg h4:first-child{ margin-top:0; }
   .ident{ display:flex; flex-wrap:wrap; gap:6px; }
-  .chip{ background:#10131b; border:1px solid var(--line); border-radius:8px;
+  .chip{ background:var(--panel-2); border:1px solid var(--line); border-radius:8px;
          padding:5px 9px; font-size:12.5px; }
   .chip b{ color:var(--dim); font-weight:600; }
-  textarea.ans{ width:100%; min-height:130px; background:#10131b; color:var(--ink);
+  textarea.ans{ width:100%; min-height:130px; background:var(--panel-2); color:var(--ink);
                 border:1px solid var(--line); border-radius:9px; padding:11px; font:inherit;
                 font-size:14px; resize:vertical; }
   .abtns{ margin-top:8px; display:flex; gap:8px; }
@@ -363,7 +358,7 @@ _PAGE = """<!doctype html><html><head><meta charset="utf-8">
   .reqbar{ display:flex; justify-content:space-between; align-items:center; gap:8px;
            font-size:13px; color:var(--ink); margin-top:8px; }
   a.submit{ cursor:pointer; }
-</style></head><body><div class="wrap">
+</style></head><body>__TOGGLE__<div class="wrap">
   <h1>Apply queue <span class="co">· __USER__</span></h1>
   <p class="sub">Each job is pre-assembled — your details, a drafted answer, and a
     tailored resume. Review, tweak, then open &amp; submit. Nothing is ever
@@ -534,4 +529,7 @@ load();
 
 
 def render_page(user_id: str) -> str:
-    return _PAGE.replace("__USER__", user_id)
+    return (_PAGE
+            .replace("__HEAD__", theme.head("Apply queue"))
+            .replace("__TOGGLE__", theme.toggle_html() + f"<script>{theme.toggle_js()}</script>")
+            .replace("__USER__", user_id))

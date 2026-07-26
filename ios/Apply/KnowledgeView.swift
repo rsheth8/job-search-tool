@@ -50,7 +50,7 @@ struct KnowledgeView: View {
                         Text("Your details")
                         Spacer()
                         Text("\(Int(audit.score * 100))% complete")
-                            .foregroundStyle(audit.score < 0.7 ? .orange : .secondary)
+                            .foregroundStyle(audit.score < 0.7 ? Theme.warnColor : Theme.okColor)
                     }
                     if !audit.identity_missing.isEmpty {
                         Text("Missing: " + audit.identity_missing.joined(separator: ", "))

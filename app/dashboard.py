@@ -15,7 +15,7 @@ from html import escape
 
 from . import deadlines as deadlines_mod
 from . import jobstore, profile
-from . import reminders, scoring, stats, store
+from . import reminders, scoring, stats, store, theme
 from .config import get_settings
 from .db import connect
 from .intents import CANONICAL_STATUSES
@@ -89,10 +89,9 @@ def render(user_id: str | None = None, *, now: datetime | None = None) -> str:
     recruiters = _all_recruiters(user_id)
 
     return (
-        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
-        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>Job Search Dashboard</title>"
-        f"<style>{_CSS}</style></head><body>"
+        "<!doctype html><html lang='en'><head>"
+        f"{theme.head('Job Search Dashboard', _CSS)}</head><body>"
+        f"{theme.toggle_html()}"
         f"<header><div class='wrap'><h1>📈 Job Search</h1>"
         f"{_user_switch(user_id)}</div></header>"
         "<main>"
@@ -108,7 +107,7 @@ def render(user_id: str | None = None, *, now: datetime | None = None) -> str:
         f"{_recruiters_section(recruiters)}"
         "</main>"
         f"<footer>Updated {now.strftime('%Y-%m-%d %H:%M UTC')}</footer>"
-        f"<script>{_JS}</script>"
+        f"<script>{theme.toggle_js()}{_JS}</script>"
         "</body></html>"
     )
 
@@ -384,51 +383,46 @@ def _recruiters_section(recruiters: list) -> str:
     return f"<section><h2>🤝 Recruiters</h2><table>{''.join(rows)}</table></section>"
 
 
+# Layout only — every colour comes from app/theme.py so this page follows the
+# light/dark toggle instead of being permanently light like it used to be.
 _CSS = (
-    "*{box-sizing:border-box}"
-    "body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;"
-    "margin:0;background:#f3f4f6;color:#111827;line-height:1.5}"
-    "header{background:linear-gradient(135deg,#1e293b,#0f766e);color:#fff;padding:18px 0}"
-    "header .wrap{max-width:920px;margin:0 auto;padding:0 16px;display:flex;"
-    "align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px}"
-    "header h1{margin:0;font-size:20px}"
-    "header a{color:#a7f3d0;text-decoration:none}"
-    "main{max-width:920px;margin:0 auto;padding:8px 16px 40px}"
+    "header{background:var(--panel);border-bottom:1px solid var(--line);padding:18px 0}"
+    "header .wrap{display:flex;align-items:baseline;justify-content:space-between;"
+    "flex-wrap:wrap;gap:8px}"
+    "header h1{margin:0}"
+    "header a{text-decoration:none}"
+    "main{max-width:960px;margin:0 auto;padding:8px 16px 40px}"
     "section{margin:22px 0}"
-    "h2{font-size:15px;letter-spacing:.02em;text-transform:uppercase;color:#374151;"
-    "border-bottom:1px solid #e5e7eb;padding-bottom:6px}"
-    "h3.sub{font-size:13px;color:#6b7280;margin:14px 0 6px;font-weight:600}"
-    ".badge{color:#fff;padding:2px 8px;border-radius:10px;font-size:12px;white-space:nowrap}"
+    "h2{border-bottom:1px solid var(--line);padding-bottom:6px}"
+    "h3.sub{font-size:13px;color:var(--dim);margin:14px 0 6px;font-weight:600}"
+    # The stage badge keeps its per-status colour (set inline from the funnel
+    # palette); white text is legible on all of them in both modes.
+    ".badge{color:#fff}"
     ".cards{display:flex;gap:12px;flex-wrap:wrap}"
-    ".card{background:#fff;border-radius:12px;padding:14px 18px;min-width:96px;"
-    "box-shadow:0 1px 3px rgba(0,0,0,.08);text-align:center;flex:1}"
-    ".card .num{font-size:26px;font-weight:700}"
-    ".card .lbl{font-size:12px;color:#6b7280}"
-    ".card.good .num{color:#16a34a}.card.warn .num{color:#d97706}"
-    ".funnel{display:flex;height:30px;border-radius:8px;overflow:hidden;"
-    "box-shadow:0 1px 3px rgba(0,0,0,.08)}"
+    ".card{padding:14px 18px;min-width:96px;text-align:center;flex:1}"
+    ".card .num{font-size:26px;font-weight:700;letter-spacing:-.02em}"
+    ".card .lbl{font-size:12px;color:var(--dim)}"
+    ".card.good .num{color:var(--ok)}.card.warn .num{color:var(--warn)}"
+    ".funnel{display:flex;height:30px;border-radius:var(--radius-sm);overflow:hidden;"
+    "box-shadow:var(--shadow)}"
     ".funnel .seg{display:flex;align-items:center;justify-content:center;color:#fff;"
     "font-size:12px;font-weight:600;min-width:2px}"
-    ".legend{margin-top:10px;display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:#4b5563}"
+    ".legend{margin-top:10px;display:flex;flex-wrap:wrap;gap:12px;font-size:12px;"
+    "color:var(--dim)}"
     ".legend .lg{display:inline-flex;align-items:center;gap:5px}"
     ".legend i{width:10px;height:10px;border-radius:3px;display:inline-block}"
-    "table{width:100%;background:#fff;border-radius:12px;border-collapse:collapse;"
-    "overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08)}"
-    "td{padding:9px 13px;border-bottom:1px solid #f3f4f6}"
-    "tr:last-child td{border-bottom:none}"
-    ".muted{color:#6b7280;font-size:13px}.warn{color:#d97706;font-weight:600}"
-    ".empty{background:#fff;border-radius:12px;padding:18px;color:#6b7280}"
-    "code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:13px}"
-    ".search{width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:10px;"
-    "margin-bottom:10px;font-size:14px}"
-    ".apps details{background:#fff;border-radius:10px;margin-bottom:6px;"
-    "box-shadow:0 1px 2px rgba(0,0,0,.06)}"
+    ".warn{color:var(--warn);font-weight:600}"
+    ".empty{background:var(--panel);border:1px solid var(--line);"
+    "border-radius:var(--radius);padding:18px;color:var(--dim)}"
+    ".search{margin-bottom:10px}"
+    ".apps details{background:var(--panel);border:1px solid var(--line);"
+    "border-radius:var(--radius-sm);margin-bottom:6px}"
     ".apps summary{padding:10px 13px;cursor:pointer;list-style:none;display:flex;"
     "align-items:center;gap:8px}"
     ".apps summary::-webkit-details-marker{display:none}"
     ".timeline{margin:0;padding:4px 16px 12px 40px;font-size:14px}"
     ".timeline li{margin:3px 0}.timeline .ic{margin-left:-22px;margin-right:8px}"
-    "footer{text-align:center;color:#9ca3af;font-size:12px;padding:24px}"
+    "footer{text-align:center;color:var(--dim);font-size:12px;padding:24px}"
 )
 
 _JS = (

@@ -25,11 +25,44 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 from app import fieldmatch
+from app.ratelimit import TokenBucket
 
 MODEL = os.environ.get("AGENT_MODEL", "claude-opus-4-8")
 MAX_STEPS = int(os.environ.get("AGENT_MAX_STEPS", "40"))
+# Adaptive thinking spends this budget too, so it has to cover *thinking + the tool
+# call*, not just the call. At 1024 a single deliberative turn can be truncated before
+# the tool_use block is emitted, which is indistinguishable from the model declining
+# to act — see the stop_reason handling in run_agent.
+MAX_TOKENS = int(os.environ.get("AGENT_MAX_TOKENS", "4096"))
+# How many (snapshot → action → result) triples to keep in the conversation. Older
+# snapshots describe pages the agent has already moved past; re-sending every one of
+# them makes token cost grow with the square of the step count.
+KEEP_STEPS = int(os.environ.get("AGENT_KEEP_STEPS", "6"))
+
+# --- Cost controls ---------------------------------------------------------
+# Every other paid path in this project is rate-limited and daily-capped (see the
+# TokenBucket use in app/matcher.py and app/insights.py, and the DB-backed daily caps
+# in app/jobstore.py). This one had neither, while running the priciest model in a
+# loop — so it was the only place that could actually run away.
+#
+# A *daily* cap deliberately does not live here. The worker is a scale-to-zero Fly app
+# with no volume and no database, so an in-process day counter resets every time a
+# machine wakes — which is once per job, making it worthless. The control that does
+# hold under restarts is a per-run budget: it bounds what a single application can
+# cost, however many times the process comes and goes. A real daily cap has to be
+# server-side; see worker/README.md.
+#
+# Budget covers input + output across every step of one form. At Opus 4.8 rates
+# (~$5/$25 per Mtok) 150k tokens is roughly $0.50–1.00 per application; on Haiku 4.5
+# it's about a fifth of that. Lower it if you'd rather the agent give up early and
+# hand you a half-filled form than spend more.
+TOKEN_BUDGET = int(os.environ.get("AGENT_TOKEN_BUDGET", "150000"))
+# Pacing only. Steps are naturally slow (each waits on the browser), so this exists to
+# catch a pathological fast loop, not to shape normal cost.
+RATE_PER_MIN = int(os.environ.get("AGENT_RATE_LIMIT_PER_MIN", "30"))
 
 # Page perception: every visible, interactive element across every frame, tagged
 # with a stable agent id (data-agent-id) so the agent can act on it afterward.
@@ -187,9 +220,14 @@ def act(page, frames, name: str, inp: dict, resume: dict | None,
     aid = inp.get("aid", "")
     label = label_of(aid) or ""
     # Belt-and-suspenders EEO guard: even if the agent is told not to, never let it
-    # fill a demographic field. fieldmatch.match_key returns None for those.
-    if name in ("fill", "choose") and label and fieldmatch.match_key(label) is None \
-            and _is_eeo(label):
+    # touch a demographic field.
+    # `click` is in the list because a gender option or a Yes/No built out of React
+    # buttons isn't a <select> — answering it through `click` rather than `choose`
+    # would otherwise walk straight past this check.
+    # Deliberately keyed on is_eeo() alone: match_key already returns None for every
+    # EEO label, so also requiring `match_key(...) is None` made the guard depend on
+    # the very function it exists to backstop.
+    if name in ("fill", "choose", "click") and label and _is_eeo(label):
         return "skipped: demographic/EEO field, left for the human", False, None
 
     fr = _frame_for(aid, frames)
@@ -285,6 +323,34 @@ def _needs_llm(e: dict) -> bool:
     return True
 
 
+def _pace(limiter: TokenBucket) -> None:
+    """Block until the rate limiter lets another call through.
+
+    The app's other callers treat a spent bucket as "skip the LLM, fall back to the
+    heuristic". There's no heuristic to fall back to mid-form — abandoning here would
+    leave a half-filled application — so this waits instead of giving up. The token
+    budget, not this, is what stops a run.
+
+    The bucket is per-run rather than module-level (which is how app/matcher.py does
+    it) because that one lives in a long-running server, whereas this process handles
+    one form and exits. A global here would just leak pacing state between forms."""
+    while not limiter.allow():
+        time.sleep(1.0)
+
+
+def _tokens_used(resp) -> int:
+    """Billable tokens for one response. Cache reads and writes are counted at face
+    value: they're cheaper per token, not free, and over-counting a little keeps the
+    budget honest. Returns 0 if the client doesn't report usage (the test fakes)."""
+    u = getattr(resp, "usage", None)
+    if u is None:
+        return 0
+    return sum(int(getattr(u, f, 0) or 0) for f in (
+        "input_tokens", "output_tokens",
+        "cache_creation_input_tokens", "cache_read_input_tokens",
+    ))
+
+
 def run_agent(page, job: dict, client) -> dict:
     """Drive the form with the LLM agent. Returns a preview dict compatible with the
     worker's preview/approve flow: ``{filled, skipped, screenshot_url, status,
@@ -293,8 +359,12 @@ def run_agent(page, job: dict, client) -> dict:
     questions = job.get("questions", [])
     resume = job.get("resume")
     system = [
+        # Cache the stable profile. Note Opus 4.8 won't cache a prefix under 4096
+        # tokens — a sparse knowledge store keeps this block below that, so the cache
+        # silently does nothing until the profile is substantial. It costs nothing to
+        # ask for; just don't read a run's cost as proof it's working.
         {"type": "text", "text": _SYSTEM + _profile_text(identity, questions),
-         "cache_control": {"type": "ephemeral"}},  # cache the stable profile
+         "cache_control": {"type": "ephemeral"}},
     ]
     page.goto(job["url"], wait_until="domcontentloaded", timeout=45000)
     page.wait_for_timeout(1500)
@@ -302,7 +372,12 @@ def run_agent(page, job: dict, client) -> dict:
     messages: list = []
     filled, skipped = [], []
     attempted: set = set()
-    outcome = {"status": "incomplete"}
+    spent = 0   # input + output tokens across every step of this one form
+    limiter = TokenBucket(RATE_PER_MIN)
+    # Only one path leaves this untouched: running the step budget out. Every other
+    # exit overwrites it, so it can state the exhaustion case up front.
+    outcome = {"status": "incomplete",
+               "reason": f"hit the {MAX_STEPS}-step limit without finishing the form"}
 
     for step in range(MAX_STEPS):
         elements, frames = snapshot(page)
@@ -315,6 +390,14 @@ def run_agent(page, job: dict, client) -> dict:
             continue
 
         # 2) Only the parts that need reasoning go to the LLM.
+        if spent >= TOKEN_BUDGET:
+            outcome = {"status": "incomplete",
+                       "reason": f"stopped at the {TOKEN_BUDGET:,}-token budget for one "
+                                 f"form (spent {spent:,}). Whatever was filled stands — "
+                                 f"finish it by hand, or raise AGENT_TOKEN_BUDGET."}
+            print(f"[agent] step {step}: token budget spent ({spent:,}) — stopping")
+            break
+        _pace(limiter)
         labels = {e["aid"]: e["label"] for e in elements}
         remaining = [e for e in elements if _needs_llm(e)]
         user_block = (
@@ -327,14 +410,24 @@ def run_agent(page, job: dict, client) -> dict:
         )
         messages.append({"role": "user", "content": user_block})
         resp = client.messages.create(
-            model=MODEL, max_tokens=1024, system=system, tools=TOOLS,
+            model=MODEL, max_tokens=MAX_TOKENS, system=system, tools=TOOLS,
             tool_choice={"type": "auto", "disable_parallel_tool_use": True},
             thinking={"type": "adaptive"}, messages=messages,
         )
+        spent += _tokens_used(resp)
         messages.append({"role": "assistant", "content": resp.content})
         calls = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
         if not calls:
-            break   # the model didn't act — stop rather than spin
+            # No tool call. Three different things look identical here, and the
+            # preview is the only place a human finds out which: the model chose to
+            # stop, it ran out of token budget mid-thought (`max_tokens` — adaptive
+            # thinking spends the same budget), or it refused. Record which, instead
+            # of reporting a bare "incomplete" for all three.
+            stop = getattr(resp, "stop_reason", None)
+            outcome = {"status": "incomplete",
+                       "reason": f"model stopped without acting (stop_reason={stop})"}
+            print(f"[agent] step {step}: no action taken (stop_reason={stop})")
+            break
 
         tc = calls[0]
         result, done, out = act(page, frames, tc.name, tc.input or {}, resume,
@@ -348,13 +441,26 @@ def run_agent(page, job: dict, client) -> dict:
             skipped.append(labels.get(tc.input.get("aid", ""), ""))
         messages.append({"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": tc.id, "content": result}]})
+        # Each LLM step appends exactly three messages — snapshot, action, result — so
+        # the list is always a multiple of three here and trimming from the front drops
+        # whole triples. That matters: a tool_result whose matching tool_use has been
+        # trimmed away is a 400, not a smaller prompt.
+        if len(messages) > KEEP_STEPS * 3:
+            del messages[:len(messages) - KEEP_STEPS * 3]
         if done:
             outcome = out
             break
 
+    # One line per form with the real number, because otherwise the only way to know
+    # what this costs is to read the Anthropic dashboard and guess which run was which.
+    print(f"[agent] done: status={outcome.get('status')} "
+          f"model={MODEL} tokens={spent:,} of {TOKEN_BUDGET:,} budget")
+
     preview = {"filled": filled, "skipped": [s for s in skipped if s][:20],
                "screenshot_url": _shot(page), "status": outcome.get("status")}
-    if outcome.get("status") == "blocked":
+    # `incomplete` carries a reason too — it's the status you get when the run ran out
+    # of steps or the model stopped early, and "why" is the whole diagnostic value.
+    if outcome.get("status") in ("blocked", "incomplete"):
         preview["reason"] = outcome.get("reason", "")
     if outcome.get("status") == "ready":
         preview["summary"] = outcome.get("summary", "")

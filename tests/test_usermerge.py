@@ -122,6 +122,71 @@ def test_export_import_moves_trained_brain_to_a_fresh_db(tmp_path):
     assert n == 12
 
 
+def test_export_carries_the_llm_summary_cache(tmp_path):
+    """The re-ranker's LLM features (fit_score/tech_overlap/stretch) come from
+    posting_summaries. It has no user_id column, so it was never exported — and a
+    restored brain silently lost those features: every row fell back to the same
+    neutral default, the three weights collapsed together, and the model regressed to
+    its without-llm_fit baseline with nothing to indicate it had happened."""
+    import json
+    import sqlite3
+    from app.db import SCHEMA, _migrate_schema, connect
+
+    _train_local()
+    # A cached LLM judgement for one of the user's postings, plus one for a posting
+    # that isn't theirs — only the first should travel.
+    with connect() as c:
+        for key, fit in (("greenhouse:p0", 0.9), ("greenhouse:not-mine", 0.1)):
+            c.execute("INSERT OR REPLACE INTO posting_summaries "
+                      "(cache_key, summary_json, created_at) VALUES (?,?,?)",
+                      (key, json.dumps({"fit_score": fit}), "now"))
+
+    brain = str(tmp_path / "brain.db")
+    counts = usermerge.export_user("local", brain)
+    assert counts.get("posting_summaries") == 1, "the user's summary must be exported"
+
+    prod = str(tmp_path / "prod.db")
+    pc = sqlite3.connect(prod)
+    pc.row_factory = sqlite3.Row
+    pc.executescript(SCHEMA)
+    _migrate_schema(pc)
+
+    added = usermerge.import_user(brain, "U07LVJVD4PL", conn=pc)
+    assert added.get("posting_summaries") == 1
+
+    rows = pc.execute("SELECT cache_key, summary_json FROM posting_summaries").fetchall()
+    assert [r["cache_key"] for r in rows] == ["greenhouse:p0"]
+    assert json.loads(rows[0]["summary_json"])["fit_score"] == 0.9
+
+
+def test_import_never_overwrites_a_fresher_local_summary(tmp_path):
+    import json
+    import sqlite3
+    from app.db import SCHEMA, _migrate_schema, connect
+
+    _train_local()
+    with connect() as c:
+        c.execute("INSERT OR REPLACE INTO posting_summaries "
+                  "(cache_key, summary_json, created_at) VALUES (?,?,?)",
+                  ("greenhouse:p0", json.dumps({"fit_score": 0.2}), "old"))
+    brain = str(tmp_path / "brain.db")
+    usermerge.export_user("local", brain)
+
+    prod = str(tmp_path / "prod.db")
+    pc = sqlite3.connect(prod)
+    pc.row_factory = sqlite3.Row
+    pc.executescript(SCHEMA)
+    _migrate_schema(pc)
+    pc.execute("INSERT INTO posting_summaries (cache_key, summary_json, created_at) "
+               "VALUES (?,?,?)", ("greenhouse:p0", json.dumps({"fit_score": 0.95}), "new"))
+
+    usermerge.import_user(brain, "U07LVJVD4PL", conn=pc)
+
+    kept = pc.execute("SELECT summary_json FROM posting_summaries "
+                      "WHERE cache_key = ?", ("greenhouse:p0",)).fetchone()
+    assert json.loads(kept["summary_json"])["fit_score"] == 0.95
+
+
 def test_import_is_idempotent_and_nondestructive(tmp_path):
     import sqlite3
     from app.db import SCHEMA, _migrate_schema
