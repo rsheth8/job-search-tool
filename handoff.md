@@ -159,12 +159,19 @@ fills EEO/demographic fields** (`act()` refuses `fill`/`choose`/`click` on any l
 `fieldmatch.is_eeo` matches, whatever the model asked for), and calls `blocked` on a
 login wall or captcha so the job falls back to the desktop extension.
 
-Model is `AGENT_MODEL` (default `claude-opus-4-8`). Cost knobs: `AGENT_MAX_TOKENS`
-(per turn — adaptive thinking spends this too, so too low truncates a turn before it
-acts and the run reports `incomplete`), `AGENT_MAX_STEPS`, and `AGENT_KEEP_STEPS`
-(how many snapshot→action→result triples stay in the conversation; without a bound,
-token cost grows with the square of the step count). Covered by `tests/test_agent.py`
-with fakes — no browser, no API call.
+Model is `AGENT_MODEL` (default `claude-opus-4-8` — `claude-haiku-4-5` is ~5x cheaper
+and the model choice dominates every other cost knob). Per-turn ceiling is
+`AGENT_MAX_TOKENS` (adaptive thinking spends this too, so too low truncates a turn
+before it acts and the run reports `incomplete`); `AGENT_KEEP_STEPS` bounds the
+conversation window, without which token cost grows with the square of the step count.
+
+**Per-form spend is capped by `AGENT_TOKEN_BUDGET`** (default 150k ≈ $0.50–1.00 on
+Opus): the agent stops, keeps what it filled, and reports why. There is deliberately
+**no daily cap** — the worker scales to zero with no volume and no DB, so an
+in-process day counter would reset every job and cap nothing while appearing to. A
+real one has to be server-side; `worker/README.md` sketches it. Every run logs
+`[agent] done: status=… model=… tokens=… of … budget`. Covered by
+`tests/test_agent.py` with fakes — no browser, no API call.
 
 ---
 
@@ -251,7 +258,8 @@ with fakes — no browser, no API call.
 own environment, not the app's): `BASE_URL` · `APPLY_API_TOKEN` (must match the main
 app's) · `WORKER_HEADLESS` (true) · `WORKER_AGENT` (false) · `AGENT_MODEL`
 (`claude-opus-4-8`) · `AGENT_MAX_TOKENS` (4096) · `AGENT_MAX_STEPS` (40) ·
-`AGENT_KEEP_STEPS` (6). All documented in `.env.example`.
+`AGENT_KEEP_STEPS` (6) · `AGENT_TOKEN_BUDGET` (150000) ·
+`AGENT_RATE_LIMIT_PER_MIN` (30). All documented in `.env.example`.
 
 ---
 

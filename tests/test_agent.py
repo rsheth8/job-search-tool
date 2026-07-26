@@ -220,6 +220,51 @@ def test_conversation_is_trimmed_on_whole_triples():
     assert isinstance(sent[0]["content"], str)
 
 
+def test_token_budget_stops_the_run_and_says_so(monkeypatch):
+    """The budget is the only cost control that survives a worker restart, so it has
+    to actually halt the loop — and say why, or a capped run is indistinguishable from
+    a form the agent couldn't figure out."""
+    class CostlyClient:
+        def __init__(self): self.n = 0
+
+        class _Usage:
+            input_tokens, output_tokens = 5000, 500
+            cache_creation_input_tokens = cache_read_input_tokens = 0
+
+        class _Messages:
+            def __init__(self, outer): self.outer = outer
+            def create(self, **kw):
+                self.outer.n += 1
+                return types.SimpleNamespace(
+                    content=[_block("scroll", {"direction": "down"}, f"c{self.outer.n}")],
+                    usage=CostlyClient._Usage(), stop_reason="tool_use")
+
+        @property
+        def messages(self): return CostlyClient._Messages(self)
+
+    monkeypatch.setattr(agent, "TOKEN_BUDGET", 12_000)   # ~2 steps' worth
+    fr = FakeFrame([{"kind": "text", "label": "Essay"}])
+    page = FakePage(fr)
+    client = CostlyClient()
+
+    preview = agent.run_agent(page, {"url": page.url, "identity": {}, "questions": []},
+                              client)
+
+    assert preview["status"] == "incomplete"
+    assert "budget" in preview["reason"]
+    # Stopped on budget, not on the 40-step limit.
+    assert client.n < agent.MAX_STEPS
+
+
+def test_usage_is_summed_across_every_billable_field():
+    resp = types.SimpleNamespace(usage=types.SimpleNamespace(
+        input_tokens=10, output_tokens=3,
+        cache_creation_input_tokens=5, cache_read_input_tokens=2))
+    assert agent._tokens_used(resp) == 20
+    # A client that reports no usage must not silently read as "free".
+    assert agent._tokens_used(types.SimpleNamespace()) == 0
+
+
 def test_profile_text_includes_identity_and_answers():
     txt = agent._profile_text(
         {"email": "a@x.com", "phone": ""},
