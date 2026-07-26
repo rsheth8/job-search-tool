@@ -26,7 +26,10 @@ FIELD_RULES: list[tuple[str, str]] = [
     ("last_name", r"last.?name|family.?name|surname|name\s*\(?\s*last"),
     ("full_name", r"full.?name|^\s*name\s*$|your name|legal name"),
     ("pronouns", r"pronouns"),
-    ("phone", r"phone|mobile|tel(ephone)?|contact number"),
+    # `tel` MUST stay word-bounded: unbounded, it matches "tell", so every
+    # "Tell us about yourself" essay got a phone number typed into it. Caught on a
+    # live Greenhouse form, where the background question was filled with 555-0100.
+    ("phone", r"\b(phone|mobile|tel(ephone)?|contact number)\b"),
     ("linkedin", r"linked.?in"),
     ("github", r"git.?hub"),
     ("portfolio", r"portfolio|personal (web)?site|^\s*website\s*$|^url$|other url|"
@@ -40,7 +43,10 @@ FIELD_RULES: list[tuple[str, str]] = [
     ("country", r"\bcountry\b|nation"),
     ("school", r"school|university|college|institution|alma mater|where did you study"),
     ("degree", r"degree|qualification|level of (education|study)"),
-    ("discipline", r"major|discipline|field of study|concentration"),
+    # "major" only where it names a course of study — a bare match also claims
+    # "a major project", "a major contributor", "the major milestone".
+    ("discipline", r"^\s*major\b|your major|academic major|major\s*/|"
+                   r"discipline|field of study|concentration"),
     ("gpa", r"\bgpa\b|grade point"),
     ("grad_year", r"grad(uation)?.{0,8}(year|date)|class of|completion (year|date)|"
                   r"year of grad"),
@@ -52,9 +58,14 @@ FIELD_RULES: list[tuple[str, str]] = [
     ("start_date", r"start date|available to start|earliest (start|availability)|"
                    r"when (can|could) you start|date available|notice period|"
                    r"availability date"),
-    ("willing_to_relocate", r"willing to relocate|open to relocat|able to relocate|relocat"),
+    # These two ask about the *candidate's* status. The bare stems (`relocat`,
+    # `sponsor`) also matched any essay that happened to mention relocating a
+    # service or sponsoring a project, so both are scoped to the asking phrasing.
+    ("willing_to_relocate", r"willing to relocate|open to relocat|able to relocate|"
+                            r"would you relocate|relocation (required|assistance)|"
+                            r"\brelocate\?"),
     ("work_authorized", r"authori[sz]ed to work|work authori[sz]ation|legally.{0,12}work|eligible to work|right to work"),
-    ("needs_sponsorship", r"sponsor(ship)?|require.{0,12}visa|visa.{0,12}status|immigration status"),
+    ("needs_sponsorship", r"sponsorship|require.{0,12}visa|visa.{0,12}status|immigration status"),
 ]
 _COMPILED = [(key, re.compile(pat, re.I)) for key, pat in FIELD_RULES]
 

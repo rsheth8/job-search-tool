@@ -149,3 +149,42 @@ def test_is_resume_field_yes(label):
 ])
 def test_is_resume_field_no(label):
     assert not fieldmatch.is_resume_field(label)
+
+
+# --- free-text questions must never be mistaken for identity fields ------------
+# Found on a live Greenhouse form: "Please tell us a little about your background…"
+# was filled with the phone number, because the phone rule's `tel` alternative was
+# unbounded and matched "tell". The same class of bug sat in three other rules whose
+# bare stems (`major`, `relocat`, `sponsor`) appear naturally inside prose.
+#
+# These get typed into a real employer's form, so a false positive here is not a
+# cosmetic bug — it's a wrong answer submitted under the user's name.
+@pytest.mark.parametrize("question", [
+    "Please tell us a little about your background and why you're interested in this role.",
+    "Tell us about yourself",
+    "Tell me your story",
+    "Tell us about a major project you led",
+    "Tell us about an accomplishment you are proud of",
+    "Describe a time you had to relocate a service with zero downtime",
+    "Have you ever sponsored an open-source project?",
+    "Why do you want to work here?",
+])
+def test_free_text_questions_match_no_identity_key(question):
+    assert fieldmatch.match_key(question) is None, (
+        f"{question!r} would be auto-filled with an identity value")
+
+
+# The same rules still have to catch the fields they exist for — the fix is a
+# tightening, not a removal.
+@pytest.mark.parametrize("label,key", [
+    ("Phone", "phone"), ("Phone Number", "phone"), ("Mobile", "phone"),
+    ("Telephone", "phone"), ("Cell phone", "phone"), ("Contact number", "phone"),
+    ("Major", "discipline"), ("Your major", "discipline"),
+    ("Field of study", "discipline"),
+    ("Are you willing to relocate?", "willing_to_relocate"),
+    ("Open to relocation", "willing_to_relocate"),
+    ("Will you now or in the future require sponsorship?", "needs_sponsorship"),
+    ("Do you require visa sponsorship?", "needs_sponsorship"),
+])
+def test_tightened_rules_still_match_their_real_fields(label, key):
+    assert fieldmatch.match_key(label) == key
