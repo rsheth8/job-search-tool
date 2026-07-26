@@ -149,18 +149,96 @@ def apply_page(user: str | None = None) -> HTMLResponse:
 
 @app.get("/apply/data")
 def apply_data(user: str | None = None) -> dict:
-    """The apply queue plus the top un-staged matches available to stage."""
-    from . import apply_queue, jobstore
+    """The apply queue plus the top un-staged matches available to stage.
+
+    Each row carries its **fit explanation** — why this job surfaced, in words —
+    so the mobile app can show reasons instead of a bare percentage that can't be
+    argued with. Computed heuristically from the posting + profile, so it's free.
+    """
+    from . import apply_queue, fit, jobstore
     from . import dashboard as dash
+    from . import profile as profile_mod
 
     uid = user or dash.default_user()
+    prof = profile_mod.get_profile(uid)
+
+    def explain(posting_id: int, score=None) -> dict:
+        posting = jobstore.get_posting(uid, posting_id)
+        if posting is None:
+            return {}
+        detail = fit.explain(posting, prof, score=score)
+        return {"why": detail["line"], "reasons": detail["reasons"],
+                "concerns": detail["concerns"]}
+
     staged = {it["posting_id"] for it in apply_queue.list_queue(uid)}
     queued = [
         {"posting_id": r["id"], "company": r["company"], "title": r["title"],
-         "url": r["url"], "score": r["relevance_score"], "source": r["source"]}
+         "url": r["url"], "score": r["relevance_score"], "source": r["source"],
+         **explain(r["id"], r["relevance_score"])}
         for r in jobstore.list_review_queue(uid) if r["id"] not in staged
     ]
-    return {"user": uid, "queued": queued, "queue": apply_queue.list_queue(uid)}
+    queue = [{**it, **explain(it["posting_id"], it.get("score"))}
+             for it in apply_queue.list_queue(uid)]
+    return {"user": uid, "queued": queued, "queue": queue}
+
+
+@app.get("/apply/inflight")
+def apply_inflight(request: Request, user: str | None = None) -> dict:
+    """Everything the submit worker is currently handling, for the mobile in-flight
+    view. Same rows the dashboard and the Slack reply are built from."""
+    from . import dashboard as dash
+    from . import fill_requests
+
+    _require_apply_token(request)
+    uid = user or dash.default_user()
+    rows = dash.in_flight_rows(uid)
+    # Attach the request id + preview so the phone can approve without a second call.
+    by_posting = {r["posting_id"]: r for r in fill_requests.list_active(uid)}
+    for row in rows:
+        req = by_posting.get(row["id"])
+        if req is not None:
+            row["request_id"] = req["id"]
+            row["status"] = req["status"]
+            row["preview"] = req.get("preview")
+    return {"user": uid, "inflight": rows}
+
+
+@app.get("/apply/knowledge")
+def apply_knowledge(request: Request, user: str | None = None) -> dict:
+    """What the assistant knows about you, plus the coverage audit."""
+    from . import dashboard as dash
+    from . import knowledge
+
+    _require_apply_token(request)
+    uid = user or dash.default_user()
+    return {"user": uid, "items": knowledge.list_all(uid),
+            "audit": knowledge.audit(uid)}
+
+
+@app.post("/apply/knowledge")
+async def apply_knowledge_add(request: Request) -> dict:
+    """Store one durable fact (project / achievement / strength / preference /
+    answer). Returns the saved row, or ok=False for an unknown category."""
+    from . import dashboard as dash
+    from . import knowledge
+
+    _require_apply_token(request)
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    item = knowledge.add(uid, body.get("category") or "", body.get("text") or "",
+                         label=body.get("label"))
+    return {"ok": item is not None, "item": item}
+
+
+@app.post("/apply/knowledge/remove")
+async def apply_knowledge_remove(request: Request) -> dict:
+    from . import dashboard as dash
+    from . import knowledge
+
+    _require_apply_token(request)
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    return {"ok": knowledge.remove(uid, int(body["id"]))}
 
 
 @app.post("/apply/stage")
@@ -251,6 +329,43 @@ async def apply_remove(request: Request) -> dict:
     body = await request.json()
     uid = body.get("user") or dash.default_user()
     return {"ok": apply_queue.remove(uid, int(body["posting_id"]))}
+
+
+@app.post("/apply/device")
+async def apply_register_device(request: Request) -> dict:
+    """Register this phone for push notifications (new matches, approval ready)."""
+    from . import dashboard as dash
+    from . import push
+
+    _require_apply_token(request)
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    ok = push.register_device(uid, body.get("token") or "",
+                              body.get("platform") or "ios")
+    # `configured` tells the app whether pushes will actually arrive, so it can say
+    # so in Settings instead of silently registering into a void.
+    return {"ok": ok, "configured": push.configured()}
+
+
+@app.post("/apply/device/remove")
+async def apply_forget_device(request: Request) -> dict:
+    from . import dashboard as dash
+    from . import push
+
+    _require_apply_token(request)
+    body = await request.json()
+    uid = body.get("user") or dash.default_user()
+    return {"ok": push.forget_device(uid, body.get("token") or "")}
+
+
+@app.get("/apply/rules")
+def apply_rules(request: Request) -> dict:
+    """The field-matching rules, so the extension and the iOS browser stop carrying
+    hand-ported copies that drift out of date (see fieldmatch.rules_payload)."""
+    from . import fieldmatch
+
+    _require_apply_token(request)
+    return fieldmatch.rules_payload()
 
 
 @app.get("/apply/identity")
@@ -403,8 +518,37 @@ async def worker_preview(request: Request) -> dict:
 
     _require_apply_token(request)
     body = await request.json()
-    ok = fill_requests.set_preview(int(body["request_id"]), body.get("preview") or {})
+    preview = body.get("preview") or {}
+    ok = fill_requests.set_preview(int(body["request_id"]), preview)
+    if ok:
+        _notify_preview_ready(int(body["request_id"]), preview)
     return {"ok": ok}
+
+
+def _notify_preview_ready(request_id: int, preview: dict) -> None:
+    """Push the approval gate to the user's phone, so approving never requires
+    opening the web page.
+
+    Fail-open: a messaging problem must not strand the worker or lose the fill —
+    the /apply review page still shows the same preview.
+    """
+    import logging
+
+    try:
+        from . import engine, fill_requests, push, reminders
+
+        req = fill_requests.get(request_id)
+        if req is None:
+            return
+        uid = req["user_id"]
+        reminders.get_sender().send(uid, engine.fill_preview_message(uid, req, preview))
+        # …and a push, so the phone surfaces it without Slack being open.
+        push.notify_preview_ready(
+            uid, engine.fill_label(uid, req),
+            len(preview.get("filled") or []), len(preview.get("skipped") or []))
+    except Exception:  # noqa: BLE001
+        logging.getLogger("apply").exception(
+            "preview notification failed; the /apply page still has it")
 
 
 @app.post("/worker/result")

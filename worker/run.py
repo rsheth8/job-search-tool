@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import sys
 import time
 
@@ -40,6 +41,10 @@ HEADLESS = os.environ.get("WORKER_HEADLESS", "true").lower() not in ("false", "0
 # WORKER_AGENT=true → drive the form with the LLM browser agent (worker/agent.py)
 # instead of the hard-coded fieldmatch filler. Needs ANTHROPIC_API_KEY.
 USE_AGENT = os.environ.get("WORKER_AGENT", "false").lower() in ("true", "1", "yes")
+# How long to wait for a form to render, and how much of that to spend before
+# trying an "Apply" reveal click (a description page never sprouts a form on its own).
+FORM_WAIT_MS = int(os.environ.get("WORKER_FORM_WAIT_MS", "20000"))
+REVEAL_PROBE_MS = int(os.environ.get("WORKER_REVEAL_PROBE_MS", "3000"))
 
 _HEADERS = {"X-Apply-Token": TOKEN} if TOKEN else {}
 
@@ -48,6 +53,10 @@ _HEADERS = {"X-Apply-Token": TOKEN} if TOKEN else {}
 # label extraction.
 _EXTRACT_JS = r"""
 () => {
+  const clean = (s) => (s||'').replace(/\s+/g,' ').trim();
+  // The *visible* label only. Kept separate from the name/id hint because the
+  // rules anchor on exact wording: a bare "Name" field matches /^name$/ until you
+  // staple "_systemfield_name" onto it, and then it matches nothing at all.
   const lbl = (el) => {
     const bits = [];
     if (el.id){ const l=document.querySelector(`label[for="${CSS.escape(el.id)}"]`); if(l) bits.push(l.textContent); }
@@ -56,19 +65,88 @@ _EXTRACT_JS = r"""
     const by = el.getAttribute('aria-labelledby');
     if (by) by.split(/\s+/).forEach(id=>{const n=document.getElementById(id); if(n) bits.push(n.textContent);});
     if (el.placeholder) bits.push(el.placeholder);
-    bits.push(el.name||'', el.id||'');
-    return bits.join(' ').replace(/\s+/g,' ').trim();
+    return clean(bits.join(' '));
+  };
+  // Fallback signal for unlabelled fields, matched only after the visible label.
+  const hint = (el) => clean([el.name||'', el.id||''].join(' '));
+  const vis = (el) => !!(el.offsetParent || el.getClientRects().length);
+  // A radio's *option* text must be the visible choice alone ("Yes"), never the
+  // name/id noise lbl() appends — option matching compares against these.
+  const optLabel = (el) => {
+    let t = '';
+    if (el.id){ const l=document.querySelector(`label[for="${CSS.escape(el.id)}"]`); if(l) t = l.textContent; }
+    if (!clean(t)) { const w = el.closest('label'); if (w) t = w.textContent; }
+    if (!clean(t)) t = el.getAttribute('aria-label') || '';
+    if (!clean(t)) t = el.value || '';
+    return clean(t);
   };
   const out = [];
   let i = 0;
+  const tagit = (el) => { el.setAttribute('data-jaf-id', i); return i++; };
+
+  // 1. Text inputs, textareas, native <select>s.
   document.querySelectorAll('input, textarea, select').forEach(el => {
     const t = (el.type||'').toLowerCase();
-    if (['hidden','submit','button','file','checkbox','image','reset'].includes(t)) return;
-    if (!(el.offsetParent || el.getClientRects().length) || el.disabled || el.readOnly) return;
-    el.setAttribute('data-jaf-id', i);
+    // radio is handled as a *group* below; the rest are never fillable.
+    if (['hidden','submit','button','file','checkbox','image','reset','radio'].includes(t)) return;
+    if (!vis(el) || el.disabled || el.readOnly) return;
     const tag = el.tagName.toLowerCase();
-    out.push({ id: i, label: lbl(el), tag, type: t,
+    out.push({ id: tagit(el), label: lbl(el), hint: hint(el), tag, type: t,
+      kind: tag==='select' ? 'select' : 'text',
       options: tag==='select' ? [...el.options].map(o=>o.text) : [] });
+  });
+
+  // 2. Radio groups — one record per group name. A Yes/No question is a *group*
+  //    decision, not N independent fields, so we present it that way.
+  const groups = new Map();
+  document.querySelectorAll('input[type="radio"]').forEach(el => {
+    if (!vis(el) || el.disabled) return;
+    const name = el.name || ('__anon' + i);
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(el);
+  });
+  groups.forEach((els, name) => {
+    let glabel = '';
+    const fs = els[0].closest('fieldset');
+    if (fs) { const lg = fs.querySelector('legend'); if (lg) glabel = lg.textContent; }
+    if (!glabel) {
+      const by = els[0].getAttribute('aria-labelledby');
+      if (by) by.split(/\s+/).forEach(id=>{const n=document.getElementById(id); if(n) glabel += ' ' + n.textContent;});
+    }
+    if (!clean(glabel)) glabel = name;
+    const radios = els.map(el => ({ id: tagit(el), text: optLabel(el) }));
+    out.push({ id: null, label: clean(glabel), hint: name, tag: 'radiogroup',
+      type: 'radio', kind: 'radiogroup', options: radios.map(r=>r.text), radios });
+  });
+
+  // 3. Custom (non-native) dropdowns — an ARIA combobox is a div, not a <select>,
+  //    so it needs a click-open → click-option dance. Options are read after it
+  //    opens (popups are usually rendered lazily / portalled to <body>).
+  document.querySelectorAll('[role="combobox"], [aria-haspopup="listbox"]').forEach(el => {
+    if (!vis(el) || el.disabled) return;
+    if (el.tagName.toLowerCase() === 'select') return;   // native, already captured
+    if (el.hasAttribute('data-jaf-id')) return;          // a tagged text input
+    out.push({ id: tagit(el), label: lbl(el), hint: hint(el), tag: 'combobox',
+      type: '', kind: 'combobox', options: [] });
+  });
+  return out;
+}
+"""
+
+# Options of an open ARIA listbox, tagged so we can click the chosen one. Read
+# *after* the combobox is clicked open, since popups render lazily.
+_OPTIONS_JS = r"""
+() => {
+  // Clear tags from a previously-opened dropdown first: its options are hidden now,
+  // and a stale data-jaf-opt="0" makes the next dropdown's option ambiguous — the
+  // click then waits on an invisible element until it times out.
+  document.querySelectorAll('[data-jaf-opt]').forEach(el => el.removeAttribute('data-jaf-opt'));
+  const out = [];
+  let i = 0;
+  document.querySelectorAll('[role="option"]').forEach(el => {
+    if (!(el.offsetParent || el.getClientRects().length)) return;   // still closed
+    el.setAttribute('data-jaf-opt', i);
+    out.push({ id: i, text: (el.textContent||'').replace(/\s+/g,' ').trim() });
     i++;
   });
   return out;
@@ -197,15 +275,30 @@ def _extract_frames(page) -> list:
     return results
 
 
-def _wait_for_form(page, timeout_ms: int = 20000) -> list:
+def _wait_for_form(page, timeout_ms: int = 20000, settle_ms: int = 400) -> list:
     """Poll until some frame exposes fillable fields (forms render after JS on SPAs),
-    up to timeout_ms. Returns the same shape as _extract_frames (possibly empty)."""
+    up to timeout_ms. Returns the same shape as _extract_frames (possibly empty).
+
+    Once fields appear we wait ``settle_ms`` and re-read: React forms commonly paint
+    in two passes, and grabbing the first paint fills half a form. We keep whichever
+    read saw more fields, so a settled render always wins."""
     deadline = time.time() + timeout_ms / 1000
     while True:
         frames = _extract_frames(page)
-        if frames or time.time() >= deadline:
+        if frames:
+            page.wait_for_timeout(settle_ms)
+            settled = _extract_frames(page)
+            if settled and len(settled[0][1]) >= len(frames[0][1]):
+                return settled
             return frames
+        if time.time() >= deadline:
+            return []
         page.wait_for_timeout(500)
+
+
+# A reveal trigger must never be the form's own submit button — clicking that would
+# submit without approval. Text matching either of these is not a reveal.
+_NOT_A_REVEAL = re.compile(r"submit|send application|finish|complete application", re.I)
 
 
 def _reveal_form(page) -> bool:
@@ -213,15 +306,80 @@ def _reveal_form(page) -> bool:
     description page. Returns True if it clicked something."""
     for sel in _APPLY_TRIGGERS:
         try:
-            el = page.query_selector(sel)
-            if el and el.is_visible():
+            for el in page.query_selector_all(sel):
+                if not el.is_visible():
+                    continue
+                text = (el.inner_text() or "").strip()
+                if text and _NOT_A_REVEAL.search(text):
+                    continue   # that's a submit button, not a reveal — never click it
                 el.click()
                 page.wait_for_load_state("domcontentloaded")
                 page.wait_for_timeout(1500)
+                print(f"[worker] revealed the form via {text or sel!r}")
                 return True
         except Exception:  # noqa: BLE001
             continue
     return False
+
+
+def _match_key(label: str, hint: str) -> str | None:
+    """The identity key for a field, matching the visible label first and only then
+    falling back to its name/id. Two passes because the rules anchor on wording —
+    "Name" is a full-name field, "Name _systemfield_name" matched nothing — while
+    the hint still rescues fields with no visible label at all."""
+    return fieldmatch.match_key(label) or (
+        fieldmatch.match_key(f"{label} {hint}".strip()) if hint else None)
+
+
+def _is_eeo(label: str, hint: str) -> bool:
+    """EEO check across both signals: a demographic <select> often carries a bare
+    label and gives itself away only through name="gender"."""
+    return fieldmatch.is_eeo(label) or (bool(hint) and fieldmatch.is_eeo(hint))
+
+
+def _log(label: str, key: str | None, action: str, result: str, reason: str = "") -> None:
+    """One structured line per field, so a live run is diagnosable after the fact:
+    what we saw, what we matched it to, what we did, and why it went that way."""
+    print(f"[worker]   {label[:52]!r:56} key={key or '-':<20} {action:<9} {result}"
+          + (f" — {reason}" if reason else ""))
+
+
+def _fill_radiogroup(frame, rec: dict, value) -> tuple[bool, str]:
+    """Check the radio in the group whose label best matches ``value``.
+    Returns (filled, detail)."""
+    opt = fieldmatch.select_value(rec.get("options", []), value)
+    if not opt:
+        return False, f"no option matches {value!r} in {rec.get('options', [])}"
+    for r in rec.get("radios", []):
+        if r["text"] == opt:
+            frame.check(f'[data-jaf-id="{r["id"]}"]')
+            return True, opt
+    return False, f"option {opt!r} vanished from the group"
+
+
+def _fill_combobox(page, frame, rec: dict, value) -> tuple[bool, str]:
+    """Fill a custom ARIA combobox: click it open, read the options that appear,
+    then click the best match. Native <select>s never come through here."""
+    sel = f'[data-jaf-id="{rec["id"]}"]'
+    frame.click(sel)
+    page.wait_for_timeout(250)
+    # The popup may be portalled out of the combobox's own frame, so look in the
+    # frame first and fall back to the top document.
+    options = frame.evaluate(_OPTIONS_JS) or page.main_frame.evaluate(_OPTIONS_JS)
+    if not options:
+        return False, "combobox opened but exposed no role=option items"
+    opt = fieldmatch.select_value([o["text"] for o in options], value)
+    if not opt:
+        return False, f"no option matches {value!r} in {[o['text'] for o in options][:8]}"
+    for o in options:
+        if o["text"] == opt:
+            try:
+                frame.click(f'[data-jaf-opt="{o["id"]}"]')
+            except Exception:  # noqa: BLE001 — portalled popup lives in the top frame
+                page.main_frame.click(f'[data-jaf-opt="{o["id"]}"]')
+            page.wait_for_timeout(150)
+            return True, opt
+    return False, f"option {opt!r} vanished from the listbox"
 
 
 def fill_form(page, job: dict) -> dict:
@@ -230,41 +388,93 @@ def fill_form(page, job: dict) -> dict:
     questions = job.get("questions", [])
     page.goto(job["url"], wait_until="domcontentloaded", timeout=45000)
 
-    frames = _wait_for_form(page)
+    # Probe briefly first: on a job *description* page no amount of waiting produces
+    # a form, so spending the whole budget before trying the "Apply" reveal just
+    # stalls every Lever-style posting for the full timeout.
+    frames = _wait_for_form(page, timeout_ms=REVEAL_PROBE_MS)
     if not frames and _reveal_form(page):   # landed on a description — open the form
-        frames = _wait_for_form(page)
+        frames = _wait_for_form(page, timeout_ms=FORM_WAIT_MS)
+    elif not frames:                        # no reveal to click; it's just slow
+        frames = _wait_for_form(page, timeout_ms=FORM_WAIT_MS - REVEAL_PROBE_MS)
     frame, fields = frames[0] if frames else (page.main_frame, [])
     print(f"[worker] {page.url} — {len(fields)} fillable field(s) "
           f"across {len(page.frames)} frame(s)")
 
     filled, skipped = [], []
     for f in fields:
-        sel = f'[data-jaf-id="{f["id"]}"]'
-        label, tag = f["label"], f["tag"]
-        key = fieldmatch.match_key(label)
+        label, kind = f["label"], f.get("kind", "text")
+        hint = f.get("hint", "")
+        sel = f'[data-jaf-id="{f["id"]}"]' if f.get("id") is not None else None
+        key = _match_key(label, hint)
         try:
-            if key and identity.get(key):
-                value = identity[key]
-                if tag == "select":
-                    opt = fieldmatch.select_value(f["options"], value)
-                    if opt:
-                        frame.select_option(sel, label=opt)
-                        filled.append({"label": label, "value": opt})
-                    else:
+            # Belt-and-suspenders: demographic questions are the human's to answer,
+            # on every control type, before any other rule can claim them.
+            if _is_eeo(label, hint):
+                _log(label, None, "eeo", "skipped", "demographic — never auto-filled")
+                skipped.append(label)
+                continue
+
+            # --- choice controls: native select, custom combobox, radio group ---
+            if kind in ("select", "combobox", "radiogroup"):
+                # option_for is the shared decision so all three agree; a combobox's
+                # options aren't known until it opens, so it resolves its own.
+                if kind == "combobox":
+                    value = identity.get(key) if key else None
+                    if not key:
+                        _log(label, key, kind, "skipped", "no identity key (or EEO)")
                         skipped.append(label)
+                        continue
+                    if not value:
+                        _log(label, key, kind, "skipped", "identity has no value")
+                        skipped.append(label)
+                        continue
+                    ok, detail = _fill_combobox(page, frame, f, value)
                 else:
-                    frame.fill(sel, str(value))
-                    filled.append({"label": label, "value": str(value)})
-            elif tag == "textarea" or fieldmatch.is_essay_label(label):
+                    key, opt = fieldmatch.option_for(label, f.get("options", []),
+                                                     identity, key=key)
+                    if not key:
+                        _log(label, key, kind, "skipped", "no identity key (or EEO)")
+                        skipped.append(label)
+                        continue
+                    if not opt:
+                        _log(label, key, kind, "skipped",
+                             f"no option matched identity {identity.get(key)!r}")
+                        skipped.append(label)
+                        continue
+                    if kind == "select":
+                        frame.select_option(sel, label=opt)
+                        ok, detail = True, opt
+                    else:
+                        ok, detail = _fill_radiogroup(frame, f, identity[key])
+                if ok:
+                    _log(label, key, kind, "filled", detail)
+                    filled.append({"label": label, "value": detail})
+                else:
+                    _log(label, key, kind, "skipped", detail)
+                    skipped.append(label)
+
+            # --- plain text fields we have a fact for ---
+            elif key and identity.get(key):
+                value = str(identity[key])
+                frame.fill(sel, value)
+                _log(label, key, "text", "filled", value[:40])
+                filled.append({"label": label, "value": value})
+
+            # --- free-text / essay questions, answered from the drafted answers ---
+            elif f["tag"] == "textarea" or fieldmatch.is_essay_label(label):
                 ans = _pick_answer(label, questions)
                 if ans:
                     frame.fill(sel, ans)
+                    _log(label, key, "essay", "filled", f"{len(ans)} chars")
                     filled.append({"label": label, "value": ans[:60] + "…"})
                 else:
+                    _log(label, key, "essay", "skipped", "no drafted answer matched")
                     skipped.append(label)
             elif label:
+                _log(label, key, "text", "skipped", "unrecognized field")
                 skipped.append(label)
         except Exception as e:  # noqa: BLE001 — one stubborn field never aborts the fill
+            _log(label, key, kind, "error", e.__class__.__name__)
             skipped.append(f"{label} ({e.__class__.__name__})")
 
     for label in _attach_resume(frame, job.get("resume")):
@@ -292,15 +502,53 @@ def _screenshot(page) -> str | None:
     return "data:image/jpeg;base64," + base64.b64encode(png).decode()
 
 
+# Submit-button candidates, most-specific first. An in-form typed submit is the
+# safest signal; free-text matches come last and are text-guarded below.
+_SUBMIT_SELECTORS = (
+    'form button[type="submit"]',
+    'form input[type="submit"]',
+    'button[type="submit"]',
+    'input[type="submit"]',
+    'button:has-text("Submit application")',
+    'button:has-text("Submit Application")',
+    'button:has-text("Send application")',
+    'button:has-text("Submit")',
+    '[role="button"]:has-text("Submit application")',
+)
+
+# Never click these even if a selector matches: "Apply for this job" only *reveals*
+# the form (clicking it mid-flow loses the filled data), and the rest aren't submits.
+_NOT_SUBMIT = re.compile(
+    r"apply for this job|apply now|^\s*apply\s*$|save|cancel|back|previous|"
+    r"next|continue|add another|upload", re.I)
+
+
 def submit_form(page) -> None:
-    """Click the form's submit button. Heuristic; tune per ATS."""
-    for sel in ('button[type="submit"]', 'input[type="submit"]',
-                'button:has-text("Submit")', 'button:has-text("Apply")'):
-        btn = page.query_selector(sel)
-        if btn:
-            btn.click()
-            page.wait_for_timeout(3000)
-            return
+    """Click the form's real submit button.
+
+    Searches **every frame** — an embedded Greenhouse/Ashby form keeps its submit
+    button inside the iframe, so a top-frame-only search silently found nothing.
+    Only ever called after the user approved the preview.
+    """
+    for fr in page.frames:
+        for sel in _SUBMIT_SELECTORS:
+            try:
+                candidates = fr.query_selector_all(sel)
+            except Exception:  # noqa: BLE001 — detached/cross-origin frame
+                break
+            for btn in candidates:
+                try:
+                    if not btn.is_visible() or not btn.is_enabled():
+                        continue
+                    text = (btn.inner_text() or btn.get_attribute("value") or "").strip()
+                    if text and _NOT_SUBMIT.search(text):
+                        continue   # a reveal/navigation button, not the submit
+                    btn.click()
+                    page.wait_for_timeout(3000)
+                    print(f"[worker] submitted via {sel} ({text or 'no text'!r})")
+                    return
+                except Exception:  # noqa: BLE001 — try the next candidate
+                    continue
     raise RuntimeError("no submit button found")
 
 
@@ -356,7 +604,10 @@ def handle_job(browser, job: dict) -> None:
              json={"request_id": rid, "status": "failed", "error": str(e)})
         print(f"[worker] req {rid}: failed — {e}")
     finally:
-        page.close()
+        try:
+            page.close()
+        except Exception:
+            pass
 
 
 def main(once: bool = False) -> int:
@@ -376,8 +627,14 @@ def main(once: bool = False) -> int:
                         print("[worker] nothing to do")
                         return 0
                     time.sleep(POLL_SECONDS)
+        except KeyboardInterrupt:
+            print("\n[worker] interrupted")
+            return 130
         finally:
-            browser.close()
+            try:
+                browser.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

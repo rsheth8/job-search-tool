@@ -312,7 +312,7 @@ _QA_SCHEMA = {
 
 def draft_question_answers(
     questions: list[str], company: str, title: str, description: str | None,
-    profile_row=None, *, identity_block: str = "",
+    profile_row=None, *, identity_block: str = "", knowledge_block: str = "",
 ) -> list[str]:
     """Draft a tailored answer for EACH question in one batched Haiku call (cheap;
     one round-trip for the whole application). Grounded in the candidate's
@@ -328,7 +328,8 @@ def draft_question_answers(
     if get_settings().use_llm_router:
         try:
             return _draft_question_answers_via_claude(
-                questions, company, title, description, background, identity_block
+                questions, company, title, description, background, identity_block,
+                knowledge_block,
             )
         except Exception:  # network/auth/parse — fall back, never block
             logger.exception("Claude batched answers failed; using templates")
@@ -337,7 +338,7 @@ def draft_question_answers(
 
 def _draft_question_answers_via_claude(
     questions: list[str], company: str, title: str, description: str | None,
-    background: str, identity_block: str,
+    background: str, identity_block: str, knowledge_block: str = "",
 ) -> list[str]:
     import anthropic
 
@@ -362,7 +363,9 @@ def _draft_question_answers_via_claude(
                 f"Role: {title} at {company}.\n"
                 f"Candidate: {identity_block or '(not provided)'}\n"
                 f"Background:\n{background or '(not provided)'}\n"
-                f"Job description (may be truncated):\n{desc or '(not provided)'}\n\n"
+                + (f"What I've done (cite these specifics, don't invent others):\n"
+                   f"{knowledge_block}\n" if knowledge_block else "")
+                + f"Job description (may be truncated):\n{desc or '(not provided)'}\n\n"
                 f"QUESTIONS:\n{listing}"
             ),
         }],
@@ -403,7 +406,7 @@ def draft_application_answers(
 
 def answer_application_question(
     question: str, company: str, title: str, description: str | None,
-    profile_row=None, *, identity_block: str = "",
+    profile_row=None, *, identity_block: str = "", knowledge_block: str = "",
 ) -> str:
     """Draft an answer to ONE free-text application question ("Why do you want to
     work here?", "Describe a hard problem you solved"), grounded in the candidate's
@@ -417,7 +420,8 @@ def answer_application_question(
     if get_settings().use_llm_router:
         try:
             return _answer_question_via_claude(
-                question, company, title, description, background, identity_block
+                question, company, title, description, background, identity_block,
+                knowledge_block,
             )
         except Exception:  # network/auth/parse — fall back, never block the form
             logger.exception("Claude question answer failed; using template")
@@ -435,7 +439,7 @@ def _answer_question_template(question: str, company: str, title: str) -> str:
 
 def _answer_question_via_claude(
     question: str, company: str, title: str, description: str | None,
-    background: str, identity_block: str,
+    background: str, identity_block: str, knowledge_block: str = "",
 ) -> str:
     import anthropic
 
@@ -460,7 +464,9 @@ def _answer_question_via_claude(
                 f"Role: {title} at {company}.\n"
                 f"Candidate: {identity_block or '(not provided)'}\n"
                 f"Background:\n{background or '(not provided)'}\n"
-                f"Job description (may be truncated):\n{desc or '(not provided)'}"
+                + (f"What I've done (cite these specifics, don't invent others):\n"
+                   f"{knowledge_block}\n" if knowledge_block else "")
+                + f"Job description (may be truncated):\n{desc or '(not provided)'}"
             ),
         }],
     )

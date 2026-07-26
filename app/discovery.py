@@ -145,6 +145,12 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
     fresh, dropped = quality.filter_reputable(fresh)
     if dropped:
         logger.info("discovery: dropped %d low-reputation posting(s) for %s", dropped, user_id)
+    # Cross-source dedupe: the same job reaches us from the ATS, an RSS feed, and
+    # the aggregator at once. Source-level dedupe can't see that (different ids),
+    # so it showed up three times. Keeps the first-party copy — apply direct.
+    fresh, duped = quality.dedupe(fresh)
+    if duped:
+        logger.info("discovery: collapsed %d duplicate posting(s) for %s", duped, user_id)
     # Ghost-job gate: drop never-really-hiring reqs (evergreen/reposted/stale/scam).
     if settings.ghost_filter_enabled and fresh:
         kept: list[JobPosting] = []
@@ -255,6 +261,20 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
         except Exception:  # noqa: BLE001
             logger.exception("digest send failed for %s", user_id)
     # silent: queued rows only, no outbound message
+
+    # A push alongside the chat message, so the phone surfaces new matches without
+    # Slack open. Fail-open and no-op until push is configured — a notification
+    # problem must never cost us the tick's work.
+    if notify_batch and mode != "silent":
+        try:
+            from . import push
+
+            best = max(notify_batch, key=lambda m: m[1])[0]
+            push.notify_new_matches(
+                user_id, len(notify_batch),
+                f"{best.title or 'Role'} @ {best.company or best.source}")
+        except Exception:  # noqa: BLE001
+            logger.exception("push notify failed for %s", user_id)
 
     if messages_sent:
         logger.info(

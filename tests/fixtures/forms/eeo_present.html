@@ -1,0 +1,58 @@
+<!doctype html>
+<!-- A form whose EEO/demographic section must NEVER be auto-filled — as text
+     inputs, native selects, and a radio group, so the guard is proven on every
+     control type. The identity fields above it should still fill normally. -->
+<html>
+<head><meta charset="utf-8"><title>Apply — Acme (with EEO)</title></head>
+<body>
+  <form id="app" action="/submitted" method="post">
+    <label for="first_name">First Name</label>
+    <input type="text" id="first_name" name="first_name">
+
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email">
+
+    <h2>Voluntary Self-Identification</h2>
+
+    <label for="gender">Gender</label>
+    <select id="gender" name="gender">
+      <option value="">Select…</option>
+      <option>Male</option>
+      <option>Female</option>
+      <option>Decline to self identify</option>
+    </select>
+
+    <label for="race">Race / Ethnicity</label>
+    <select id="race" name="race">
+      <option value="">Select…</option>
+      <option>Asian</option>
+      <option>White</option>
+      <option>Decline to self identify</option>
+    </select>
+
+    <label for="hispanic">Are you Hispanic or Latino?</label>
+    <input type="text" id="hispanic" name="hispanic">
+
+    <label for="veteran">Veteran status</label>
+    <select id="veteran" name="veteran">
+      <option value="">Select…</option>
+      <option>I am a protected veteran</option>
+      <option>I am not a protected veteran</option>
+    </select>
+
+    <label for="disability">Disability status</label>
+    <input type="text" id="disability" name="disability">
+
+    <label for="orientation">Sexual orientation</label>
+    <input type="text" id="orientation" name="orientation">
+
+    <fieldset>
+      <legend>Do you identify as transgender?</legend>
+      <label><input type="radio" name="gender_identity" value="Yes"> Yes</label>
+      <label><input type="radio" name="gender_identity" value="No"> No</label>
+    </fieldset>
+
+    <button type="submit" id="submit-btn">Submit Application</button>
+  </form>
+</body>
+</html>

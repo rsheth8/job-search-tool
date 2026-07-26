@@ -308,6 +308,33 @@ CREATE INDEX IF NOT EXISTS idx_fill_requests_status ON fill_requests(status);
 -- to, with a pre-assembled package (draft answers + tailored resume) ready for a
 -- final human review. Status walks staged -> ready -> submitted; we NEVER submit
 -- a form automatically — 'submitted' is the user confirming they sent it.
+-- Personal knowledge: the durable facts about the user that make an application
+-- answer specific rather than generic — projects, achievements, strengths, work
+-- preferences, and reusable canned answers to questions every ATS asks. Grounds
+-- the answer drafter, and lets a canned answer be reused with no LLM call at all.
+CREATE TABLE IF NOT EXISTS user_knowledge (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    TEXT NOT NULL,
+    category   TEXT NOT NULL,   -- project | achievement | strength | preference | answer
+    label      TEXT,            -- for 'answer': the question it answers
+    text       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_user_knowledge_user ON user_knowledge(user_id, category);
+
+-- APNs device tokens for the iPhone app. iOS hands the app the same token on every
+-- launch, so registration upserts rather than duplicating; a token APNs reports as
+-- dead (app deleted / wrong environment) is dropped on the spot.
+CREATE TABLE IF NOT EXISTS device_tokens (
+    user_id    TEXT NOT NULL,
+    token      TEXT NOT NULL,
+    platform   TEXT NOT NULL DEFAULT 'ios',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, token)
+);
+
 CREATE TABLE IF NOT EXISTS apply_queue (
     user_id      TEXT NOT NULL,
     posting_id   INTEGER NOT NULL REFERENCES job_postings(id) ON DELETE CASCADE,

@@ -1,0 +1,25 @@
+<!doctype html>
+<!-- The real form, served inside ashby_iframe.html's <iframe>. -->
+<html>
+<head><meta charset="utf-8"><title>Application</title></head>
+<body>
+  <form id="ashby-form" action="/submitted" method="post">
+    <label for="_systemfield_name">Name</label>
+    <input type="text" id="_systemfield_name" name="_systemfield_name">
+
+    <label for="_systemfield_email">Email</label>
+    <input type="email" id="_systemfield_email" name="_systemfield_email">
+
+    <label for="_systemfield_phone">Phone Number</label>
+    <input type="tel" id="_systemfield_phone" name="_systemfield_phone">
+
+    <label for="school">School</label>
+    <input type="text" id="school" name="school">
+
+    <label for="resume">Resume</label>
+    <input type="file" id="resume" name="_systemfield_resume">
+
+    <button type="submit" id="ashby-submit">Submit Application</button>
+  </form>
+</body>
+</html>

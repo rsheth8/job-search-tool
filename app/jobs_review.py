@@ -52,6 +52,8 @@ def start_review(user_id: str) -> str:
 
 
 def _card_for_queue(user_id: str, queue: list, index: int) -> str:
+    from . import profile as profile_mod
+
     row = queue[index]
     posting = _row_to_posting(row)
     return job_alerts.build_review_card(
@@ -60,6 +62,7 @@ def _card_for_queue(user_id: str, queue: list, index: int) -> str:
         row["id"],
         position=index + 1,
         total=len(queue),
+        profile=profile_mod.get_profile(user_id),
     )
 
 

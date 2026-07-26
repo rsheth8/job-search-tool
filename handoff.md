@@ -1,8 +1,11 @@
 # Job Search Intelligence — Engineering Handoff
 
-> Pick-up doc for a fresh session. Reflects what's **actually built and merged to
-> `main`**. Last updated **2026-06-22**. Test suite: **496 passed, 15 skipped**.
-> Latest commit: `5b3d3c5` (PR #27, Phase 2 submit worker).
+> Pick-up doc for a fresh session. Last updated **2026-07-25**.
+> Test suite: **761 passed, 15 skipped**.
+> ⚠️ The newest work is on branch **`worker-robust-fill`**, not yet merged to
+> `main` — worker fixture tests, Slack-native approve, the knowledge store, the
+> discovery accuracy pass, and the **mobile build-out** (shared autofill rules, four
+> tabs, push). See `OVERNIGHT_NOTES.md` for what still needs you.
 
 ---
 
@@ -20,8 +23,13 @@ prepare (per-question answers + tailored resume + identity) → review on phone 
 auto-fill & submit (preview → you approve → it submits) → auto-track.
 
 **The one not-fully-proven piece:** the Phase 2 submit **worker** drives a live
-browser, so it can't be unit-tested. Everything around it is tested; the worker
-needs hands-on tuning against real forms.
+browser. Its fill logic is now covered by `tests/test_worker_fill.py` (real headless
+Chromium against local fixtures), so what's left is confirming real ATS DOMs behave
+like the fixtures — a headful live-test, not a rewrite.
+
+**The whole loop now runs from Slack:** a filled application messages you what it
+filled and what it left for you; reply `approve` or `cancel`. `in flight` shows
+everything in progress. The `/apply` page still works unchanged.
 
 ---
 
@@ -81,6 +89,15 @@ Per-posting Slack actions: `apply N`, `queue N`, `dismiss N`, `snooze N for a we
 - **Swipe trainer** `/train`: 3 modes — Best, Mix, **Learn** (active learning:
   surfaces postings the model is least sure about). Pass-imbalance nudge.
 
+### C2. Personal knowledge (`app/knowledge.py`)
+Durable facts that make a drafted answer *yours*: projects, achievements,
+strengths, preferences, and reusable answers. Two uses — `knowledge_block()`
+grounds the drafting prompt, and a saved answer matching the question is returned
+**verbatim with no model call**. Taught from Slack (`remember project: …`,
+`remember answer to "Why us?": …`), inspected with `what do you know about me`,
+which also reports the identity-coverage audit (`knowledge.audit`). No demographic
+data, same as `applicant.py`.
+
 ### D. Application assistance
 - **Apply queue** (`apply_queue.py`, page `/apply`): stage a posting (`queue N`,
   `queue top 3`, or auto-queue), and it assembles the full package: **per-question
@@ -93,6 +110,14 @@ Per-posting Slack actions: `apply N`, `queue N`, `dismiss N`, `snooze N for a we
   (SWE vs AI/ML variant), Tectonic-compiled, cached. Needs base `.tex` on the volume
   (see §5).
 
+### D2. The iPhone app — `ios/` (SwiftUI + WKWebView)
+Four tabs: **Apply** (matches + `Prepare application` to stage, each row showing
+*why* it surfaced), **In flight** (the worker's previews + the approve/cancel gate),
+**About me** (`knowledge` + the coverage audit), **Settings** (backend + push).
+An in-app browser opens the real form; ⚡ Autofill fills it. Push notifications
+(APNs) fire on new matches and on a preview awaiting approval, deep-linking to the
+right tab. See `ios/README.md`.
+
 ### E. The autofill extension — `extension/` (MV3, load unpacked)
 A browser extension (Chrome/Edge/desktop; Safari-packageable for iOS). Focus a
 field → inline chip with the value or a drafted answer. **⚡ Autofill this page**
@@ -100,25 +125,39 @@ button fills everything recognized at once (text, dropdowns, Yes/No radios). Opt
 page edits identity (syncs to server). Talks to `/apply/identity` + `/apply/answer`.
 
 ### F. Phase 2 submit worker — `worker/` + `app/fill_requests.py` + `app/fieldmatch.py`
-The phone-first auto-submit. `app/fieldmatch.py` = shared field-matching brain
-(label→identity key, select/Yes-No matching, EEO never-fill) reused by **both** the
-extension and the worker. `app/fill_requests.py` = state machine
+The phone-first auto-submit. `app/fieldmatch.py` = the **one** field-matching brain
+(label→identity key, select/Yes-No matching, EEO never-fill), now *served* to the
+other two surfaces via `GET /apply/rules` rather than hand-ported into them — the
+JS copies had drifted behind it, and the iOS one was filling demographic fields the
+worker refuses. `tests/test_rules_parity.py` proves Python and JS agree label-for-
+label in a real browser; `tests/test_ios_autofill.py` runs the iOS engine itself
+against the worker's fixtures. `app/fill_requests.py` = state machine
 `pending → filling → preview → approved → submitting → submitted | failed` (submit
 only after explicit approval). `worker/` = separate **Playwright-Python** Fly app
 (~2GB, scale-to-zero) that claims a request, opens the public form, fills via
 `fieldmatch`, screenshots a preview to your phone, waits for approval, submits.
 
+**Approval is conversational**: `/worker/preview` messages the user, and `approve` /
+`cancel` / `in flight` are routed intents (`APPROVE_FILL`, `APPLY_STATUS`). Only an
+explicit human approval moves a request to `approved` — tested, including approving
+early or as a different user. The filler handles native selects, ARIA comboboxes,
+and Yes/No radio groups, and logs one structured line per field.
+
 ---
 
 ## 3. Key endpoints
 
-- `GET /` dashboard · `GET /health` (status + every feature flag)
+- `GET /` dashboard (now includes **🤖 In flight** + **🧠 What I know about you**)
+  · `GET /health` (status + every feature flag)
 - `POST /slack/events` (Slack inbound)
 - `GET /train` swipe trainer · `GET /train/deck` (`mode=best|mix|learn`) · `POST /train/label` · `POST /train/summaries`
 - `GET /apply` review page · `GET /apply/data` · `POST /apply/stage|package|mark|remove`
 - `GET /apply/resume` (PDF) · `POST /apply/answer/save|redraft` (per-question, by `index`)
 - `GET/POST /apply/identity` · `POST /apply/answer` (single question; used by extension)
 - **Submit pipeline:** `POST /apply/autosubmit`, `GET /apply/request`, `POST /apply/request/approve|cancel`
+- **Mobile:** `GET /apply/rules` (shared autofill rules) · `GET /apply/inflight` ·
+  `GET/POST /apply/knowledge` + `/apply/knowledge/remove` · `POST /apply/device`
+  (+`/remove`) for push tokens. `/apply/data` rows now carry `why`/`reasons`/`concerns`.
 - **Worker (token-gated `X-Apply-Token`):** `POST /worker/claim`, `/worker/claim_approved`, `/worker/preview`, `/worker/result`
 
 ---
@@ -181,7 +220,9 @@ only after explicit approval). `worker/` = separate **Playwright-Python** Fly ap
 (true) · `ELIGIBILITY_FILTER_ENABLED` (true) · `ELIGIBILITY_LLM_ENABLED` (false) ·
 `JOB_RELEVANCE_THRESHOLD` (0.6) · `JOB_AUTO_QUEUE_THRESHOLD` (0.0 = off) ·
 `JOB_ALERT_MODE` (digest) · `JOB_ALERT_USER` ("") · `RESUME_TAILOR_ENABLED` (true) ·
-`APPLY_API_TOKEN` ("") · `APPLY_CORS_ORIGINS` ("*") · SerpApi/Apollo gates.
+`APPLY_API_TOKEN` ("") · `APPLY_CORS_ORIGINS` ("*") · SerpApi/Apollo gates ·
+`PUSH_ENABLED` (false) + `APNS_KEY_ID`/`APNS_TEAM_ID`/`APNS_BUNDLE_ID`/
+`APNS_KEY_PATH`/`APNS_USE_SANDBOX` (push is a no-op until all are set).
 
 ---
 
@@ -189,7 +230,7 @@ only after explicit approval). `worker/` = separate **Playwright-Python** Fly ap
 
 ```bash
 VP=/Users/rahilsheth/Documents/job-search-tool/.venv/bin/python
-$VP -m pytest -q                      # full suite (496 passed, 15 skipped)
+$VP -m pytest -q                      # full suite (699 passed, 15 skipped)
 $VP -m uvicorn app.main:app --reload  # local server on :8000
 ```
 `tests/conftest.py` forces offline (neutralizes ANTHROPIC/SLACK/APOLLO/SERPAPI/
@@ -201,11 +242,14 @@ settings are `@lru_cache`d).
 
 ## 8. Known limitations / rough edges
 
-- **Submit worker** (the big one): submit-button detection is heuristic; custom
-  React dropdowns (some Ashby/Workday) aren't native `<select>` and get skipped;
-  holds one job open while awaiting approval (fine for personal volume). Resume
-  upload + phone-preview screenshot are now wired (see below); still needs a headful
-  live-test against real forms. All documented in `worker/README.md`.
+- **Submit worker**: no longer untested. `tests/test_worker_fill.py` drives real
+  headless Chromium against fixtures in `tests/fixtures/forms/` (iframe, reveal,
+  ARIA combobox, late SPA paint, EEO section) and asserts the two invariants —
+  *never submits*, *never fills EEO*. Custom dropdowns and Yes/No radio groups now
+  fill. What's still open: real ATS DOMs may not match the fixtures, so a headful
+  live-test remains the acceptance step; submit-button detection is still heuristic
+  (now searches every frame); holds one job open while awaiting approval (fine for
+  personal volume). See `worker/README.md` + `worker/LIVE_TEST.md`.
 - **Embeddings** add ~0 to personalization (label imbalance was the bottleneck, not
   features) — don't expect magic.
 - **Login-gated sites** (Workday, LinkedIn Easy Apply) are out of scope for the
@@ -232,7 +276,12 @@ settings are `@lru_cache`d).
 
 The vision is **complete**; next steps are tuning + polish, not new architecture:
 1. **Tune the worker** against real forms (the actual last mile — run it
-   `WORKER_HEADLESS=false`, watch what lands in "skipped", tighten `fieldmatch`/`submit_form`).
+   `WORKER_HEADLESS=false`, watch the per-field log, tighten `fieldmatch`/`submit_form`).
+   Fixtures now catch most of this before you open a browser; add a fixture for
+   whatever the live run breaks on.
+1b. **Mirror the `fieldmatch` changes into `extension/content.js`** — the broadened
+   label variants and the widened EEO never-fill list. The Python side is the source
+   of truth; the extension's `RULES` have drifted behind it. See `OVERNIGHT_NOTES.md`.
 2. ✅ **Resume upload** is wired — the worker fetches `/apply/resume` and attaches it to
    the resume/CV file input (`fieldmatch.is_resume_field`). Tune on multi-upload forms.
 3. ✅ **Preview screenshot** is wired — the worker sends a full-page JPEG data URL as

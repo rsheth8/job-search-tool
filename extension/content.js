@@ -16,37 +16,48 @@
   // identity key -> regex that identifies a field from its label text.
   // Order matters: more specific patterns first (email before address, preferred
   // before first, location before city).
-  const RULES = [
+  // Offline fallback, generated from app/fieldmatch.py (rules version
+  // 211cfb5d2aeb). The rules fetched from the backend take priority —
+  // don't hand-edit these; regenerate them from fieldmatch.py, or you have
+  // reintroduced exactly the drift this design removes.
+  const FALLBACK_RULES = [
     ["email", /e-?mail/i],
     ["preferred_name", /preferred (first )?name|nick.?name|known as|goes by/i],
-    ["first_name", /first.?name|given.?name|legal first/i],
-    ["last_name", /last.?name|family.?name|surname/i],
+    ["first_name", /first.?name|given.?name|legal first|name\s*\(?\s*first/i],
+    ["last_name", /last.?name|family.?name|surname|name\s*\(?\s*last/i],
     ["full_name", /full.?name|^\s*name\s*$|your name|legal name/i],
     ["pronouns", /pronouns/i],
-    ["phone", /phone|mobile|tel(ephone)?/i],
+    ["phone", /phone|mobile|tel(ephone)?|contact number/i],
     ["linkedin", /linked.?in/i],
     ["github", /git.?hub/i],
-    ["portfolio", /portfolio|personal (web)?site|^\s*website\s*$|^url$|other url|personal url/i],
-    ["location", /\blocation\b|where are you (based|located)|city.{0,5}state/i],
+    ["portfolio", /portfolio|personal (web)?site|^\s*website\s*$|^url$|other url|personal url|home ?page|personal page/i],
+    ["location", /\blocation\b|where are you (based|located)|city.{0,5}state|where do you (live|reside)|currently (based|located|reside)|based in/i],
     ["address", /street address|address line|mailing address|home address|^\s*address\b/i],
     ["city", /\bcity\b|town/i],
     ["state", /\bstate\b|province|region/i],
     ["zip", /\bzip\b|postal code|post.?code/i],
     ["country", /\bcountry\b|nation/i],
-    ["school", /school|university|college|institution|alma mater/i],
+    ["school", /school|university|college|institution|alma mater|where did you study/i],
     ["degree", /degree|qualification|level of (education|study)/i],
     ["discipline", /major|discipline|field of study|concentration/i],
     ["gpa", /\bgpa\b|grade point/i],
-    ["grad_year", /grad(uation)?.{0,8}(year|date)|class of|completion (year|date)/i],
+    ["grad_year", /grad(uation)?.{0,8}(year|date)|class of|completion (year|date)|year of grad/i],
     ["current_company", /current (employer|company)|present (employer|company)|where do you (currently )?work/i],
     ["current_title", /current (title|role|position)|present (title|role|position)/i],
-    ["years_experience", /years.{0,10}experience|experience.{0,10}years|\byoe\b/i],
+    ["years_experience", /years.{0,10}experience|experience.{0,10}years|\byoe\b|how many years/i],
     ["salary_expectation", /salary (expectation|requirement)|expected (salary|compensation|pay)|desired (salary|pay|compensation)|compensation expectation|pay expectation/i],
-    ["start_date", /start date|available to start|earliest (start|availability)|when can you start|date available/i],
+    ["start_date", /start date|available to start|earliest (start|availability)|when (can|could) you start|date available|notice period|availability date/i],
     ["willing_to_relocate", /willing to relocate|open to relocat|able to relocate|relocat/i],
     ["work_authorized", /authori[sz]ed to work|work authori[sz]ation|legally.{0,12}work|eligible to work|right to work/i],
     ["needs_sponsorship", /sponsor(ship)?|require.{0,12}visa|visa.{0,12}status|immigration status/i],
   ];
+  // Labels we never auto-fill or offer to draft (EEO / demographic).
+  const FALLBACK_EEO = /gender|sex\b|race|ethnic|hispanic|latino|veteran|disab|sexual orientation|pronoun.{0,4}optional|national origin|self.?identif|\beeo\b|equal (employment|opportunity)|protected (class|category)|lgbt|marital status|religio|citizenship status|date of birth|\bdob\b/i;
+
+  // Replaced by the served rules once init() fetches them.
+  let RULES = FALLBACK_RULES;
+  let EEO = FALLBACK_EEO;
+  let RULES_SRC = "bundled";
 
   let CFG = null;
   let IDENTITY = {};
@@ -67,6 +78,7 @@
     } catch (e) {
       console.warn("[apply-autofill] could not load identity:", e);
     }
+    await loadRules();
     document.addEventListener("focusin", onFocus, true);
     document.addEventListener("scroll", reposition, true);
     window.addEventListener("resize", reposition, true);
@@ -91,8 +103,9 @@
     const key = matchKey(fieldLabel(el));
     if (key && IDENTITY[key] != null && IDENTITY[key] !== "") {
       showChip(el, `Fill: ${truncate(IDENTITY[key], 40)}`, () => fill(el, IDENTITY[key]));
-    } else if (tag === "textarea") {
+    } else if (tag === "textarea" && !isEeo(fieldLabel(el))) {
       // Only textareas get a drafted answer — short <input>s are facts, not essays.
+      // Demographic questions never get one, however essay-shaped they look.
       showChip(el, "✨ Draft answer", () => draftAnswer(el, fieldLabel(el)));
     } else {
       hideChip();
@@ -110,7 +123,10 @@
       const type = (el.type || "").toLowerCase();
       if (type === "radio" || type === "checkbox" || type === "file" ||
           type === "hidden" || type === "submit" || type === "button") continue;
-      if (tag === "textarea") { if (!el.value.trim()) essays++; continue; }
+      if (tag === "textarea") {
+        if (!el.value.trim() && !isEeo(fieldLabel(el))) essays++;
+        continue;
+      }
       const key = matchKey(fieldLabel(el));
       const val = key && IDENTITY[key];
       if (val == null || val === "") continue;
@@ -118,7 +134,9 @@
     }
     filled += fillRadioGroups();
     const more = essays ? ` · ${essays} question${essays === 1 ? "" : "s"} need you` : "";
-    toast(`Filled ${filled} field${filled === 1 ? "" : "s"}${more}`);
+    // Naming the rule set makes a stale "bundled" run visible rather than invisible.
+    const src = RULES_SRC === "bundled" ? " · bundled rules" : "";
+    toast(`Filled ${filled} field${filled === 1 ? "" : "s"}${more}${src}`);
   }
 
   // Yes/No (and similar) questions rendered as radio groups.
@@ -245,9 +263,34 @@
     return r.getAttribute("aria-label") || r.value || "";
   }
 
+  // The field-matching rules come from the backend (app/fieldmatch.py is the one
+  // source of truth for all three autofill surfaces). The bundled copy above is
+  // only a fallback — it drifted behind Python once already, which is why this
+  // fetch exists. A failure here is safe, never silent.
+  async function loadRules() {
+    try {
+      const r = await api("GET", "/apply/rules");
+      const served = await r.json();
+      if (!served || !Array.isArray(served.rules) || !served.rules.length ||
+          !served.never_fill) throw new Error("malformed rules payload");
+      const flags = served.flags || "i";
+      const compiled = served.rules.map(([k, pat]) => [k, new RegExp(pat, flags)]);
+      const eeo = new RegExp(served.never_fill, flags);
+      RULES = compiled; EEO = eeo; RULES_SRC = served.version || "served";
+    } catch (e) {
+      console.warn("[apply-autofill] using bundled rules (" + e.message + ")");
+    }
+  }
+
   function matchKey(label) {
-    for (const [key, re] of RULES) if (re.test(label)) return key;
+    const text = (label || "").trim().toLowerCase();
+    if (!text || EEO.test(text)) return null;   // demographics are the human's alone
+    for (const [key, re] of RULES) if (re.test(text)) return key;
     return null;
+  }
+
+  function isEeo(label) {
+    return EEO.test((label || "").trim().toLowerCase());
   }
 
   // ---- chip + button UI ---------------------------------------------------

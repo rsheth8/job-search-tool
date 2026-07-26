@@ -1,0 +1,71 @@
+<!doctype html>
+<!-- The cases the hard-coded filler used to skip: a React-style combobox (NOT a
+     native <select>), a Yes/No radio group, and a free-text essay question. -->
+<html>
+<head><meta charset="utf-8"><title>Apply — Acme (custom widgets)</title></head>
+<body>
+  <form id="app-form" action="/submitted" method="post">
+    <label for="full_name">Full name</label>
+    <input type="text" id="full_name" name="full_name">
+
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email">
+
+    <!-- Custom combobox: a div, not a <select>. Click opens a role=listbox. -->
+    <div class="field">
+      <span id="lbl-auth">Are you authorized to work in the United States?</span>
+      <div id="auth-combo" role="combobox" aria-labelledby="lbl-auth"
+           aria-haspopup="listbox" aria-expanded="false" tabindex="0">Select…</div>
+      <ul id="auth-list" role="listbox" aria-labelledby="lbl-auth" hidden>
+        <li role="option" data-value="Yes">Yes</li>
+        <li role="option" data-value="No">No</li>
+      </ul>
+    </div>
+
+    <!-- Country combobox, to prove option matching isn't Yes/No-only. -->
+    <div class="field">
+      <span id="lbl-country">Country</span>
+      <div id="country-combo" role="combobox" aria-labelledby="lbl-country"
+           aria-haspopup="listbox" aria-expanded="false" tabindex="0">Select…</div>
+      <ul id="country-list" role="listbox" aria-labelledby="lbl-country" hidden>
+        <li role="option">Canada</li>
+        <li role="option">United States</li>
+        <li role="option">United Kingdom</li>
+      </ul>
+    </div>
+
+    <!-- Yes/No radio group: individual inputs sharing a name. -->
+    <fieldset>
+      <legend>Will you now or in the future require visa sponsorship?</legend>
+      <label><input type="radio" name="sponsorship" value="Yes"> Yes</label>
+      <label><input type="radio" name="sponsorship" value="No"> No</label>
+    </fieldset>
+
+    <label for="why">Why do you want to work at Acme?</label>
+    <textarea id="why" name="why"></textarea>
+
+    <button type="submit" id="go">Submit Application</button>
+  </form>
+
+  <script>
+    // Minimal ARIA combobox behaviour: click toggles the listbox, clicking an
+    // option writes its text back onto the combobox and closes the list.
+    document.querySelectorAll('[role=combobox]').forEach(function (combo) {
+      var list = document.getElementById(combo.id.replace('-combo', '-list'));
+      combo.addEventListener('click', function () {
+        var open = !list.hidden;
+        list.hidden = open;
+        combo.setAttribute('aria-expanded', String(!open));
+      });
+      list.querySelectorAll('[role=option]').forEach(function (opt) {
+        opt.addEventListener('click', function () {
+          combo.textContent = opt.textContent;
+          combo.setAttribute('data-selected', opt.textContent);
+          list.hidden = true;
+          combo.setAttribute('aria-expanded', 'false');
+        });
+      });
+    });
+  </script>
+</body>
+</html>

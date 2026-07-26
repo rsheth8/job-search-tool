@@ -33,6 +33,12 @@ class Intent(str, Enum):
     DISMISS_JOB = "DISMISS_JOB"  # hide a discovered posting for good
     SNOOZE_JOB = "SNOOZE_JOB"    # mute a posting for a while, then resurface
     TUNE = "TUNE"                # adjust the match/alert threshold
+    # Submit pipeline, driven from the phone (Phase 2)
+    APPROVE_FILL = "APPROVE_FILL"  # approve / cancel a filled application
+    APPLY_STATUS = "APPLY_STATUS"  # what's in flight right now
+    # Personal knowledge — what makes a drafted answer specific to you
+    REMEMBER = "REMEMBER"          # store a project/achievement/strength/answer
+    KNOWLEDGE = "KNOWLEDGE"        # show what's known + what's missing
     UNKNOWN = "UNKNOWN"
 
 

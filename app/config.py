@@ -156,6 +156,20 @@ class Settings(BaseSettings):
     # any (token still gates writes). Tighten to specific ATS domains in prod.
     apply_cors_origins: str = "*"
 
+    # Push notifications to the iPhone app (APNs). Off until PUSH_ENABLED plus all
+    # four APNs values are set; app/push.py is a no-op meanwhile, so this ships
+    # dark and switches on with config alone. Needs an Apple Developer account:
+    # APNS_KEY_ID/TEAM_ID come from the .p8 auth key, BUNDLE_ID is the app's id,
+    # and APNS_KEY_PATH points at the .p8 on the volume (e.g. /data/apns.p8).
+    # Sandbox is the right host for a development build; TestFlight/App Store use
+    # production — mismatching them yields BadDeviceToken.
+    push_enabled: bool = False
+    apns_key_id: str = ""
+    apns_team_id: str = ""
+    apns_bundle_id: str = ""
+    apns_key_path: str = ""
+    apns_use_sandbox: bool = False
+
     @property
     def serpapi_enabled(self) -> bool:
         return bool(self.serpapi_api_key.strip())

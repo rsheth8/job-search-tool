@@ -1,0 +1,21 @@
+<!doctype html>
+<!-- An SPA that renders its form ~1.2s after load, with nothing to click in the
+     meantime. Exercises the settle/retry wait: a naive one-shot extraction reads
+     zero fields here and the fill comes back empty. -->
+<html>
+<head><meta charset="utf-8"><title>Apply — Acme (SPA)</title></head>
+<body>
+  <div id="root">Loading application…</div>
+  <script>
+    setTimeout(function () {
+      document.getElementById('root').innerHTML =
+        '<form id="f" action="/submitted" method="post">' +
+        '<label for="email">Email</label><input type="email" id="email" name="email">' +
+        '<label for="first_name">First Name</label>' +
+        '<input type="text" id="first_name" name="first_name">' +
+        '<label for="phone">Phone</label><input type="tel" id="phone" name="phone">' +
+        '<button type="submit" id="s">Submit Application</button></form>';
+    }, 1200);
+  </script>
+</body>
+</html>

@@ -28,9 +28,38 @@ def test_match_key(label, key):
 @pytest.mark.parametrize("label", [
     "Gender", "Race / Ethnicity", "Are you a protected veteran?",
     "Disability status", "Sexual orientation",
+    # broadened: a missed one answers a protected-class question for the user
+    "National origin", "Voluntary Self-Identification", "EEO information",
+    "Equal Employment Opportunity", "Marital status", "Religion",
+    "Do you identify as LGBTQ+?", "Date of birth", "DOB",
+    "Citizenship status",
 ])
 def test_never_fills_demographic_fields(label):
     assert fieldmatch.match_key(label) is None
+
+
+@pytest.mark.parametrize("label,key", [
+    # label variants real ATS forms use that the original rules missed
+    ("Name (First)", "first_name"),
+    ("Name (Last)", "last_name"),
+    ("Contact number", "phone"),
+    ("Where do you live?", "location"),
+    ("Currently based", "location"),
+    ("Homepage", "portfolio"),
+    ("Where did you study?", "school"),
+    ("Year of graduation", "grad_year"),
+    ("How many years of Python?", "years_experience"),
+    ("Notice period", "start_date"),
+    ("When could you start?", "start_date"),
+])
+def test_broadened_label_coverage(label, key):
+    assert fieldmatch.match_key(label) == key
+
+
+def test_current_salary_is_still_not_treated_as_an_expectation():
+    """We store a desired salary, never a current one — don't let a broadened
+    rule volunteer the wrong number."""
+    assert fieldmatch.match_key("Current salary") is None
 
 
 def test_match_key_unknown_returns_none():
@@ -57,6 +86,55 @@ def test_is_essay_label():
     assert fieldmatch.is_essay_label("Describe a project you're proud of")
     assert not fieldmatch.is_essay_label("Email")          # a fact, not an essay
     assert not fieldmatch.is_essay_label("First name")
+
+
+@pytest.mark.parametrize("label", [
+    "Gender", "Race / Ethnicity", "Are you a protected veteran?",
+    "Disability status", "Sexual orientation", "Do you identify as transgender?",
+])
+def test_is_eeo(label):
+    assert fieldmatch.is_eeo(label)
+
+
+def test_is_eeo_leaves_ordinary_fields_alone():
+    assert not fieldmatch.is_eeo("First name")
+    assert not fieldmatch.is_eeo("Why do you want to work here?")
+    assert not fieldmatch.is_eeo("")
+
+
+def test_long_eeo_question_is_not_an_essay():
+    """A demographic question that is long and question-shaped clears the essay
+    bar on wording alone — and would then get a *drafted answer* written into it.
+    The EEO guard has to come first."""
+    label = "Are you Hispanic or Latino? hispanic hispanic"
+    assert len(label) > 40 and fieldmatch.match_key(label) is None
+    assert not fieldmatch.is_essay_label(label)
+
+
+def test_option_for_resolves_key_and_option():
+    identity = {"country": "United States", "needs_sponsorship": "No"}
+    assert fieldmatch.option_for("Country", ["Canada", "United States"], identity) == (
+        "country", "United States")
+    # Yes/No group, same decision path
+    assert fieldmatch.option_for("Do you require visa sponsorship?",
+                                 ["Yes", "No"], identity) == ("needs_sponsorship", "No")
+
+
+def test_option_for_reports_why_it_could_not_decide():
+    # unknown label -> no key at all
+    assert fieldmatch.option_for("Favorite color", ["Red"], {}) == (None, None)
+    # EEO never resolves, even with options present
+    assert fieldmatch.option_for("Gender", ["Male", "Female"], {"gender": "x"}) == (None, None)
+    # understood label, but nothing to say / nothing that matches -> (key, None)
+    assert fieldmatch.option_for("Country", ["Canada"], {}) == ("country", None)
+    assert fieldmatch.option_for("Country", ["Canada"],
+                                 {"country": "United States"}) == ("country", None)
+
+
+def test_option_for_accepts_a_precomputed_key():
+    """The worker resolves keys from label *and* name/id, so it passes its own."""
+    assert fieldmatch.option_for("", ["Yes", "No"], {"work_authorized": "Yes"},
+                                 key="work_authorized") == ("work_authorized", "Yes")
 
 
 @pytest.mark.parametrize("label", [

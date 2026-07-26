@@ -1,12 +1,28 @@
 # Submit worker — live-test checklist
 
-The worker (`worker/run.py`) is the one piece that can't be unit-tested: it drives a
-real browser. This is the hands-on session that proves it against real forms and
-tunes the field rules. Budget ~60–90 min the first time.
+The worker (`worker/run.py`) drives a real browser. Its fill logic is now covered by
+`tests/test_worker_fill.py` (headless Chromium against local fixtures — run that
+first, it's ~60s), so this session is about the one thing fixtures can't prove:
+that **real ATS DOMs match the shapes we imitate**. Budget ~45–60 min.
+
+```bash
+.venv/bin/python -m pytest tests/test_worker_fill.py -q   # do this before you start
+```
 
 **Safety:** the worker **never submits without your explicit approval** — it fills,
 screenshots, and waits. So you can test fill + preview on real postings all day and
 simply **Cancel** instead of Approve. You only ever submit forms you actually mean to.
+
+**Approving from your phone:** you no longer need the web page. When the worker
+reports a preview you get a Slack message listing what it filled and what it left
+for you; reply **`approve`** to submit or **`cancel`** to stop. `in flight` lists
+everything in progress. The `/apply` page still works exactly as before.
+
+**Reading a failure:** the worker now logs one line per field —
+`'Email Address' key=email text filled — rahil@…` / `'Gender' key=- eeo skipped —
+demographic`. When something doesn't fill, that line says whether the label failed
+to match, the identity was empty, or the click threw. Reproduce it by adding a
+fixture to `tests/fixtures/forms/` rather than only tuning against the live site.
 
 ---
 

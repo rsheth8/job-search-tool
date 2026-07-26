@@ -47,8 +47,27 @@ _COMP_HYPE_RE = re.compile(
     r"up to \$\d[\d,]*\s*(?:/|per )?\s*(?:day|week)|six[- ]figure income)",
     re.I,
 )
-# "30+ days ago" / "45 days ago" style staleness from aggregator/RSS extensions.
+# The req is explicitly closed. Not a *ghost* so much as a corpse — recommending it
+# wastes a real application, so it's the strongest tell we have.
+_CLOSED_RE = re.compile(
+    r"(no longer (?:accepting|available|open|active)|this (?:position|role|job|req)"
+    r" (?:has been|is) (?:filled|closed)|position (?:filled|closed)|"
+    r"applications? (?:are )?closed|we(?:'ve| have) (?:since )?filled|"
+    r"posting (?:has )?expired|req(?:uisition)? closed)",
+    re.I,
+)
+# Pay-to-play / not-really-a-job tells: MLM, commission-only, unpaid "opportunities".
+_NOT_A_JOB_RE = re.compile(
+    r"(100%\s*commission|commission[- ]only|unpaid (?:intern|position|role)|"
+    r"must (?:purchase|invest|buy)|start[- ]?up (?:fee|cost)|"
+    r"(?:training|starter) (?:kit|fee)|be your own boss|no salary)",
+    re.I,
+)
+# "30+ days ago" / "45 days ago" style staleness from aggregator/RSS extensions,
+# plus the week/month phrasings the same feeds use interchangeably.
 _AGE_RE = re.compile(r"(\d+)\s*\+?\s*days?\s*ago", re.I)
+_AGE_WEEKS_RE = re.compile(r"(\d+)\s*\+?\s*weeks?\s*ago", re.I)
+_AGE_MONTHS_RE = re.compile(r"(\d+)\s*\+?\s*months?\s*ago", re.I)
 _STALE_AGE_DAYS = 45
 _THIN_DESC_CHARS = 120
 
@@ -60,12 +79,13 @@ def _is_stale(posted_at: str | None) -> bool:
     text = posted_at.strip().lower()
     if "30+" in text or "60+" in text:
         return True
-    m = _AGE_RE.search(text)
-    if m:
-        try:
-            return int(m.group(1)) >= _STALE_AGE_DAYS
-        except ValueError:
-            return False
+    for rx, per_unit in ((_AGE_RE, 1), (_AGE_WEEKS_RE, 7), (_AGE_MONTHS_RE, 30)):
+        m = rx.search(text)
+        if m:
+            try:
+                return int(m.group(1)) * per_unit >= _STALE_AGE_DAYS
+            except ValueError:
+                return False
     # ISO date → days since.
     try:
         from datetime import datetime, timezone
@@ -78,12 +98,28 @@ def _is_stale(posted_at: str | None) -> bool:
         return False
 
 
+def is_closed(p: JobPosting) -> bool:
+    """The posting says outright that it's filled/closed/expired.
+
+    Checked for **every** source, first-party included: a Greenhouse board is
+    trustworthy about who's hiring, but a closed req on it is still a wasted
+    application, and that's the one thing worth overriding the trust rule for.
+    """
+    return bool(_CLOSED_RE.search(p.description or "")
+                or _CLOSED_RE.search(p.title or ""))
+
+
 def ghost_signals(p: JobPosting, *, repost_count: int = 0) -> list[tuple[str, float]]:
-    """Weighted (reason, score) ghost tells for a posting. Empty for first-party."""
+    """Weighted (reason, score) ghost tells for a posting. Empty for first-party,
+    except an explicitly-closed req, which is never worth surfacing."""
+    if is_closed(p):
+        return [("closed / already filled", 1.0)]
     if quality.is_first_party(p):
         return []
     desc = p.description or ""
     signals: list[tuple[str, float]] = []
+    if _NOT_A_JOB_RE.search(desc) or _NOT_A_JOB_RE.search(p.title or ""):
+        signals.append(("commission-only / pay-to-play", 0.6))
     if _EVERGREEN_RE.search(desc) or _EVERGREEN_RE.search(p.title or ""):
         signals.append(("evergreen/pipeline language", 0.6))
     if _PERSONAL_EMAIL_RE.search(desc):

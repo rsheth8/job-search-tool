@@ -101,6 +101,8 @@ def render(user_id: str | None = None, *, now: datetime | None = None) -> str:
         f"{_followups_section(ranked)}"
         f"{_deadlines_section(upcoming, now)}"
         f"{_reminders_section(pending, now)}"
+        f"{_in_flight_section(user_id)}"
+        f"{_knowledge_section(user_id)}"
         f"{_discovery_section(user_id)}"
         f"{_applications_section(apps, now)}"
         f"{_recruiters_section(recruiters)}"
@@ -200,6 +202,76 @@ def _deadlines_section(upcoming: list, now: datetime) -> str:
             f"<td class='muted {soon}'>{escape(when)}</td></tr>"
         )
     return f"<section><h2>📅 Upcoming</h2><table>{''.join(rows)}</table></section>"
+
+
+def in_flight_rows(user_id: str) -> list[dict]:
+    """Every unfinished fill request as ``{id, label, state, awaiting}`` — the same
+    data the Slack "in flight" reply is built from, so the phone and the computer
+    can never disagree about what's happening."""
+    from . import fill_requests, jobstore
+
+    rows = []
+    for req in fill_requests.list_active(user_id):
+        posting = jobstore.get_posting(user_id, req["posting_id"])
+        label = (f"{posting['title'] or 'Role'} @ {posting['company'] or '?'}"
+                 if posting is not None else f"posting #{req['posting_id']}")
+        rows.append({
+            "id": req["posting_id"],
+            "label": label,
+            "state": _FILL_STATES.get(req["status"], req["status"]),
+            "awaiting": req["status"] == "preview",
+        })
+    return rows
+
+
+_FILL_STATES = {
+    "pending": "queued for the worker",
+    "filling": "filling the form",
+    "preview": "waiting on your approval",
+    "approved": "approved — submitting",
+    "submitting": "submitting",
+}
+
+
+def _in_flight_section(user_id: str) -> str:
+    """Applications the submit worker is currently handling. Read-only: approving
+    stays an explicit action on /apply or in Slack, never a dashboard click."""
+    rows = in_flight_rows(user_id)
+    if not rows:
+        return ""
+    body = []
+    for r in rows:
+        cta = ("<a href='/apply'>review &amp; approve</a>" if r["awaiting"]
+               else f"<span class='muted'>{escape(r['state'])}</span>")
+        flag = "warn" if r["awaiting"] else ""
+        body.append(
+            f"<tr><td>#{r['id']}</td><td>{escape(r['label'])}</td>"
+            f"<td class='muted {flag}'>{escape(r['state'])}</td><td>{cta}</td></tr>"
+        )
+    return ("<section><h2>🤖 In flight</h2>"
+            f"<table>{''.join(body)}</table></section>")
+
+
+def _knowledge_section(user_id: str) -> str:
+    """How completely the assistant knows you — the lever on how much it can fill
+    without asking. Shown only while something's still missing."""
+    from . import knowledge
+
+    report = knowledge.audit(user_id)
+    if not report["identity_missing"] and not report["suggestions"]:
+        return ""
+    pct = int(report["score"] * 100)
+    flag = " warn" if pct < 70 else ""
+    missing = escape(", ".join(report["identity_missing"][:8])) or "—"
+    rows = [f"<tr><td>Identity</td><td class='muted'>{pct}% complete</td>"
+            f"<td class='muted{flag}'>{missing}</td></tr>"]
+    counts = report["knowledge_counts"]
+    known = ", ".join(f"{n} {c}{'s' if n != 1 else ''}"
+                      for c, n in counts.items() if n) or "nothing yet"
+    rows.append(f"<tr><td>Background</td><td class='muted'>{escape(known)}</td>"
+                f"<td class='muted'>{escape(report['suggestions'][0]) if report['suggestions'] else '—'}</td></tr>")
+    return ("<section><h2>🧠 What I know about you</h2>"
+            f"<table>{''.join(rows)}</table></section>")
 
 
 def _reminders_section(pending: list, now: datetime) -> str:

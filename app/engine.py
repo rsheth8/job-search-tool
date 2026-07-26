@@ -272,6 +272,14 @@ def _start(user_id: str, p: ParsedMessage, raw: str) -> str:
         return _do_snooze_job(user_id, p)
     if p.intent == Intent.TUNE:
         return _do_tune(user_id, p)
+    if p.intent == Intent.APPROVE_FILL:
+        return _do_approve_fill(user_id, p)
+    if p.intent == Intent.APPLY_STATUS:
+        return _do_apply_status(user_id)
+    if p.intent == Intent.REMEMBER:
+        return _do_remember(user_id, p)
+    if p.intent == Intent.KNOWLEDGE:
+        return _do_knowledge(user_id)
     # UNKNOWN
     if convo.is_greeting(raw):
         return GREETING
@@ -1066,6 +1074,204 @@ def _do_snooze_job(user_id: str, p: ParsedMessage) -> str:
     jobstore.snooze_posting(posting["id"], when.isoformat())
     return (f"😴 Snoozed #{posting['id']} ({_posting_label(posting)}) until "
             f"{when.date().isoformat()} — it'll resurface in 'any new jobs' then.")
+
+
+def fill_preview_message(user_id: str, req: dict, preview: dict) -> str:
+    """The Slack message that puts the approval gate on the phone: what got filled,
+    what was left for the human, and the two words that decide it."""
+    label = fill_label(user_id, req)
+    filled = preview.get("filled") or []
+    skipped = [s for s in (preview.get("skipped") or []) if s]
+
+    if preview.get("status") == "blocked":
+        return (f"🚧 Couldn't fill {label} — {preview.get('reason', 'blocked')}. "
+                "Open it on your computer and finish with the browser extension.")
+
+    plural = "" if len(filled) == 1 else "s"
+    lines = [f"🤖 Filled {label} — {len(filled)} field{plural} ready for review."]
+    lines += [f"  ✓ {e.get('label', '?')}: {str(e.get('value', ''))[:40]}"
+              for e in filled[:8]]
+    if len(filled) > 8:
+        lines.append(f"  …and {len(filled) - 8} more")
+    if skipped:
+        lines.append(f"\n⚠️ Left for you ({len(skipped)}): " + ", ".join(skipped[:6]))
+    lines.append("\nReply 'approve' to submit it, or 'cancel' to stop. "
+                 "Screenshot + full preview: /apply")
+    return "\n".join(lines)
+
+
+def fill_label(user_id: str, req: dict) -> str:
+    """"#12 (Backend Engineer @ Acme)" for a fill request, falling back to the
+    posting id when the posting has since been cleaned up."""
+    posting = jobstore.get_posting(user_id, req["posting_id"])
+    if posting is None:
+        return f"#{req['posting_id']}"
+    return f"#{posting['id']} ({_posting_label(posting)})"
+
+
+def _do_approve_fill(user_id: str, p: ParsedMessage) -> str:
+    """The human gate, answered from Slack: approve a filled application so the
+    worker may submit it, or cancel it outright.
+
+    This is the *only* thing that moves a request to `approved` — the worker
+    submits nothing until it sees that. Answering here rather than on the web page
+    is what lets the whole flow happen from a phone.
+    """
+    from . import fill_requests
+
+    action, _, pid = (p.message or "approve").partition(":")
+    if pid.isdigit():
+        req = fill_requests.for_posting(user_id, int(pid))
+        if req is None:
+            return (f"I don't have a fill request for #{pid}. Text 'in flight' to "
+                    "see what's actually waiting.")
+    else:
+        req = (fill_requests.latest_awaiting(user_id) if action == "approve"
+               else fill_requests.latest_active(user_id))
+        if req is None and action == "approve":
+            # Nothing at the gate. Fall back to the most recent request so we can
+            # say *why* — "still filling" / "already submitted" is far more useful
+            # than "nothing is waiting". A cancelled one explains nothing, so skip it.
+            req = fill_requests.latest_active(user_id) or fill_requests.latest(user_id)
+            if req is not None and req["status"] == fill_requests.FAILED:
+                req = None
+        if req is None:
+            return ("Nothing is waiting for your approval right now. Queue a match "
+                    "('queue 3'), then tap 🤖 Auto-fill & submit to start one.")
+
+    label = fill_label(user_id, req)
+    if action == "cancel":
+        if not fill_requests.cancel(user_id, req["id"]):
+            return f"{label} is already {req['status']} — nothing to cancel."
+        return f"🚫 Cancelled {label}. Nothing was submitted."
+
+    if req["status"] != fill_requests.PREVIEW:
+        if req["status"] in (fill_requests.SUBMITTED, fill_requests.SUBMITTING):
+            return f"{label} is already {req['status']} — no action needed."
+        return (f"{label} isn't ready for approval yet (it's {req['status']}). "
+                "I'll message you the moment the filled form is ready to check.")
+    if not fill_requests.approve(user_id, req["id"]):
+        return f"Couldn't approve {label} — check 'in flight' for its current state."
+    return (f"✅ Approved {label} — submitting now. I'll confirm when it's in, "
+            "and log it as Applied.")
+
+
+# How each fill state reads in the in-flight list.
+_FILL_STATE_LABELS = {
+    "pending": "⏳ queued for the worker",
+    "filling": "🤖 filling the form",
+    "preview": "👀 waiting on your approval",
+    "approved": "✅ approved — submitting",
+    "submitting": "📤 submitting",
+}
+
+
+def _do_apply_status(user_id: str) -> str:
+    """Everything in flight, in one glance — the phone-side answer to "where are
+    my applications right now?"."""
+    from . import apply_queue, fill_requests
+
+    active = fill_requests.list_active(user_id)
+    lines = []
+    for req in active:
+        state = _FILL_STATE_LABELS.get(req["status"], req["status"])
+        lines.append(f"• {fill_label(user_id, req)} — {state}")
+
+    staged = [it for it in apply_queue.list_queue(user_id)
+              if it.get("status") != "submitted"]
+    in_flight_ids = {r["posting_id"] for r in active}
+    waiting = [it for it in staged if it["posting_id"] not in in_flight_ids]
+
+    if not lines and not waiting:
+        return ("Nothing in flight. Text 'any new jobs' to see matches, then "
+                "'queue <#>' to prepare an application.")
+
+    out = []
+    if lines:
+        awaiting = sum(1 for r in active if r["status"] == "preview")
+        header = f"📋 In flight ({len(active)})"
+        out.append(header + ":")
+        out.extend(lines)
+        if awaiting:
+            out.append(f"\nReply 'approve' to send the {'one' if awaiting == 1 else 'first'} "
+                       "waiting on you, or 'cancel' to call it off.")
+    if waiting:
+        out.append(f"\n📥 Staged and ready to review at /apply: {len(waiting)}")
+    return "\n".join(out)
+
+
+# Words that hint at which kind of fact an un-categorised "remember …" is.
+_CATEGORY_HINTS = (
+    ("project", re.compile(r"\bi (?:built|made|created|wrote|shipped|designed)\b|"
+                           r"\bproject\b|\bapp\b|\bsystem\b", re.I)),
+    ("achievement", re.compile(r"\bi (?:led|won|grew|cut|reduced|improved|increased|"
+                               r"scaled|saved|launched)\b|\baward\b|\b\d+%", re.I)),
+    ("preference", re.compile(r"\bi (?:want|prefer|like|need|enjoy)\b|"
+                              r"\blooking for\b|\bideally\b", re.I)),
+)
+
+
+def _infer_category(text: str) -> str:
+    """Guess what kind of fact this is when the user didn't label it. Wrong guesses
+    are cheap — everything lands in the same grounding block either way."""
+    for category, rx in _CATEGORY_HINTS:
+        if rx.search(text):
+            return category
+    return "strength"
+
+
+def _do_remember(user_id: str, p: ParsedMessage) -> str:
+    """Store a durable fact about the user, so drafted answers get more specific
+    every time they tell it something."""
+    from . import knowledge
+
+    parts = (p.message or "").split("|", 2)
+    if parts[0] == "answer" and len(parts) == 3:
+        _, question, text = parts
+        if not knowledge.add(user_id, "answer", text, label=question):
+            return "I need both a question and an answer to save — try again?"
+        return (f"🧠 Saved your answer to “{question}”. I'll reuse it verbatim when "
+                "that question comes up — no redraft, no cost.")
+
+    category, text = (parts + [""])[:2] if len(parts) > 1 else ("", parts[0])
+    text = text.strip()
+    if not text:
+        return ("Tell me what to remember — e.g. \"remember project: I built a "
+                "real-time pricing service\" or \"remember I cut p99 latency 40%\".")
+    category = category or _infer_category(text)
+    if not knowledge.add(user_id, category, text):
+        return "I couldn't store that — try 'remember project: …'."
+    return (f"🧠 Got it ({category}). I'll use that when drafting your application "
+            "answers. Say 'what do you know about me' to see everything.")
+
+
+def _do_knowledge(user_id: str) -> str:
+    """What it knows, and what it still needs — the answer to "why are my drafted
+    answers generic?"."""
+    from . import knowledge
+
+    items = knowledge.list_all(user_id)
+    report = knowledge.audit(user_id)
+    lines = [f"🧠 What I know about you — identity {int(report['score'] * 100)}% complete."]
+
+    if items:
+        by_cat: dict[str, list[str]] = {}
+        for it in items:
+            label = f"“{it['label']}” → {it['text']}" if it["label"] else it["text"]
+            by_cat.setdefault(it["category"], []).append(label)
+        for category, texts in by_cat.items():
+            lines.append(f"\n{category.title()}s ({len(texts)}):")
+            lines += [f"  • {t[:110]}" for t in texts[:5]]
+            if len(texts) > 5:
+                lines.append(f"  …and {len(texts) - 5} more")
+    else:
+        lines.append("\nNothing stored yet — that's why drafted answers read generic.")
+
+    if report["identity_missing"]:
+        lines.append("\n📋 Missing details: " + ", ".join(report["identity_missing"][:8]))
+    for tip in report["suggestions"][:3]:
+        lines.append(f"  → {tip}")
+    return "\n".join(lines)
 
 
 def _do_tune(user_id: str, p: ParsedMessage) -> str:
