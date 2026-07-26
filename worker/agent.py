@@ -30,6 +30,15 @@ from app import fieldmatch
 
 MODEL = os.environ.get("AGENT_MODEL", "claude-opus-4-8")
 MAX_STEPS = int(os.environ.get("AGENT_MAX_STEPS", "40"))
+# Adaptive thinking spends this budget too, so it has to cover *thinking + the tool
+# call*, not just the call. At 1024 a single deliberative turn can be truncated before
+# the tool_use block is emitted, which is indistinguishable from the model declining
+# to act — see the stop_reason handling in run_agent.
+MAX_TOKENS = int(os.environ.get("AGENT_MAX_TOKENS", "4096"))
+# How many (snapshot → action → result) triples to keep in the conversation. Older
+# snapshots describe pages the agent has already moved past; re-sending every one of
+# them makes token cost grow with the square of the step count.
+KEEP_STEPS = int(os.environ.get("AGENT_KEEP_STEPS", "6"))
 
 # Page perception: every visible, interactive element across every frame, tagged
 # with a stable agent id (data-agent-id) so the agent can act on it afterward.
@@ -187,9 +196,14 @@ def act(page, frames, name: str, inp: dict, resume: dict | None,
     aid = inp.get("aid", "")
     label = label_of(aid) or ""
     # Belt-and-suspenders EEO guard: even if the agent is told not to, never let it
-    # fill a demographic field. fieldmatch.match_key returns None for those.
-    if name in ("fill", "choose") and label and fieldmatch.match_key(label) is None \
-            and _is_eeo(label):
+    # touch a demographic field.
+    # `click` is in the list because a gender option or a Yes/No built out of React
+    # buttons isn't a <select> — answering it through `click` rather than `choose`
+    # would otherwise walk straight past this check.
+    # Deliberately keyed on is_eeo() alone: match_key already returns None for every
+    # EEO label, so also requiring `match_key(...) is None` made the guard depend on
+    # the very function it exists to backstop.
+    if name in ("fill", "choose", "click") and label and _is_eeo(label):
         return "skipped: demographic/EEO field, left for the human", False, None
 
     fr = _frame_for(aid, frames)
@@ -293,8 +307,12 @@ def run_agent(page, job: dict, client) -> dict:
     questions = job.get("questions", [])
     resume = job.get("resume")
     system = [
+        # Cache the stable profile. Note Opus 4.8 won't cache a prefix under 4096
+        # tokens — a sparse knowledge store keeps this block below that, so the cache
+        # silently does nothing until the profile is substantial. It costs nothing to
+        # ask for; just don't read a run's cost as proof it's working.
         {"type": "text", "text": _SYSTEM + _profile_text(identity, questions),
-         "cache_control": {"type": "ephemeral"}},  # cache the stable profile
+         "cache_control": {"type": "ephemeral"}},
     ]
     page.goto(job["url"], wait_until="domcontentloaded", timeout=45000)
     page.wait_for_timeout(1500)
@@ -302,7 +320,10 @@ def run_agent(page, job: dict, client) -> dict:
     messages: list = []
     filled, skipped = [], []
     attempted: set = set()
-    outcome = {"status": "incomplete"}
+    # Only one path leaves this untouched: running the step budget out. Every other
+    # exit overwrites it, so it can state the exhaustion case up front.
+    outcome = {"status": "incomplete",
+               "reason": f"hit the {MAX_STEPS}-step limit without finishing the form"}
 
     for step in range(MAX_STEPS):
         elements, frames = snapshot(page)
@@ -327,14 +348,23 @@ def run_agent(page, job: dict, client) -> dict:
         )
         messages.append({"role": "user", "content": user_block})
         resp = client.messages.create(
-            model=MODEL, max_tokens=1024, system=system, tools=TOOLS,
+            model=MODEL, max_tokens=MAX_TOKENS, system=system, tools=TOOLS,
             tool_choice={"type": "auto", "disable_parallel_tool_use": True},
             thinking={"type": "adaptive"}, messages=messages,
         )
         messages.append({"role": "assistant", "content": resp.content})
         calls = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
         if not calls:
-            break   # the model didn't act — stop rather than spin
+            # No tool call. Three different things look identical here, and the
+            # preview is the only place a human finds out which: the model chose to
+            # stop, it ran out of token budget mid-thought (`max_tokens` — adaptive
+            # thinking spends the same budget), or it refused. Record which, instead
+            # of reporting a bare "incomplete" for all three.
+            stop = getattr(resp, "stop_reason", None)
+            outcome = {"status": "incomplete",
+                       "reason": f"model stopped without acting (stop_reason={stop})"}
+            print(f"[agent] step {step}: no action taken (stop_reason={stop})")
+            break
 
         tc = calls[0]
         result, done, out = act(page, frames, tc.name, tc.input or {}, resume,
@@ -348,13 +378,21 @@ def run_agent(page, job: dict, client) -> dict:
             skipped.append(labels.get(tc.input.get("aid", ""), ""))
         messages.append({"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": tc.id, "content": result}]})
+        # Each LLM step appends exactly three messages — snapshot, action, result — so
+        # the list is always a multiple of three here and trimming from the front drops
+        # whole triples. That matters: a tool_result whose matching tool_use has been
+        # trimmed away is a 400, not a smaller prompt.
+        if len(messages) > KEEP_STEPS * 3:
+            del messages[:len(messages) - KEEP_STEPS * 3]
         if done:
             outcome = out
             break
 
     preview = {"filled": filled, "skipped": [s for s in skipped if s][:20],
                "screenshot_url": _shot(page), "status": outcome.get("status")}
-    if outcome.get("status") == "blocked":
+    # `incomplete` carries a reason too — it's the status you get when the run ran out
+    # of steps or the model stopped early, and "why" is the whole diagnostic value.
+    if outcome.get("status") in ("blocked", "incomplete"):
         preview["reason"] = outcome.get("reason", "")
     if outcome.get("status") == "ready":
         preview["summary"] = outcome.get("summary", "")

@@ -143,6 +143,29 @@ explicit human approval moves a request to `approved` — tested, including appr
 early or as a different user. The filler handles native selects, ARIA comboboxes,
 and Yes/No radio groups, and logs one structured line per field.
 
+### F2. The LLM browser agent — `worker/agent.py` (`WORKER_AGENT=true`)
+The newest piece, and the one the rest of this doc predates. The hard-coded filler
+loses to iframes, multi-step "Apply → Next → Next" flows, and label variety. The agent
+is the **hybrid** answer: every step runs the free deterministic pass (`auto_fill`,
+the `fieldmatch` rules) first, and the model is consulted **only when that pass stops
+making progress** — clicking through steps, writing the free-text answers, picking
+Yes/No radios. A clean one-page form costs ~1–2 calls, not one per field.
+
+It perceives the page as a list of interactive elements tagged with stable ids
+(across every frame) and takes one action per step. The safety model is unchanged
+and enforced in code, not just the prompt: it **never submits** (it calls
+`ready_for_review` and hands off to the same human preview → approve gate), **never
+fills EEO/demographic fields** (`act()` refuses `fill`/`choose`/`click` on any label
+`fieldmatch.is_eeo` matches, whatever the model asked for), and calls `blocked` on a
+login wall or captcha so the job falls back to the desktop extension.
+
+Model is `AGENT_MODEL` (default `claude-opus-4-8`). Cost knobs: `AGENT_MAX_TOKENS`
+(per turn — adaptive thinking spends this too, so too low truncates a turn before it
+acts and the run reports `incomplete`), `AGENT_MAX_STEPS`, and `AGENT_KEEP_STEPS`
+(how many snapshot→action→result triples stay in the conversation; without a bound,
+token cost grows with the square of the step count). Covered by `tests/test_agent.py`
+with fakes — no browser, no API call.
+
 ---
 
 ## 3. Key endpoints
@@ -223,6 +246,12 @@ and Yes/No radio groups, and logs one structured line per field.
 `APPLY_API_TOKEN` ("") · `APPLY_CORS_ORIGINS` ("*") · SerpApi/Apollo gates ·
 `PUSH_ENABLED` (false) + `APNS_KEY_ID`/`APNS_TEAM_ID`/`APNS_BUNDLE_ID`/
 `APNS_KEY_PATH`/`APNS_USE_SANDBOX` (push is a no-op until all are set).
+
+**Worker-side** (read by `worker/`, a separate process — set them in the worker's
+own environment, not the app's): `BASE_URL` · `APPLY_API_TOKEN` (must match the main
+app's) · `WORKER_HEADLESS` (true) · `WORKER_AGENT` (false) · `AGENT_MODEL`
+(`claude-opus-4-8`) · `AGENT_MAX_TOKENS` (4096) · `AGENT_MAX_STEPS` (40) ·
+`AGENT_KEEP_STEPS` (6). All documented in `.env.example`.
 
 ---
 
