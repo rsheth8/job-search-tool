@@ -38,5 +38,10 @@ struct RootView: View {
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(3)
         }
+        // Set once on the shell rather than per tab: the accent has to reach the tab
+        // bar itself, and a tint applied inside a tab stops at that tab's content.
+        // Light/dark needs no switch here — Theme's colours resolve per trait
+        // collection, so the system setting is the toggle.
+        .tint(Theme.accentColor)
     }
 }

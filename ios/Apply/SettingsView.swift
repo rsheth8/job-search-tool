@@ -29,7 +29,7 @@ struct SettingsView: View {
                             Label("The server has no APNs key yet, so nothing will "
                                   + "arrive until that's configured.",
                                   systemImage: "exclamationmark.triangle")
-                                .font(.caption).foregroundStyle(.orange)
+                                .font(.caption).foregroundStyle(Theme.warnColor)
                         }
                     } else {
                         // Asked on demand, not at launch: a prompt before the app has

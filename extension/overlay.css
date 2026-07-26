@@ -1,9 +1,22 @@
+/* Chrome injected into *third-party* ATS pages (Greenhouse, Lever, Ashby…).
+ *
+ * Deliberately uses literal colours rather than the var(--accent) tokens the rest of
+ * the product shares: this stylesheet lands inside a page we don't control, and a
+ * host site that happens to define --accent on :root would silently repaint our UI.
+ * The values below are the same brand teal as app/theme.py, hardcoded on purpose —
+ * tests/test_theme_parity.py checks they still match.
+ *
+ * These also can't follow light/dark, for the same reason: the host page's background
+ * is arbitrary, so the controls carry their own high-contrast surface instead of
+ * inheriting one. Every rule is !important-free but heavily namespaced (.jaf-) to
+ * avoid fighting host styles. */
+
 .jaf-chip {
   position: absolute;
   z-index: 2147483647;
   font: 600 12px/1 -apple-system, Segoe UI, Roboto, sans-serif;
-  color: #fff;
-  background: #2563eb;
+  color: #06202A;
+  background: #2ED9D9;
   border: none;
   border-radius: 7px;
   padding: 6px 10px;
@@ -11,10 +24,12 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
   white-space: nowrap;
 }
-.jaf-chip:hover { background: #1d4ed8; }
+.jaf-chip:hover { background: #24BFBF; }
 
+/* Confirmation that a field was filled. Green rather than the brand teal so it reads
+   as "done" instead of "actionable" — the chip is the thing you click. */
 .jaf-filled {
-  outline: 2px solid #22c55e !important;
+  outline: 2px solid #1F8A4C !important;
   transition: outline 0.2s ease;
 }
 
@@ -25,15 +40,15 @@
   right: 18px;
   bottom: 18px;
   font: 600 13px/1 -apple-system, Segoe UI, Roboto, sans-serif;
-  color: #fff;
-  background: #2563eb;
+  color: #06202A;
+  background: #2ED9D9;
   border: none;
   border-radius: 999px;
   padding: 11px 16px;
   cursor: pointer;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
 }
-.jaf-fab:hover { background: #1d4ed8; }
+.jaf-fab:hover { background: #24BFBF; }
 
 .jaf-toast {
   position: fixed;
@@ -41,9 +56,9 @@
   right: 18px;
   bottom: 64px;
   font: 600 13px/1.3 -apple-system, Segoe UI, Roboto, sans-serif;
-  color: #fff;
-  background: #111827;
-  border: 1px solid #374151;
+  color: #E9EDF5;
+  background: #141924;
+  border: 1px solid #263041;
   border-radius: 10px;
   padding: 10px 14px;
   max-width: 280px;
