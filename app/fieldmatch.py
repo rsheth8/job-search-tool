@@ -24,7 +24,10 @@ FIELD_RULES: list[tuple[str, str]] = [
     # "Name (First)" is as common on ATS forms as "First name", so match both orders.
     ("first_name", r"first.?name|given.?name|legal first|name\s*\(?\s*first"),
     ("last_name", r"last.?name|family.?name|surname|name\s*\(?\s*last"),
-    ("full_name", r"full.?name|^\s*name\s*$|your name|legal name"),
+    # `your name` is anchored: unanchored it also claims "How do you pronounce your
+    # name?", which is a free-text question, not the name field. Seen on a live Ashby
+    # form, where it was answered "Ada Testrun".
+    ("full_name", r"full.?name|^\s*name\s*$|^\s*your name\b|legal name"),
     ("pronouns", r"pronouns"),
     # `tel` MUST stay word-bounded: unbounded, it matches "tell", so every
     # "Tell us about yourself" essay got a phone number typed into it. Caught on a
@@ -40,6 +43,8 @@ FIELD_RULES: list[tuple[str, str]] = [
     ("city", r"\bcity\b|town"),
     ("state", r"\bstate\b|province|region"),
     ("zip", r"\bzip\b|postal code|post.?code"),
+    ("work_authorized", r"authori[sz]ed to work|work authori[sz]ation|legally.{0,12}work|eligible to work|right to work"),
+    ("needs_sponsorship", r"sponsorship|require.{0,12}visa|visa.{0,12}status|immigration status"),
     ("country", r"\bcountry\b|nation"),
     ("school", r"school|university|college|institution|alma mater|where did you study"),
     ("degree", r"degree|qualification|level of (education|study)"),
@@ -64,8 +69,6 @@ FIELD_RULES: list[tuple[str, str]] = [
     ("willing_to_relocate", r"willing to relocate|open to relocat|able to relocate|"
                             r"would you relocate|relocation (required|assistance)|"
                             r"\brelocate\?"),
-    ("work_authorized", r"authori[sz]ed to work|work authori[sz]ation|legally.{0,12}work|eligible to work|right to work"),
-    ("needs_sponsorship", r"sponsorship|require.{0,12}visa|visa.{0,12}status|immigration status"),
 ]
 _COMPILED = [(key, re.compile(pat, re.I)) for key, pat in FIELD_RULES]
 

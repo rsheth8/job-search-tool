@@ -188,3 +188,33 @@ def test_free_text_questions_match_no_identity_key(question):
 ])
 def test_tightened_rules_still_match_their_real_fields(label, key):
     assert fieldmatch.match_key(label) == key
+
+
+# --- ordering: a specific question beats a generic geography rule --------------
+# Work-authorisation questions routinely name a country ("authorised to work in that
+# country"), and FIELD_RULES is first-match-wins. With `country` above them, a live
+# Ashby form's sponsorship question resolved to `country` and would have been answered
+# with the applicant's country instead of their work-authorisation status.
+@pytest.mark.parametrize("label,key", [
+    ("Are you legally authorized to work in that country without company sponsorship?",
+     "work_authorized"),
+    # Also mentions a country, but it is genuinely a sponsorship question.
+    ("Will you now or in the future require visa sponsorship to work in this country?",
+     "needs_sponsorship"),
+    # …while the plain geography fields still resolve to geography.
+    ("Country", "country"),
+    ("Country of residence", "country"),
+    ("Nation", "country"),
+])
+def test_eligibility_questions_beat_the_country_rule(label, key):
+    assert fieldmatch.match_key(label) == key
+
+
+def test_pronunciation_question_is_not_the_name_field():
+    """Seen on a live Ashby form: "How do you pronounce your name?" was filled with
+    the applicant's full name. It's a free-text question that happens to contain the
+    words "your name"."""
+    assert fieldmatch.match_key("How do you pronounce your name?") is None
+    # The actual name fields still match.
+    for label in ("Your name", "Full name", "Legal name", "Name"):
+        assert fieldmatch.match_key(label) == "full_name", label
