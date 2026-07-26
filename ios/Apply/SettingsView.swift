@@ -48,9 +48,17 @@ struct SettingsView: View {
                     }
                 }
                 Section {
-                    Text("Tap a match → it opens in an in-app browser. Hit **Autofill** to "
-                         + "fill your details and answers, attach your resume, solve any "
-                         + "captcha yourself, then submit on the site. Tap **I applied** to log it.")
+                    // One literal, joined with trailing backslashes rather than `+`.
+                    // Text only parses markdown from a *literal* (LocalizedStringKey);
+                    // concatenating with `+` produces a runtime String, which selects
+                    // the plain initializer and renders the asterisks verbatim —
+                    // "Hit **Autofill**" was showing on screen exactly like that.
+                    Text("""
+                         Tap a match → it opens in an in-app browser. Hit **Autofill** \
+                         to fill your details and answers, attach your resume, solve \
+                         any captcha yourself, then submit on the site. \
+                         Tap **I applied** to log it.
+                         """)
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
