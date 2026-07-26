@@ -79,7 +79,14 @@ Per-posting Slack actions: `apply N`, `queue N`, `dismiss N`, `snooze N for a we
 - **Personalized re-ranker** (`reranker.py`): pure-Python L2 logistic regression on
   *your* apply/dismiss/swipe labels. Features: relevance, kw_overlap, title_hit,
   loc_match, is_remote, first_party + **LLM-as-feature** (`fit_score`/`tech_overlap`/
-  `stretch` from the summarizer). `llm_fit` is the #1 signal (+0.06 AUC). Has a
+  `stretch` from the summarizer). `llm_fit` is the #1 signal (+0.06 AUC) — **but only
+  when `posting_summaries` is populated for the labelled postings.** Those judgements
+  live in a cache keyed by `source:external_id`, not by user, so they're easy to lose
+  in a move; when they're absent every LLM feature falls back to the same neutral
+  default, the three weights collapse to one near-zero value, and the model quietly
+  reverts to its without-`llm_fit` baseline of AUC 0.730. If `scripts.analyze_reranker`
+  shows `fit_score`/`tech_overlap`/`stretch` at identical small weights, that's the
+  symptom — check the cache, not the model. Has a
   **hold-out promotion guard** (won't replace a model with a worse one) and
   **outcome-graded labels** (an applied job that reached onsite/offer counts as a
   stronger positive than a bare "Applied"; reads the furthest stage from event history).
@@ -298,6 +305,16 @@ settings are `@lru_cache`d).
 
 - **`.env.example` keeps reverting** to a stale (shorter) version in the worktree
   working copy. **Always `git checkout origin/main -- .env.example` before committing.**
+- **Never put a live secret in `.env.example` — it's tracked.** A real Anthropic key
+  and `APPLY_API_TOKEN` were once pasted there as part of a worker run command; caught
+  before it was committed. Live values belong in `.env` (gitignored). Every worker and
+  agent variable is now documented in `.env.example` with empty values so there's no
+  reason to edit it.
+- **A restored brain can be quietly worse than it looks.** `posting_summaries` is
+  keyed by `source:external_id`, not `user_id`, so it wasn't part of the brain export
+  until 2026-07-26 — a restore brought the labels and the model across but dropped the
+  LLM judgements they depend on, costing ~0.06 AUC with no error anywhere. Fixed in
+  `usermerge.py`; re-export any `brain.db` made before that date.
 - **Run scripts on Fly from `/app`** (SSH lands in `/`): `cd /app && python -m scripts.X`.
 - **`scripts/` must stay OUT of `.dockerignore`** (it was excluded → operational
   scripts failed on Fly; fixed in PR #20 — don't re-add it).

@@ -77,11 +77,36 @@ fly ssh console -a job-search-tool \
   -C "sh -c 'cd /app && python -c \"from app import reranker; print(reranker.load_model(\\\"U07LVJVD4PL\\\"))\"'"
 ```
 
-Two gotchas, both of which have bitten before:
+> ⚠️ **A `brain.db` exported before 2026-07-26 is missing the LLM summary cache.**
+> `posting_summaries` has no `user_id` column, so the old export skipped it entirely
+> — and without it the re-ranker's strongest features (`fit_score`/`tech_overlap`/
+> `stretch`) all fall back to the same neutral default and stop contributing. Nothing
+> warns you: the label count and the saved model both restore perfectly, and the model
+> just quietly performs at its without-`llm_fit` baseline. Re-export before importing:
+>
+> ```bash
+> DATABASE_PATH=job_search.db python -m scripts.export_user local brain.db
+> ```
+>
+> The export now reports a `posting_summaries` row count. If it doesn't appear, the
+> source DB has no cached judgements and importing won't restore them.
+
+Three gotchas, all of which have bitten before:
 
 - **SSH lands in `/`, not `/app`.** Every `python -m scripts.X` has to `cd /app` first.
 - **`scripts/` must stay out of `.dockerignore`.** It was excluded once and every
   operational script silently vanished from the image. Fixed in PR #20 — don't re-add.
+- **Verify the brain by its *weights*, not its label count.** A label count of 257
+  proves the rows landed, not that the model has anything to learn from:
+
+  ```bash
+  fly ssh console -a job-search-tool \
+    -C "sh -c 'cd /app && python -m scripts.analyze_reranker U07LVJVD4PL'"
+  ```
+
+  `fit_score`, `tech_overlap` and `stretch` sitting at identical near-zero weights
+  means the summary cache didn't come across. A healthy restore puts `fit_score` at
+  or near the top and lands well above AUC 0.730.
 
 What `brain.db` does **not** carry back: applications you logged through Slack against
 the old prod DB, knowledge-store entries, and push device tokens. Those were only ever

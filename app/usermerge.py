@@ -36,6 +36,27 @@ BRAIN_TABLES = (
     "reranker_models",      # the trained model itself
 )
 
+# `posting_summaries` belongs to the brain too, but can't live in BRAIN_TABLES: it is
+# keyed by cache_key ("{source}:{external_id}") and has no user_id column, so the
+# `WHERE user_id = ?` copy the tables above use doesn't apply to it. It was left out
+# entirely for that reason, and that silently cost real accuracy.
+#
+# It holds the LLM judgements (fit_score / tech_overlap / stretch) that the re-ranker
+# consumes. Leave it behind and every one of those features falls back to its neutral
+# default on the destination, identically for every row — so the model can't learn
+# anything from them, and the three weights collapse to the same near-zero value.
+# Observed on a real restore: the re-ranker dropped to AUC 0.730, exactly its measured
+# without-llm_fit baseline, silently losing the ~0.06 that those features were worth.
+# Nothing warned; label count and the saved model both restored fine.
+#
+# So it's carried explicitly, scoped to the cache keys the exported user's own rows
+# refer to (postings and labels both, since a label can outlive its posting row).
+_SUMMARY_KEYS_SQL = """
+    SELECT source || ':' || external_id FROM main.job_postings    WHERE user_id = ?
+    UNION
+    SELECT source || ':' || external_id FROM main.training_labels WHERE user_id = ?
+"""
+
 
 def user_tables(conn: sqlite3.Connection) -> list[str]:
     """Every table that has a ``user_id`` column."""
@@ -128,6 +149,15 @@ def export_user(user_id: str, out_path: str, *, tables=BRAIN_TABLES,
                 )
                 if cur.rowcount:
                     counts[t] = cur.rowcount
+            # The LLM-judgement cache, matched by cache_key rather than user_id.
+            cur = conn.execute(
+                f"INSERT INTO exp.posting_summaries (cache_key, summary_json, created_at) "
+                f"SELECT cache_key, summary_json, created_at FROM main.posting_summaries "
+                f"WHERE cache_key IN ({_SUMMARY_KEYS_SQL})",
+                (user_id, user_id),
+            )
+            if cur.rowcount:
+                counts["posting_summaries"] = cur.rowcount
         finally:
             conn.commit()  # release the write txn before detaching
             conn.execute("DETACH DATABASE exp")
@@ -170,6 +200,21 @@ def import_user(in_path: str, dst_user_id: str, *, tables=BRAIN_TABLES,
                 ).fetchone()[0]
                 if after - before:
                     added[t] = after - before
+            # Summaries are a global cache keyed by cache_key, so there's no user to
+            # repoint — take everything the file carries. INSERT OR IGNORE on the
+            # cache_key primary key means an entry the destination already has wins,
+            # and an older export can't stomp a fresher local summary.
+            before = conn.execute(
+                "SELECT COUNT(*) FROM main.posting_summaries").fetchone()[0]
+            conn.execute(
+                "INSERT OR IGNORE INTO main.posting_summaries "
+                "(cache_key, summary_json, created_at) "
+                "SELECT cache_key, summary_json, created_at FROM imp.posting_summaries"
+            )
+            after = conn.execute(
+                "SELECT COUNT(*) FROM main.posting_summaries").fetchone()[0]
+            if after - before:
+                added["posting_summaries"] = after - before
         finally:
             conn.commit()  # release the write txn before detaching
             conn.execute("DETACH DATABASE imp")
