@@ -8,7 +8,8 @@ browser coverage without Xcode, a simulator, or a device in the loop.
 This exists because the mobile engine was the least-tested and most-drifted copy of
 the field-matching brain: it shipped a narrower EEO list than the backend, so the
 phone would fill demographic questions the worker refuses. These tests pin the
-behaviour that matters — it fills what it should, and **never fills EEO fields** —
+behaviour that matters — it fills what it should, fills optional demographics
+only when identity has them, and **never fills hard-blocked EEO fields** —
 against the rules the backend actually serves.
 
 Skips cleanly where Playwright/Chromium isn't installed.
@@ -29,6 +30,7 @@ pytest.importorskip("playwright", reason="browser tests need the playwright pack
 from playwright.sync_api import Error as PlaywrightError  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
+from tests.browserutil import skip_unless_ci_chromium  # noqa: E402
 from app import fieldmatch  # noqa: E402
 
 FORMS_DIR = Path(__file__).parent / "fixtures" / "forms"
@@ -41,9 +43,10 @@ IDENTITY = {
     "linkedin": "https://linkedin.com/in/rahil", "github": "https://github.com/rahil",
     "school": "State University", "current_company": "Acme Corp",
     "work_authorized": "Yes", "needs_sponsorship": "No",
-    # values for the fields the *old* bundled rules would have filled — present so a
-    # regression would actually be visible rather than silently absent
+    # values for optional EEO — filled when set; hard-blocked fields stay empty
     "gender": "Male", "race": "Asian",
+    "veteran_status": "I am not a protected veteran",
+    "disability_status": "No, I do not have a disability",
 }
 
 ANSWERS = [{"question": "Why do you want to work at Acme?",
@@ -87,7 +90,7 @@ def browser():
             yield b
             b.close()
     except PlaywrightError as e:
-        pytest.skip(f"chromium unavailable: {e}")
+        skip_unless_ci_chromium(e)
 
 
 @pytest.fixture(scope="module")
@@ -147,9 +150,26 @@ def test_answers_the_yes_no_radio_group(browser, server, lib):
         page.close()
 
 
+def test_clicks_ashby_style_yes_no_buttons(browser, server, lib):
+    """Common Room / Ashby render work-auth as two big Yes/No buttons, not radios.
+    US auth follows identity; Canada must NOT inherit a US Yes; sponsorship = No."""
+    page = run_autofill(browser, server, lib, "ashby_yesno_buttons.html")
+    try:
+        us = page.locator('[data-field="us_auth"]')
+        ca = page.locator('[data-field="ca_auth"]')
+        sp = page.locator('[data-field="sponsor"]')
+        assert us.locator('button[aria-pressed="true"]').inner_text() == "Yes"
+        assert ca.locator('button[aria-pressed="true"]').inner_text() == "No"
+        assert sp.locator('button[aria-pressed="true"]').inner_text() == "No"
+        assert page.input_value("#linkedin") == "https://linkedin.com/in/rahil"
+    finally:
+        page.close()
+
+
 def test_never_submits_the_form(browser, server, lib):
     """Autofill fills; the human submits. Same promise as the worker."""
-    for fixture in ("greenhouse_basic.html", "custom_dropdown.html", "eeo_present.html"):
+    for fixture in ("greenhouse_basic.html", "custom_dropdown.html", "eeo_present.html",
+                    "ashby_yesno_buttons.html"):
         page = run_autofill(browser, server, lib, fixture)
         try:
             assert "SUBMITTED" not in page.content()
@@ -159,30 +179,52 @@ def test_never_submits_the_form(browser, server, lib):
 
 # --- the invariant that was actually broken ---------------------------------
 
-def test_never_fills_eeo_fields_with_served_rules(browser, server, lib):
+def test_fills_optional_eeo_when_identity_has_values(browser, server, lib):
     page = run_autofill(browser, server, lib, "eeo_present.html")
     try:
-        assert page.input_value("#first_name") == "Rahil"     # ordinary fields still fill
+        assert page.input_value("#first_name") == "Rahil"
         assert page.input_value("#email") == "rahil@example.com"
-        for field in ("#gender", "#race", "#veteran", "#hispanic",
-                      "#disability", "#orientation"):
-            assert page.input_value(field) == "", f"{field} was auto-filled"
+        assert page.input_value("#gender") == "Male"
+        assert page.input_value("#race") == "Asian"
+        assert page.input_value("#veteran") == "I am not a protected veteran"
+        assert page.input_value("#disability") == "No, I do not have a disability"
+        # hard-blocked stay empty
+        assert page.input_value("#hispanic") == ""
+        assert page.input_value("#orientation") == ""
         assert not page.is_checked("input[name='gender_identity'][value='Yes']")
         assert not page.is_checked("input[name='gender_identity'][value='No']")
     finally:
         page.close()
 
 
-def test_never_fills_eeo_fields_on_the_bundled_fallback_either(browser, server, lib):
-    """Offline, the engine falls back to the copy baked into Autofill.swift. That
-    copy is generated from fieldmatch.py — if someone regenerates it carelessly, or
-    hand-edits it, this catches the EEO regression the served path would hide."""
+def test_optional_eeo_fills_on_bundled_fallback_too(browser, server, lib):
+    """Offline fallback must match served rules for opt-in demographics."""
     page = run_autofill(browser, server, lib, "eeo_present.html", serve_rules=False)
     try:
-        assert page.input_value("#first_name") == "Rahil"     # fallback still works
-        for field in ("#gender", "#race", "#veteran", "#hispanic",
-                      "#disability", "#orientation"):
-            assert page.input_value(field) == "", f"{field} filled by bundled rules"
+        assert page.input_value("#first_name") == "Rahil"
+        assert page.input_value("#gender") == "Male"
+        assert page.input_value("#race") == "Asian"
+        assert page.input_value("#hispanic") == ""
+        assert page.input_value("#orientation") == ""
+    finally:
+        page.close()
+
+
+def test_skips_optional_eeo_when_identity_has_no_value(browser, server, lib):
+    page = browser.new_page()
+    try:
+        bare = {k: v for k, v in IDENTITY.items()
+                if k not in ("gender", "race", "veteran_status", "disability_status")}
+        payload = {"identity": bare, "answers": ANSWERS,
+                   "rules": fieldmatch.rules_payload()}
+        page.add_init_script(f"window.__APPLY = {json.dumps(payload)};")
+        page.goto(f"{server}/eeo_present.html")
+        page.evaluate(lib)
+        page.evaluate("window.__applyAutofill()")
+        assert page.input_value("#email") == "rahil@example.com"
+        for field in ("#gender", "#race", "#veteran", "#disability",
+                      "#hispanic", "#orientation"):
+            assert page.input_value(field) == "", f"{field} was auto-filled"
     finally:
         page.close()
 
@@ -222,12 +264,28 @@ def test_falls_back_cleanly_on_a_malformed_rules_payload(browser, server, lib):
         page.evaluate(lib)
         page.evaluate("window.__applyAutofill()")
         assert page.input_value("#email") == "rahil@example.com"   # bundled rules ran
-        assert page.input_value("#gender") == ""                   # and stayed safe
+        # malformed never_fill was "gender", but fallback uses real rules — optional
+        # gender fills when identity has it; hard-blocked stay empty
+        assert page.input_value("#gender") == "Male"
+        assert page.input_value("#orientation") == ""
     finally:
         page.close()
 
 
 # --- the bundled copy must not drift again ----------------------------------
+
+def test_field_label_prefers_visible_text_over_name_and_id(browser, server, lib):
+    """Same contract as the extension: a <label for> of "Gender" must stay "gender",
+    not "gender gender gender" from name/id — or the anchored rule never fires."""
+    page = run_autofill(browser, server, lib, "eeo_present.html")
+    try:
+        gender = page.evaluate("window.__applyFieldLabel(document.getElementById('gender'))")
+        assert gender == "gender", gender
+        email = page.evaluate("window.__applyFieldLabel(document.getElementById('email'))")
+        assert email == "email", email
+    finally:
+        page.close()
+
 
 def test_the_bundled_fallback_matches_the_python_rules():
     """The comment in Autofill.swift claims the fallback is generated from

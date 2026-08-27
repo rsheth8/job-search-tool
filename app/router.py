@@ -1120,6 +1120,10 @@ class AnthropicRouter:
         if not self._limiter.allow():
             self.usage["fallbacks"] += 1
             return self._fallback.parse_actions(text)
+        from . import llm_budget
+        if not llm_budget.consume():
+            self.usage["fallbacks"] += 1
+            return self._fallback.parse_actions(text)
 
         try:
             resp = self._client.messages.create(

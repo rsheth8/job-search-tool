@@ -1,0 +1,89 @@
+[
+  {
+    "id": "fresh-lever-1",
+    "company_name": "Voltus",
+    "title": "Energy Markets Intern",
+    "url": "https://jobs.lever.co/voltus/b7833dd8-d742-44d8-aae2-2e7de7541ce4/apply",
+    "locations": ["Remote in USA", "Remote in Canada"],
+    "category": "Quant",
+    "terms": ["Summer 2027"],
+    "active": true,
+    "is_visible": true,
+    "date_posted": 1787529600,
+    "date_updated": 1787529600,
+    "sponsorship": "Other",
+    "degrees": ["Bachelor's"]
+  },
+  {
+    "id": "fresh-greenhouse-1",
+    "company_name": "Astranis",
+    "title": "Software Engineering Intern",
+    "url": "https://job-boards.greenhouse.io/astranis/jobs/4601134006",
+    "locations": ["San Francisco, CA"],
+    "category": "Software",
+    "terms": ["Summer 2027"],
+    "active": true,
+    "is_visible": true,
+    "date_posted": 1787356800,
+    "date_updated": 1787356800,
+    "sponsorship": "Does not offer sponsorship",
+    "degrees": []
+  },
+  {
+    "id": "proxy-internshiplist",
+    "company_name": "Geotab",
+    "title": "Data Analysis Intern",
+    "url": "https://job-boards.greenhouse.io/internshiplist2000/jobs/5032629008",
+    "locations": ["Toronto, ON, Canada"],
+    "category": "AI/ML/Data",
+    "terms": ["Summer 2027"],
+    "active": true,
+    "is_visible": true,
+    "date_posted": 1787097600,
+    "date_updated": 1787097600,
+    "sponsorship": "Other",
+    "degrees": []
+  },
+  {
+    "id": "inactive-old",
+    "company_name": "State Street",
+    "title": "Closed Data Scientist Intern",
+    "url": "https://statestreet.wd1.myworkdayjobs.com/Global/job/x",
+    "locations": ["Quincy, MA"],
+    "category": "AI/ML/Data",
+    "active": false,
+    "is_visible": true,
+    "date_posted": 1787529600,
+    "date_updated": 1787529600
+  },
+  {
+    "id": "hidden-row",
+    "company_name": "Hidden Co",
+    "title": "Hidden Intern",
+    "url": "https://jobs.lever.co/hidden/abc",
+    "locations": ["NYC"],
+    "active": true,
+    "is_visible": false,
+    "date_posted": 1787529600
+  },
+  {
+    "id": "stale-but-active",
+    "company_name": "OldCo",
+    "title": "Ancient Intern",
+    "url": "https://jobs.lever.co/oldco/abc",
+    "locations": ["Remote"],
+    "active": true,
+    "is_visible": true,
+    "date_posted": 1784332800,
+    "date_updated": 1784332800
+  },
+  {
+    "id": "no-url",
+    "company_name": "NoLink Inc",
+    "title": "Intern Without Link",
+    "url": "",
+    "active": true,
+    "is_visible": true,
+    "date_posted": 1787529600
+  }
+]

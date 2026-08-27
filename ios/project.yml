@@ -25,17 +25,15 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
-        # Let the in-app browser load any job site (http or https).
         NSAppTransportSecurity:
           NSAllowsArbitraryLoadsInWebContent: true
-    entitlements:
-      path: Apply/Apply.entitlements
-      properties:
-        # Push notifications. "development" matches a debug build talking to the
-        # APNs sandbox host; switch to "production" for TestFlight/App Store and
-        # set APNS_USE_SANDBOX=false on the backend to match.
-        aps-environment: development
+        SentryDSN: ""
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.rahil.apply
         GENERATE_INFOPLIST_FILE: NO
+      configs:
+        Debug:
+          CODE_SIGN_ENTITLEMENTS: Apply/Apply.entitlements
+        Release:
+          CODE_SIGN_ENTITLEMENTS: Apply/ApplyRelease.entitlements

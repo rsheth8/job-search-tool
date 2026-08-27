@@ -1,0 +1,33 @@
+<!doctype html>
+<!-- Two-step application: page 1 identity → Next → page 2 extra → Submit.
+     Autopilot must advance once and stop before Submit. -->
+<html>
+<head><meta charset="utf-8"><title>Two-step apply</title></head>
+<body>
+  <form id="step1">
+    <h2>Step 1</h2>
+    <label for="email">Email<input type="email" id="email" name="email"></label>
+    <label for="first">First name<input type="text" id="first" name="first"></label>
+    <label for="last">Last name<input type="text" id="last" name="last"></label>
+    <button type="button" id="next">Next</button>
+  </form>
+
+  <form id="step2" style="display:none">
+    <h2>Step 2</h2>
+    <label for="phone">Phone<input type="tel" id="phone" name="phone"></label>
+    <label for="linkedin">LinkedIn<input type="url" id="linkedin" name="linkedin"></label>
+    <button type="submit" id="submit">Submit application</button>
+  </form>
+
+  <script>
+    document.getElementById('next').addEventListener('click', function () {
+      document.getElementById('step1').style.display = 'none';
+      document.getElementById('step2').style.display = 'block';
+    });
+    document.getElementById('step2').addEventListener('submit', function (e) {
+      e.preventDefault();
+      document.body.setAttribute('data-submitted', '1');
+    });
+  </script>
+</body>
+</html>

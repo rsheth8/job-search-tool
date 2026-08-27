@@ -99,9 +99,9 @@ def test_schedule_falls_back_when_time_unparseable():
 
 # --- sender selection -------------------------------------------------------
 
-def test_get_sender_defaults_to_logsender():
-    # conftest leaves Twilio creds unset → outbound disabled.
-    assert isinstance(reminders.get_sender(), reminders.LogSender)
+def test_get_sender_defaults_to_app_sender():
+    # conftest leaves Twilio/Slack unset → in-app chat + push.
+    assert isinstance(reminders.get_sender(), reminders.AppSender)
 
 
 def test_get_sender_picks_twilio_when_configured(monkeypatch):
@@ -114,14 +114,14 @@ def test_get_sender_picks_twilio_when_configured(monkeypatch):
     assert isinstance(reminders.get_sender(), reminders.TwilioSender)
 
 
-def test_partial_twilio_config_stays_on_logsender(monkeypatch):
+def test_partial_twilio_config_stays_on_app_sender(monkeypatch):
     # SID + token but no from-number → not enough to send.
     monkeypatch.setenv("TWILIO_ACCOUNT_SID", "ACfake")
     monkeypatch.setenv("TWILIO_AUTH_TOKEN", "faketoken")
     config.get_settings.cache_clear()
     reminders._sender_singleton = None
     assert config.get_settings().outbound_sms_enabled is False
-    assert isinstance(reminders.get_sender(), reminders.LogSender)
+    assert isinstance(reminders.get_sender(), reminders.AppSender)
 
 
 def test_remind_intent_creates_pending_reminder():

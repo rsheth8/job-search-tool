@@ -25,17 +25,30 @@ def test_match_key(label, key):
     assert fieldmatch.match_key(label) == key
 
 
+@pytest.mark.parametrize("label,key", [
+    ("Gender", "gender"),
+    ("Race / Ethnicity", "race"),
+    ("Are you a protected veteran?", "veteran_status"),
+    ("Disability status", "disability_status"),
+])
+def test_optional_eeo_maps_when_identity_can_fill(label, key):
+    """Gender/race/veteran/disability are opt-in via FIELD_RULES (fill only when set)."""
+    assert fieldmatch.match_key(label) == key
+    assert not fieldmatch.is_eeo(label)
+
+
 @pytest.mark.parametrize("label", [
-    "Gender", "Race / Ethnicity", "Are you a protected veteran?",
-    "Disability status", "Sexual orientation",
-    # broadened: a missed one answers a protected-class question for the user
+    "Sexual orientation",
+    # hard-blocked: a missed one answers a protected-class question for the user
     "National origin", "Voluntary Self-Identification", "EEO information",
     "Equal Employment Opportunity", "Marital status", "Religion",
     "Do you identify as LGBTQ+?", "Date of birth", "DOB",
-    "Citizenship status",
+    "Citizenship status", "Are you Hispanic or Latino?",
+    "Do you identify as transgender?", "Gender identity",
 ])
-def test_never_fills_demographic_fields(label):
+def test_never_fills_hard_blocked_demographic_fields(label):
     assert fieldmatch.match_key(label) is None
+    assert fieldmatch.is_eeo(label)
 
 
 @pytest.mark.parametrize("label,key", [
@@ -89,16 +102,17 @@ def test_is_essay_label():
 
 
 @pytest.mark.parametrize("label", [
-    "Gender", "Race / Ethnicity", "Are you a protected veteran?",
-    "Disability status", "Sexual orientation", "Do you identify as transgender?",
+    "Sexual orientation", "Do you identify as transgender?",
+    "Are you Hispanic or Latino?", "Religion", "Date of birth",
 ])
-def test_is_eeo(label):
+def test_is_eeo_hard_blocked(label):
     assert fieldmatch.is_eeo(label)
 
 
-def test_is_eeo_leaves_ordinary_fields_alone():
+def test_is_eeo_leaves_ordinary_and_optional_demographics_alone():
     assert not fieldmatch.is_eeo("First name")
     assert not fieldmatch.is_eeo("Why do you want to work here?")
+    assert not fieldmatch.is_eeo("Gender")
     assert not fieldmatch.is_eeo("")
 
 
@@ -123,8 +137,12 @@ def test_option_for_resolves_key_and_option():
 def test_option_for_reports_why_it_could_not_decide():
     # unknown label -> no key at all
     assert fieldmatch.option_for("Favorite color", ["Red"], {}) == (None, None)
-    # EEO never resolves, even with options present
-    assert fieldmatch.option_for("Gender", ["Male", "Female"], {"gender": "x"}) == (None, None)
+    # optional EEO resolves the key; no matching option -> (key, None)
+    assert fieldmatch.option_for("Gender", ["Male", "Female"], {"gender": "x"}) == (
+        "gender", None)
+    # hard-blocked EEO never resolves, even with options present
+    assert fieldmatch.option_for("Sexual orientation", ["Gay", "Straight"],
+                                 {"orientation": "x"}) == (None, None)
     # understood label, but nothing to say / nothing that matches -> (key, None)
     assert fieldmatch.option_for("Country", ["Canada"], {}) == ("country", None)
     assert fieldmatch.option_for("Country", ["Canada"],

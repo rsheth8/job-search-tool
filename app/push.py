@@ -194,6 +194,16 @@ def notify_preview_ready(user_id: str, label: str, filled: int, skipped: int) ->
     )
 
 
+def notify_needs_human(user_id: str, reason: str) -> int:
+    """Autopilot hit a captcha/login — solve it, then it can continue."""
+    body = (reason or "Something needs you on the form").strip()
+    return send(
+        user_id, "Autopilot needs you",
+        f"{body}. Clear it, then sit back — or finish manually.",
+        data={"kind": "needs_human", "reason": body},
+    )
+
+
 def notify_new_matches(user_id: str, count: int, top: str | None = None) -> int:
     """New job matches landed."""
     if count <= 0:

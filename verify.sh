@@ -17,22 +17,22 @@ git --no-pager log --oneline -8 | sed 's/^/  /'
 echo "${DIM}  working tree:${OFF}"
 git status --short | sed 's/^/  /' || true
 
-# The browser-driven tests (worker fill, iOS autofill, Python/JS rule parity) each
-# launch Chromium and dominate the runtime. --fast skips them here and section ③
-# runs them on their own, so the quick check stays quick.
-BROWSER_TESTS="tests/test_worker_fill.py tests/test_ios_autofill.py tests/test_rules_parity.py"
+# The browser-driven tests (worker fill, iOS/extension autofill, Python/JS rule
+# parity) each launch Chromium and dominate the runtime. --fast skips them here
+# and section ③ runs them on their own, so the quick check stays quick.
+BROWSER_TESTS="tests/test_worker_fill.py tests/test_ios_autofill.py tests/test_extension_autofill.py tests/test_rules_parity.py"
 SKIP=""
 [ "${1:-}" = "--fast" ] && for f in $BROWSER_TESTS; do SKIP="$SKIP --ignore=$f"; done
 
-hdr "② Test suite (must stay green — baseline 761 passed)"
+hdr "② Test suite (must stay green — browser trio + extension DOM fill)"
 if "$VP" -m pytest -q $SKIP 2>&1 | tail -12 | sed 's/^/  /'; then
   ok "pytest exited clean"
-  [ -n "$SKIP" ] && echo "${DIM}  (browser tests skipped by --fast; run without it for all 761)${OFF}"
+  [ -n "$SKIP" ] && echo "${DIM}  (browser tests skipped by --fast; run without it for Chromium coverage)${OFF}"
 else
   bad "pytest FAILED — read the tail above before trusting anything else"
 fi
 
-hdr "③ Browser-driven safety tests (worker fill · iOS autofill · rule parity)"
+hdr "③ Browser-driven safety tests (worker · iOS · extension · rule parity)"
 if ls tests/test_worker_fill.py >/dev/null 2>&1; then
   if [ "${1:-}" = "--fast" ]; then
     echo "${YEL}  skipped (--fast) — these are the ones that prove nothing auto-submits${OFF}"

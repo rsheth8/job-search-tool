@@ -14,7 +14,7 @@ Two things are checked:
    `fieldmatch.match_key` returns, and JS agrees on which labels are EEO.
 
 Run in headless Chromium, so "valid JavaScript regex" means a real engine's opinion,
-not a guess. Skips cleanly where Playwright/Chromium isn't installed.
+not a guess. Local machines without Chromium skip; CI must run these.
 """
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ pytest.importorskip("playwright", reason="parity test needs the playwright packa
 from playwright.sync_api import Error as PlaywrightError  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
+from tests.browserutil import skip_unless_ci_chromium  # noqa: E402
 from app import fieldmatch  # noqa: E402
 
 # Labels drawn from real forms, spanning every rule plus the traps: EEO fields that
@@ -46,14 +47,17 @@ LABELS = [
     "Current salary", "Start date", "When could you start?", "Notice period",
     "Are you willing to relocate?", "Are you authorized to work in the US?",
     "Will you require visa sponsorship?",
-    # EEO — every one of these must resolve to no key, in both engines
+    "How did you hear about us?",
+    # Optional demographics — map to keys (fill only when identity has a value)
     "Gender", "Race / Ethnicity", "Are you a protected veteran?",
-    "Disability status", "Sexual orientation", "National origin",
+    "Disability status",
+    # Hard-blocked EEO — every one of these must resolve to no key, in both engines
+    "Sexual orientation", "National origin",
     "Voluntary Self-Identification", "EEO information", "Marital status",
     "Religion", "Do you identify as LGBTQ+?", "Date of birth", "DOB",
     "Citizenship status", "Are you Hispanic or Latino?",
     # near-misses that should match nothing
-    "Favorite color", "How did you hear about us?", "Referral code", "",
+    "Favorite color", "Referral code", "",
 ]
 
 # A tiny JS port of match_key/is_eeo built from the *served* rules. This is the
@@ -92,7 +96,7 @@ def js_matcher():
             yield run
             browser.close()
     except PlaywrightError as e:
-        pytest.skip(f"chromium unavailable: {e}")
+        skip_unless_ci_chromium(e)
 
 
 def test_every_pattern_compiles_as_javascript(js_matcher):
@@ -112,10 +116,9 @@ def test_python_and_javascript_agree_on_every_label(js_matcher):
     assert not mismatches, f"python/js disagree: {mismatches}"
 
 
-def test_both_engines_refuse_the_same_eeo_labels(js_matcher):
+def test_both_engines_refuse_the_same_hard_blocked_eeo_labels(js_matcher):
     eeo_labels = [
-        "Gender", "Race / Ethnicity", "Are you a protected veteran?",
-        "Disability status", "Sexual orientation", "National origin",
+        "Sexual orientation", "National origin",
         "Voluntary Self-Identification", "EEO information", "Marital status",
         "Religion", "Do you identify as LGBTQ+?", "Date of birth", "DOB",
         "Citizenship status", "Are you Hispanic or Latino?",
@@ -124,6 +127,14 @@ def test_both_engines_refuse_the_same_eeo_labels(js_matcher):
         assert r["eeo"] is True, f"JS would fill the EEO field {r['label']!r}"
         assert r["key"] is None
         assert fieldmatch.is_eeo(r["label"])
+
+
+def test_optional_demographics_are_not_hard_blocked(js_matcher):
+    for r in js_matcher(["Gender", "Race / Ethnicity",
+                         "Are you a protected veteran?", "Disability status"]):
+        assert r["eeo"] is False, f"{r['label']!r} wrongly hard-blocked"
+        assert r["key"] is not None
+        assert not fieldmatch.is_eeo(r["label"])
 
 
 def test_ordinary_fields_are_not_swept_up_as_eeo(js_matcher):
@@ -183,6 +194,20 @@ def test_client_fallback_rules_match_python(relpath, eeo_const):
     assert m, f"no {eeo_const} in {relpath}"
     assert m.group(1) == payload["never_fill"], (
         f"{relpath} EEO list has drifted from app/fieldmatch.py — regenerate it")
+
+
+@pytest.mark.parametrize("relpath", [c[0] for c in CLIENTS])
+def test_clients_do_not_staple_nameid_onto_a_visible_label(relpath):
+    """fieldLabel must keep the visible label separate from name/id. Unconditionally
+    appending them turns "Gender" into "gender gender gender" and the anchored
+    gender/sex rule matches nothing — the bug that left #gender empty on iOS."""
+    import pathlib
+
+    source = (pathlib.Path(__file__).resolve().parents[1] / relpath).read_text()
+    assert "name/id is last-resort only" in source, (
+        f"{relpath} lost the fieldLabel contract comment")
+    assert 'bits.push(el.name || "", el.id || "")' not in source, (
+        f"{relpath} still staples name/id onto every visible label")
 
 
 @pytest.mark.parametrize("relpath", [c[0] for c in CLIENTS])

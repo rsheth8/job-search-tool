@@ -24,11 +24,19 @@ struct QueueItem: Codable, Identifiable, Hashable {
     /// sniff the URL host. (The live deploy may not send `auto_fillable` yet.)
     var isFirstParty: Bool {
         if let f = auto_fillable { return f }
-        let host = (url.flatMap { URL(string: $0) }?.host ?? "").lowercased()
+        return Self.looksLikeATS(url)
+    }
+
+    /// Sniff a URL (posting link *or* the page after redirects) for a known ATS host.
+    /// Careers pages often redirect `careers.company.com` → `job-boards.greenhouse.io`,
+    /// so the live WebView URL is more trustworthy than the stored posting URL.
+    static func looksLikeATS(_ urlString: String?) -> Bool {
+        let raw = urlString ?? ""
+        let host = (URL(string: raw)?.host ?? "").lowercased()
         let atsHosts = ["greenhouse.io", "lever.co", "ashbyhq.com"]
         if atsHosts.contains(where: { host == $0 || host.hasSuffix("." + $0) }) { return true }
         // Greenhouse on a custom domain still carries a gh_jid query param.
-        if (url ?? "").contains("gh_jid=") { return true }
+        if raw.contains("gh_jid=") { return true }
         return false
     }
 }
@@ -94,6 +102,14 @@ struct RulesPayload: Codable, Equatable {
     let never_fill: String       // labels never auto-filled (EEO / demographic)
     let flags: String?
     let version: String?
+    /// Optional probe patterns from the backend; ignored by older app builds.
+    let formprobe: FormProbePayload?
+}
+
+struct FormProbePayload: Codable, Equatable {
+    let version: String?
+    let advance: String?
+    let submit: String?
 }
 
 /// One tailored question + drafted answer.
@@ -110,4 +126,40 @@ struct Package: Codable {
     let title: String?
     let questions: [Question]?
     let identity: [String: String]?   // applicant.autofill_map — label-fillable facts
+}
+
+// MARK: - Auth + chat
+
+struct AuthUser: Codable {
+    let id: String
+    let email: String?
+    let display_name: String?
+}
+
+struct AuthSession: Codable {
+    let token: String
+    let user: AuthUser
+}
+
+struct ChatMessage: Codable, Identifiable, Hashable {
+    let id: Int
+    let role: String
+    let body: String
+    let created_at: String?
+}
+
+struct ChatSendResult: Codable {
+    let reply: String
+    let user_message: ChatMessage?
+    let assistant_message: ChatMessage?
+}
+
+struct SetupStatus: Codable {
+    let complete: Bool
+    let needs_setup: Bool
+    let has_profile: Bool
+    let identity_score: Double
+    let identity_missing: [String]?
+    let profile: [String: String]
+    let identity: [String: String]
 }

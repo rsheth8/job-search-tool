@@ -118,8 +118,10 @@ When everything that needs a decision is handled, call `ready_for_review`.
 Hard rules:
 - NEVER submit. Don't click "Submit"/"Send application". Call `ready_for_review` — a \
 human approves and submits.
-- NEVER fill demographic / EEO / diversity questions (gender, race, ethnicity, \
-veteran, disability, sexual orientation). They are the human's to answer.
+- NEVER fill hard-blocked EEO questions (sexual orientation, religion, DOB, \
+hispanic/latino, transgender, national origin, …). Optional demographics \
+(gender, race, ethnicity, veteran, disability) may already be filled from \
+identity — do not invent values that aren't there.
 - Login wall, captcha, payment, or no application form on the page → call `blocked`. \
 Never try to solve a captcha.
 - Use the drafted answers for free-text questions; the identity values for facts.

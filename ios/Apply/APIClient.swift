@@ -7,17 +7,64 @@ struct APIClient {
 
     enum APIError: Error { case badURL, http(Int), decode }
 
+    /// SwiftUI `.task` / tab switches cancel in-flight URLSession work as `-999`.
+    /// That is not a real failure — callers should ignore it instead of showing UI.
+    static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        let ns = error as NSError
+        if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return true }
+        if let url = error as? URLError, url.code == .cancelled { return true }
+        return false
+    }
+
+    /// Short copy for empty/error states — never dump NSURLError UserInfo.
+    static func userMessage(for error: Error) -> String {
+        if isCancellation(error) { return "" }
+        if let api = error as? APIError {
+            switch api {
+            case .badURL: return "Check the base URL in Settings."
+            case .http(401):
+                return "Sign in again (or check your API token in Settings)."
+            case .http(403):
+                return "This beta is invite-only. Ask to have your Apple email added."
+            case .http(let code): return "Server returned \(code)."
+            case .decode: return "Couldn't read the server response."
+            }
+        }
+        let ns = error as NSError
+        if ns.domain == NSURLErrorDomain {
+            switch ns.code {
+            case NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost:
+                return "No network connection."
+            case NSURLErrorTimedOut:
+                return "The request timed out."
+            case NSURLErrorCannotFindHost, NSURLErrorCannotConnectToHost,
+                 NSURLErrorDNSLookupFailed:
+                return "Couldn't reach the server."
+            default:
+                return "Couldn't reach the server."
+            }
+        }
+        return "Something went wrong."
+    }
+
     private func request(_ method: String, _ path: String,
                          body: [String: Any]? = nil) async throws -> Data {
-        guard let base = config.base, let url = URL(string: path, relativeTo: base) else {
+        try Task.checkCancellation()
+        guard let base = config.base,
+              let resolved = URL(string: path, relativeTo: base)?.absoluteURL else {
             throw APIError.badURL
         }
-        var req = URLRequest(url: url)
+        var req = URLRequest(url: resolved)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !config.sessionToken.isEmpty {
+            req.setValue("Bearer \(config.sessionToken)", forHTTPHeaderField: "Authorization")
+        }
         if !config.token.isEmpty { req.setValue(config.token, forHTTPHeaderField: "X-Apply-Token") }
         if let body { req.httpBody = try JSONSerialization.data(withJSONObject: body) }
         let (data, resp) = try await URLSession.shared.data(for: req)
+        try Task.checkCancellation()
         if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw APIError.http(http.statusCode)
         }
@@ -40,6 +87,18 @@ struct APIClient {
     /// Stage a match so its application package gets prepared.
     func stage(postingId: Int) async throws {
         _ = try await request("POST", "/apply/stage",
+                              body: ["user": config.user, "posting_id": postingId])
+    }
+
+    /// Unstage a ready item — it can show up in matches again later.
+    func skipQueueItem(postingId: Int) async throws {
+        _ = try await request("POST", "/apply/remove",
+                              body: ["user": config.user, "posting_id": postingId])
+    }
+
+    /// Pass on a posting for good — leave the apply queue and mark it dismissed.
+    func passPosting(postingId: Int) async throws {
+        _ = try await request("POST", "/apply/pass",
                               body: ["user": config.user, "posting_id": postingId])
     }
 
@@ -125,6 +184,9 @@ struct APIClient {
             throw APIError.badURL
         }
         var req = URLRequest(url: url)
+        if !config.sessionToken.isEmpty {
+            req.setValue("Bearer \(config.sessionToken)", forHTTPHeaderField: "Authorization")
+        }
         if !config.token.isEmpty { req.setValue(config.token, forHTTPHeaderField: "X-Apply-Token") }
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw APIError.decode }
@@ -139,5 +201,68 @@ struct APIClient {
         try? FileManager.default.removeItem(at: dst)
         try data.write(to: dst)
         return dst
+    }
+
+    // MARK: Auth + chat
+
+    func authApple(identityToken: String, email: String?, displayName: String?) async throws -> AuthSession {
+        var body: [String: Any] = ["identity_token": identityToken]
+        if let email, !email.isEmpty { body["email"] = email }
+        if let displayName, !displayName.isEmpty { body["display_name"] = displayName }
+        let data = try await request("POST", "/auth/apple", body: body)
+        return try JSONDecoder().decode(AuthSession.self, from: data)
+    }
+
+    func authDev(displayName: String? = nil, userId: String? = nil) async throws -> AuthSession {
+        var body: [String: Any] = [:]
+        if let displayName { body["display_name"] = displayName }
+        if let userId, !userId.isEmpty { body["user_id"] = userId }
+        let data = try await request("POST", "/auth/dev", body: body)
+        return try JSONDecoder().decode(AuthSession.self, from: data)
+    }
+
+    func authMe() async throws -> AuthUser {
+        struct Response: Codable { let user: AuthUser }
+        let data = try await request("GET", "/auth/me")
+        return try JSONDecoder().decode(Response.self, from: data).user
+    }
+
+    func authLogout() async throws {
+        _ = try await request("POST", "/auth/logout")
+    }
+
+    func chatHistory(limit: Int = 100) async throws -> [ChatMessage] {
+        struct Response: Codable { let messages: [ChatMessage] }
+        let data = try await request("GET", "/chat/history?limit=\(limit)")
+        return try JSONDecoder().decode(Response.self, from: data).messages
+    }
+
+    func chatSend(_ text: String) async throws -> ChatSendResult {
+        let data = try await request("POST", "/chat", body: ["text": text])
+        return try JSONDecoder().decode(ChatSendResult.self, from: data)
+    }
+
+    func fetchSetup() async throws -> SetupStatus {
+        let data = try await request("GET", "/apply/setup")
+        return try JSONDecoder().decode(SetupStatus.self, from: data)
+    }
+
+    func saveProfile(roles: String, locations: String, seniority: String = "") async throws {
+        _ = try await request("POST", "/apply/profile", body: [
+            "fields": [
+                "roles": roles,
+                "keywords": roles,
+                "locations": locations,
+                "seniority": seniority,
+            ],
+        ])
+    }
+
+    func saveIdentity(fields: [String: Any]) async throws {
+        _ = try await request("POST", "/apply/identity", body: ["fields": fields])
+    }
+
+    func sendFeedback(_ body: String) async throws {
+        _ = try await request("POST", "/feedback", body: ["body": body])
     }
 }

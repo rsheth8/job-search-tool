@@ -6,19 +6,22 @@ location, links, work authorization). The browser-extension autofill maps these
 onto a live form's fields when you focus them.
 
 Stored as a JSON blob in ``job_search_profile.applicant_json`` so adding a field
-never needs a migration. Deliberately **excludes EEO / demographic questions**
-(race, gender, disability, veteran status) — those are sensitive and stay a manual
-choice; we never pre-fill them.
+never needs a migration.
+
+Sensitive demographics (gender, race, veteran, disability) are **optional**: they
+are only filled when the user has explicitly saved a value. Other EEO topics
+(sexual orientation, religion, DOB, …) stay never-filled.
 """
 from __future__ import annotations
 
 import json
+import re
 
 from . import profile as profile_mod
 
 # Known identity keys the autofill understands. Free-form, all optional — an empty
 # value just means "no suggestion for that field".
-#   bools (work_authorized / needs_sponsorship) are stored as real booleans.
+#   bools are stored as real booleans.
 TEXT_FIELDS = (
     # name + contact
     "first_name", "last_name", "full_name", "preferred_name", "pronouns",
@@ -32,10 +35,16 @@ TEXT_FIELDS = (
     # experience
     "current_company", "current_title", "years_experience",
     # logistics commonly asked on applications
-    "salary_expectation", "start_date",
+    "salary_expectation", "start_date", "work_arrangement", "how_heard",
+    # optional EEO (only filled when set — see fieldmatch)
+    "gender", "race", "ethnicity", "veteran_status", "disability_status",
 )
 # Yes/No questions. Rendered as "Yes"/"No" for selects/radios by autofill_map.
-BOOL_FIELDS = ("work_authorized", "needs_sponsorship", "willing_to_relocate")
+BOOL_FIELDS = (
+    "work_authorized", "needs_sponsorship", "willing_to_relocate",
+    "background_check", "drug_test", "over_18", "can_travel",
+    "previously_applied", "related_to_employee",
+)
 FIELDS = TEXT_FIELDS + BOOL_FIELDS
 
 
@@ -77,13 +86,18 @@ def set_identity(user_id: str, fields: dict) -> dict:
 
 def autofill_map(user_id: str) -> dict:
     """Identity as a flat {field: value} map the extension paints onto a form.
-    Bools become 'Yes'/'No' strings (what most ATS dropdowns expect)."""
+    Bools become 'Yes'/'No' strings (what most ATS dropdowns expect).
+    Phone is digits-only (user preference for form fields)."""
     out: dict[str, object] = {}
     for k, v in get_identity(user_id).items():
         if k in BOOL_FIELDS:
             out[k] = "Yes" if v else "No"
         elif v not in (None, ""):
-            out[k] = v
+            if k == "phone":
+                digits = re.sub(r"\D+", "", str(v))
+                out[k] = digits or v
+            else:
+                out[k] = v
     return out
 
 
@@ -125,4 +139,11 @@ def _decode(raw: str | None) -> dict:
 def _as_bool(v) -> bool:
     if isinstance(v, bool):
         return v
-    return str(v).strip().lower() in ("1", "true", "yes", "y", "authorized")
+    if isinstance(v, (int, float)):
+        return bool(v)
+    s = str(v).strip().lower()
+    if s in ("1", "true", "yes", "y"):
+        return True
+    if s in ("0", "false", "no", "n"):
+        return False
+    return bool(s)

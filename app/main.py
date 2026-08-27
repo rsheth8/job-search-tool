@@ -23,10 +23,29 @@ async def lifespan(app: FastAPI):
     # Background poll loop that delivers due reminders. Started here (not at
     # import) so a bare `import app.main` in tests doesn't spin up a real
     # scheduler. No-op if apscheduler isn't installed.
+    _init_sentry()
     from .scheduler import start_scheduler
 
     start_scheduler()
     yield
+
+
+def _init_sentry() -> None:
+    dsn = get_settings().sentry_dsn.strip()
+    if not dsn:
+        return
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+    except ImportError:
+        return
+    sentry_sdk.init(
+        dsn=dsn,
+        integrations=[StarletteIntegration(), FastApiIntegration()],
+        traces_sample_rate=0.05,
+        send_default_pii=False,
+    )
 
 
 app = FastAPI(
@@ -38,13 +57,22 @@ app = FastAPI(
 # additionally gated by the X-Apply-Token header (see _require_apply_token).
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
-_cors = [o.strip() for o in get_settings().apply_cors_origins.split(",") if o.strip()]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors or ["*"],
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
-)
+_s = get_settings()
+_cors_raw = _s.apply_cors_origins.strip()
+_cors_regex = _s.apply_cors_origin_regex.strip()
+_cors_kwargs: dict = {
+    "allow_methods": ["GET", "POST", "OPTIONS"],
+    "allow_headers": ["*"],
+}
+if _cors_raw == "*" or (not _cors_raw and not _cors_regex):
+    _cors_kwargs["allow_origins"] = ["*"]
+else:
+    _cors_kwargs["allow_origins"] = [
+        o.strip() for o in _cors_raw.split(",") if o.strip()
+    ]
+    if _cors_regex:
+        _cors_kwargs["allow_origin_regex"] = _cors_regex
+app.add_middleware(CORSMiddleware, **_cors_kwargs)
 
 # Ensure the schema exists as soon as the app module is imported, regardless of
 # how it's launched (uvicorn, TestClient, etc.). init_db() is idempotent.
@@ -52,36 +80,44 @@ init_db()
 
 
 def _require_apply_token(request: Request) -> None:
-    """Gate the autofill endpoints when APPLY_API_TOKEN is configured. No-op when
-    it's blank (local/dev). Raises 401 on a missing/wrong token."""
-    from fastapi import HTTPException
+    """Gate the autofill endpoints when APPLY_API_TOKEN is configured.
 
-    expected = get_settings().apply_api_token.strip()
-    if not expected:
-        return
-    if request.headers.get("X-Apply-Token", "").strip() != expected:
-        raise HTTPException(status_code=401, detail="bad or missing X-Apply-Token")
+    A valid Sign-in-with-Apple session also satisfies the gate. When
+    ``AUTH_FAIL_OPEN`` is false, a blank token is no longer a hole.
+    """
+    from . import auth
+
+    auth.require_apply_access(request)
+
+
+def _resolve_user(request: Request, user: str | None = None) -> str:
+    """Prefer the signed-in session user; never fall back to default_user()."""
+    from . import auth
+
+    return auth.resolve_user(request, user)
 
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard(user: str | None = None) -> HTMLResponse:
-    """Read-only pipeline dashboard. ``?user=`` overrides the default user."""
+def dashboard(request: Request, user: str | None = None) -> HTMLResponse:
+    """Read-only pipeline dashboard. Session user in prod; ``?user=`` locally."""
+    from . import auth
     from . import dashboard as dash
 
-    return HTMLResponse(dash.render(user))
+    return HTMLResponse(dash.render(auth.html_user(request, user)))
 
 
 @app.get("/train", response_class=HTMLResponse)
-def train_page(user: str | None = None) -> HTMLResponse:
+def train_page(request: Request, user: str | None = None) -> HTMLResponse:
     """Tinder-style swipe trainer to bootstrap the re-ranker on real postings."""
-    from . import dashboard as dash
+    from . import auth
     from . import trainer
 
-    return HTMLResponse(trainer.render_page(user or dash.default_user()))
+    return HTMLResponse(trainer.render_page(auth.html_user(request, user)))
 
 
 @app.get("/train/deck")
 def train_deck(
+    request: Request,
     user: str | None = None, n: int = 15, diverse: bool = False,
     mode: str | None = None,
 ) -> dict:
@@ -91,10 +127,9 @@ def train_deck(
     ``mode`` picks the deck strategy: 'best' (top matches), 'mix' (spread for
     balanced training), or 'learn' (active learning — most-uncertain first).
     ``diverse`` is kept for back-compat (== mode 'mix')."""
-    from . import dashboard as dash
     from . import trainer
 
-    uid = user or dash.default_user()
+    uid = _resolve_user(request, user)
     cards = trainer.build_deck(
         uid, limit=n,
         diverse=diverse or mode == "mix",
@@ -108,11 +143,10 @@ async def train_summaries(request: Request) -> dict:
     """Generate (batched + cached) the plain-language summaries for the given
     cards. Returns a map keyed by 'source:external_id' so the client fills them in
     after the card is already on screen."""
-    from . import dashboard as dash
     from . import insights, profile as prof
 
     body = await request.json()
-    uid = body.get("user") or dash.default_user()
+    uid = _resolve_user(request, body.get("user"))
     items = body.get("items") or []
     enriched = insights.enrich(items, prof.profile_text(prof.get_profile(uid)))
     fields = ("about", "tldr", "level", "skills", "fit")
@@ -125,12 +159,11 @@ async def train_summaries(request: Request) -> dict:
 @app.post("/train/label")
 async def train_label(request: Request) -> dict:
     """Record one swipe, retrain the model if there's enough signal, return stats."""
-    from . import dashboard as dash
     from . import profile as prof
     from . import reranker, trainer
 
     body = await request.json()
-    uid = body.get("user") or dash.default_user()
+    uid = _resolve_user(request, body.get("user"))
     item = body.get("item") or {}
     label = body.get("label", "pass")
     trainer.record_label(uid, item, label)
@@ -139,16 +172,15 @@ async def train_label(request: Request) -> dict:
 
 
 @app.get("/apply")
-def apply_page(user: str | None = None) -> HTMLResponse:
+def apply_page(request: Request, user: str | None = None) -> HTMLResponse:
     """Semi-auto application queue: staged matches with pre-assembled packages."""
-    from . import apply_queue
-    from . import dashboard as dash
+    from . import apply_queue, auth
 
-    return HTMLResponse(apply_queue.render_page(user or dash.default_user()))
+    return HTMLResponse(apply_queue.render_page(auth.html_user(request, user)))
 
 
 @app.get("/apply/data")
-def apply_data(user: str | None = None) -> dict:
+def apply_data(request: Request, user: str | None = None) -> dict:
     """The apply queue plus the top un-staged matches available to stage.
 
     Each row carries its **fit explanation** — why this job surfaced, in words —
@@ -156,10 +188,9 @@ def apply_data(user: str | None = None) -> dict:
     argued with. Computed heuristically from the posting + profile, so it's free.
     """
     from . import apply_queue, fit, jobstore
-    from . import dashboard as dash
     from . import profile as profile_mod
 
-    uid = user or dash.default_user()
+    uid = _resolve_user(request, user)
     prof = profile_mod.get_profile(uid)
 
     def explain(posting_id: int, score=None) -> dict:
@@ -171,9 +202,11 @@ def apply_data(user: str | None = None) -> dict:
                 "concerns": detail["concerns"]}
 
     staged = {it["posting_id"] for it in apply_queue.list_queue(uid)}
+    from . import ats
     queued = [
         {"posting_id": r["id"], "company": r["company"], "title": r["title"],
          "url": r["url"], "score": r["relevance_score"], "source": r["source"],
+         "auto_fillable": ats.is_fillable_form(r["url"]),
          **explain(r["id"], r["relevance_score"])}
         for r in jobstore.list_review_queue(uid) if r["id"] not in staged
     ]
@@ -190,7 +223,7 @@ def apply_inflight(request: Request, user: str | None = None) -> dict:
     from . import fill_requests
 
     _require_apply_token(request)
-    uid = user or dash.default_user()
+    uid = _resolve_user(request, user)
     rows = dash.in_flight_rows(uid)
     # Attach the request id + preview so the phone can approve without a second call.
     by_posting = {r["posting_id"]: r for r in fill_requests.list_active(uid)}
@@ -206,11 +239,10 @@ def apply_inflight(request: Request, user: str | None = None) -> dict:
 @app.get("/apply/knowledge")
 def apply_knowledge(request: Request, user: str | None = None) -> dict:
     """What the assistant knows about you, plus the coverage audit."""
-    from . import dashboard as dash
     from . import knowledge
 
     _require_apply_token(request)
-    uid = user or dash.default_user()
+    uid = _resolve_user(request, user)
     return {"user": uid, "items": knowledge.list_all(uid),
             "audit": knowledge.audit(uid)}
 
@@ -219,12 +251,11 @@ def apply_knowledge(request: Request, user: str | None = None) -> dict:
 async def apply_knowledge_add(request: Request) -> dict:
     """Store one durable fact (project / achievement / strength / preference /
     answer). Returns the saved row, or ok=False for an unknown category."""
-    from . import dashboard as dash
     from . import knowledge
 
     _require_apply_token(request)
     body = await request.json()
-    uid = body.get("user") or dash.default_user()
+    uid = _resolve_user(request, body.get("user"))
     item = knowledge.add(uid, body.get("category") or "", body.get("text") or "",
                          label=body.get("label"))
     return {"ok": item is not None, "item": item}
@@ -232,22 +263,20 @@ async def apply_knowledge_add(request: Request) -> dict:
 
 @app.post("/apply/knowledge/remove")
 async def apply_knowledge_remove(request: Request) -> dict:
-    from . import dashboard as dash
     from . import knowledge
 
     _require_apply_token(request)
     body = await request.json()
-    uid = body.get("user") or dash.default_user()
+    uid = _resolve_user(request, body.get("user"))
     return {"ok": knowledge.remove(uid, int(body["id"]))}
 
 
 @app.post("/apply/stage")
 async def apply_stage(request: Request) -> dict:
     from . import apply_queue
-    from . import dashboard as dash
 
     body = await request.json()
-    uid = body.get("user") or dash.default_user()
+    uid = _resolve_user(request, body.get("user"))
     return {"ok": apply_queue.stage(uid, int(body["posting_id"]))}
 
 
@@ -255,10 +284,9 @@ async def apply_stage(request: Request) -> dict:
 async def apply_package(request: Request) -> dict:
     """Assemble (and cache) the full application package for one staged item."""
     from . import apply_queue
-    from . import dashboard as dash
 
     body = await request.json()
-    uid = body.get("user") or dash.default_user()
+    uid = _resolve_user(request, body.get("user"))
     pkg = apply_queue.get_package(uid, int(body["posting_id"]))
     return pkg or {"error": "not found"}
 
@@ -267,10 +295,9 @@ async def apply_package(request: Request) -> dict:
 async def apply_answer_save(request: Request) -> dict:
     """Persist a user-edited answer to one of an item's questions (by index)."""
     from . import apply_queue
-    from . import dashboard as dash
 
     body = await request.json()
-    uid = body.get("user") or dash.default_user()
+    uid = _resolve_user(request, body.get("user"))
     ok = apply_queue.save_answer(
         uid, int(body["posting_id"]), int(body.get("index", 0)), body.get("answer", "")
     )
@@ -281,10 +308,9 @@ async def apply_answer_save(request: Request) -> dict:
 async def apply_answer_redraft(request: Request) -> dict:
     """Regenerate a fresh answer for one of an item's questions (by index)."""
     from . import apply_queue
-    from . import dashboard as dash
 
     body = await request.json()
-    uid = body.get("user") or dash.default_user()
+    uid = _resolve_user(request, body.get("user"))
     answer = apply_queue.redraft_answer(
         uid, int(body["posting_id"]), int(body.get("index", 0))
     )
@@ -294,10 +320,9 @@ async def apply_answer_redraft(request: Request) -> dict:
 @app.post("/apply/mark")
 async def apply_mark(request: Request) -> dict:
     from . import apply_queue
-    from . import dashboard as dash
 
     body = await request.json()
-    uid = body.get("user") or dash.default_user()
+    uid = _resolve_user(request, body.get("user"))
     return {"ok": apply_queue.mark(uid, int(body["posting_id"]), body.get("status", ""))}
 
 
@@ -306,10 +331,9 @@ async def apply_applied(request: Request) -> dict:
     """Mobile app: the user finished and submitted an application in the in-app
     browser. Log it (application record + posting + queue), like the worker does."""
     from . import apply_queue, jobstore, store
-    from . import dashboard as dash
 
     body = await request.json()
-    uid = body.get("user") or dash.default_user()
+    uid = _resolve_user(request, body.get("user"))
     pid = int(body["posting_id"])
     posting = jobstore.get_posting(uid, pid)
     if posting is None:
@@ -324,22 +348,35 @@ async def apply_applied(request: Request) -> dict:
 @app.post("/apply/remove")
 async def apply_remove(request: Request) -> dict:
     from . import apply_queue
-    from . import dashboard as dash
 
     body = await request.json()
-    uid = body.get("user") or dash.default_user()
+    uid = _resolve_user(request, body.get("user"))
     return {"ok": apply_queue.remove(uid, int(body["posting_id"]))}
+
+
+@app.post("/apply/pass")
+async def apply_pass(request: Request) -> dict:
+    """Pass on a posting from the phone: unstage it and mark the posting dismissed
+    so it leaves both the ready queue and the top-matches list."""
+    from . import apply_queue, jobstore
+
+    body = await request.json()
+    uid = _resolve_user(request, body.get("user"))
+    pid = int(body["posting_id"])
+    apply_queue.remove(uid, pid)
+    if jobstore.get_posting(uid, pid) is not None:
+        jobstore.mark_posting_status(pid, "dismissed")
+    return {"ok": True}
 
 
 @app.post("/apply/device")
 async def apply_register_device(request: Request) -> dict:
     """Register this phone for push notifications (new matches, approval ready)."""
-    from . import dashboard as dash
     from . import push
 
     _require_apply_token(request)
     body = await request.json()
-    uid = body.get("user") or dash.default_user()
+    uid = _resolve_user(request, body.get("user"))
     ok = push.register_device(uid, body.get("token") or "",
                               body.get("platform") or "ios")
     # `configured` tells the app whether pushes will actually arrive, so it can say
@@ -349,33 +386,33 @@ async def apply_register_device(request: Request) -> dict:
 
 @app.post("/apply/device/remove")
 async def apply_forget_device(request: Request) -> dict:
-    from . import dashboard as dash
     from . import push
 
     _require_apply_token(request)
     body = await request.json()
-    uid = body.get("user") or dash.default_user()
+    uid = _resolve_user(request, body.get("user"))
     return {"ok": push.forget_device(uid, body.get("token") or "")}
 
 
 @app.get("/apply/rules")
 def apply_rules(request: Request) -> dict:
-    """The field-matching rules, so the extension and the iOS browser stop carrying
-    hand-ported copies that drift out of date (see fieldmatch.rules_payload)."""
-    from . import fieldmatch
+    """The field-matching rules (+ formprobe patterns), so the extension and the
+    iOS browser stop carrying hand-ported copies that drift out of date."""
+    from . import fieldmatch, formprobe
 
     _require_apply_token(request)
-    return fieldmatch.rules_payload()
+    payload = fieldmatch.rules_payload()
+    payload["formprobe"] = formprobe.payload()
+    return payload
 
 
 @app.get("/apply/identity")
 def apply_identity(request: Request, user: str | None = None) -> dict:
     """The applicant identity map the extension paints onto simple form fields."""
     from . import applicant
-    from . import dashboard as dash
 
     _require_apply_token(request)
-    uid = user or dash.default_user()
+    uid = _resolve_user(request, user)
     return {"user": uid, "fields": applicant.autofill_map(uid)}
 
 
@@ -383,14 +420,65 @@ def apply_identity(request: Request, user: str | None = None) -> dict:
 async def apply_identity_set(request: Request) -> dict:
     """Save/update applicant identity (used by the extension options page)."""
     from . import applicant
-    from . import dashboard as dash
 
     _require_apply_token(request)
     body = await request.json()
-    uid = body.get("user") or dash.default_user()
+    uid = _resolve_user(request, body.get("user"))
     fields = body.get("fields") or {}
     return {"user": uid, "fields": applicant.get_identity(uid),
             "saved": applicant.set_identity(uid, fields)}
+
+
+@app.get("/apply/setup")
+def apply_setup(request: Request, user: str | None = None) -> dict:
+    """First-run wizard status (profile + identity coverage)."""
+    from . import onboarding
+
+    uid = _resolve_user(request, user)
+    return {"user": uid, **onboarding.status(uid)}
+
+
+@app.get("/apply/profile")
+def apply_profile_get(request: Request, user: str | None = None) -> dict:
+    from . import profile as profile_mod
+
+    uid = _resolve_user(request, user)
+    return {"user": uid, "fields": profile_mod.public_fields(uid),
+            "has_profile": profile_mod.has_profile(uid)}
+
+
+@app.post("/apply/profile")
+async def apply_profile_set(request: Request) -> dict:
+    """Set search criteria so discovery can tick for this user."""
+    from . import profile as profile_mod
+
+    body = await request.json()
+    uid = _resolve_user(request, body.get("user"))
+    fields = body.get("fields") or body
+    profile_mod.set_profile(
+        uid,
+        roles=fields.get("roles"),
+        keywords=fields.get("keywords") or fields.get("roles"),
+        locations=fields.get("locations"),
+        seniority=fields.get("seniority"),
+    )
+    return {"user": uid, "fields": profile_mod.public_fields(uid),
+            "has_profile": profile_mod.has_profile(uid)}
+
+
+@app.post("/feedback")
+async def feedback_submit(request: Request) -> dict:
+    from fastapi import HTTPException
+
+    from . import auth, feedback as fb
+
+    uid = auth.require_user(request)
+    body = await request.json()
+    text = (body.get("body") or body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="body required")
+    row = fb.add(uid, text)
+    return {"ok": True, "id": row["id"]}
 
 
 @app.post("/apply/answer")
@@ -399,12 +487,11 @@ async def apply_answer(request: Request) -> dict:
     the JD/company as context; ``company``/``title``/``jd`` can be passed directly
     when the extension only has the live page (no posting on file)."""
     from . import applicant, apply_queue, jobstore, outreach
-    from . import dashboard as dash
     from . import profile as prof
 
     _require_apply_token(request)
     body = await request.json()
-    uid = body.get("user") or dash.default_user()
+    uid = _resolve_user(request, body.get("user"))
     question = (body.get("question") or "").strip()
     if not question:
         return {"error": "no question"}
@@ -429,32 +516,42 @@ async def apply_answer(request: Request) -> dict:
 @app.post("/apply/autosubmit")
 async def apply_autosubmit(request: Request) -> dict:
     """User asks the worker to fill (and, after they approve, submit) an item."""
-    from . import apply_queue, fill_requests
-    from . import dashboard as dash
+    from fastapi import HTTPException
 
+    from . import apply_queue, fill_requests
     from . import ats
 
+    if not get_settings().apply_autosubmit_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="auto-submit is off for testers — use in-app Autofill",
+        )
+
     body = await request.json()
-    uid = body.get("user") or dash.default_user()
+    uid = _resolve_user(request, body.get("user"))
     pid = int(body["posting_id"])
     apply_queue.stage(uid, pid)  # ensure it's staged + its package is ready
     pkg = apply_queue.get_package(uid, pid) or {}
     url = pkg.get("url", "")
-    # Only first-party ATS forms (Greenhouse/Lever/Ashby) are auto-fillable. For
-    # aggregator/login/captcha links there's no form to fill — hand off to desktop.
-    if not ats.is_fillable_form(url):
-        return {"fillable": False, "url": url}
+    # Any http(s) apply URL may be attempted; formprobe decides after navigation.
+    # known_ats is a confidence label for the UI (Greenhouse/Lever/Ashby hosts).
+    if not ats.may_autosubmit(url):
+        return {"fillable": False, "url": url, "known_ats": False}
     req = fill_requests.create(uid, pid)
-    return {"request_id": req["id"], "status": req["status"], "fillable": True}
+    return {
+        "request_id": req["id"], "status": req["status"], "fillable": True,
+        "known_ats": ats.is_fillable_form(url),
+    }
 
 
 @app.get("/apply/request")
-def apply_request_status(user: str | None = None, posting_id: int = 0) -> dict:
+def apply_request_status(
+    request: Request, user: str | None = None, posting_id: int = 0,
+) -> dict:
     """Current fill-request state for a posting (drives the review-page polling)."""
     from . import fill_requests
-    from . import dashboard as dash
 
-    uid = user or dash.default_user()
+    uid = _resolve_user(request, user)
     return {"request": fill_requests.for_posting(uid, posting_id)}
 
 
@@ -462,20 +559,18 @@ def apply_request_status(user: str | None = None, posting_id: int = 0) -> dict:
 async def apply_request_approve(request: Request) -> dict:
     """User approves a filled preview — the worker may now submit it."""
     from . import fill_requests
-    from . import dashboard as dash
 
     body = await request.json()
-    uid = body.get("user") or dash.default_user()
+    uid = _resolve_user(request, body.get("user"))
     return {"ok": fill_requests.approve(uid, int(body["request_id"]))}
 
 
 @app.post("/apply/request/cancel")
 async def apply_request_cancel(request: Request) -> dict:
     from . import fill_requests
-    from . import dashboard as dash
 
     body = await request.json()
-    uid = body.get("user") or dash.default_user()
+    uid = _resolve_user(request, body.get("user"))
     return {"ok": fill_requests.cancel(uid, int(body["request_id"]))}
 
 
@@ -579,12 +674,11 @@ async def worker_result(request: Request) -> dict:
 
 
 @app.get("/apply/resume")
-def apply_resume(user: str | None = None, id: int = 0) -> Response:
+def apply_resume(request: Request, user: str | None = None, id: int = 0) -> Response:
     """Download the staged item's tailored resume PDF (rebuilt from cache)."""
     from . import apply_queue
-    from . import dashboard as dash
 
-    uid = user or dash.default_user()
+    uid = _resolve_user(request, user)
     built = apply_queue.build_resume_bytes(uid, id)
     if built is None:
         return Response(status_code=404, content="no tailored resume")
@@ -634,6 +728,7 @@ def health() -> dict:
         "wide_rss": s.job_wide_rss_enabled,
         "wide_directory": s.job_wide_directory_enabled,
         "wide_aggregator": s.job_wide_aggregator_enabled,
+        "wide_swelist": s.job_wide_swelist_enabled,
         "serpapi": s.serpapi_enabled,
         "ghost_filter": s.ghost_filter_enabled,
         "eligibility_filter": s.eligibility_filter_enabled,
@@ -646,6 +741,14 @@ def health() -> dict:
         "relevance_threshold": s.job_relevance_threshold,
         "last_tick": discovery.last_tick_at,
         "postings": jobstore.global_counts_by_status(),
+    }
+    info["auth"] = {
+        "fail_open": s.auth_fail_open,
+        "allowlist": bool(s.allowed_emails),
+        "autosubmit": s.apply_autosubmit_enabled,
+        "dev_login": s.auth_allow_dev_login,
+        "sentry": bool(s.sentry_dsn.strip()),
+        "llm_user_cap": s.llm_max_calls_per_user_per_day,
     }
     if s.embedding_active:
         info["embeddings"] = {
@@ -688,28 +791,134 @@ async def sms_webhook(
 
 
 # JSON convenience endpoint for testing without Twilio form encoding.
+# Prefer POST /chat (session-authed) for the real product path.
 @app.post("/message")
-async def message(payload: dict) -> dict:
-    user_id = payload.get("from", "local")
+async def message(request: Request, payload: dict) -> dict:
+    from . import auth
+
+    if get_settings().auth_fail_open:
+        user_id = payload.get("from", "local")
+    else:
+        user_id = auth.require_user(request)
     text = payload.get("body", "")
     reply = handle_sms(user_id, text)
     return {"reply": reply}
 
 
+# ---------------------------------------------------------------------------
+# Auth (Sign in with Apple) + in-app chat
+# ---------------------------------------------------------------------------
+
+@app.post("/auth/apple")
+async def auth_apple(request: Request) -> dict:
+    """Exchange an Apple identity token for an app session."""
+    from . import auth
+
+    body = await request.json()
+    identity = (body.get("identity_token") or body.get("id_token") or "").strip()
+    if not identity:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=400, detail="identity_token required")
+    return auth.sign_in_with_apple(
+        identity,
+        email=(body.get("email") or None),
+        display_name=(body.get("display_name") or body.get("name") or None),
+    )
+
+
+@app.post("/auth/dev")
+async def auth_dev(request: Request) -> dict:
+    """Dev-only session mint (AUTH_ALLOW_DEV_LOGIN=true)."""
+    from . import auth
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    return auth.sign_in_dev(
+        display_name=body.get("display_name"),
+        user_id=body.get("user_id"),
+    )
+
+
+@app.get("/auth/me")
+def auth_me(request: Request) -> dict:
+    from . import auth
+
+    uid = auth.require_user(request)
+    user = auth.get_user(uid)
+    return {"user": {
+        "id": user["id"],
+        "email": user.get("email"),
+        "display_name": user.get("display_name"),
+    } if user else {"id": uid}}
+
+
+@app.post("/auth/logout")
+def auth_logout(request: Request) -> dict:
+    from . import auth
+
+    token = auth.bearer_token(request)
+    if token:
+        auth.revoke_session(token)
+    return {"ok": True}
+
+
+@app.get("/chat", response_class=HTMLResponse)
+def chat_page() -> HTMLResponse:
+    """Minimal web chat companion."""
+    from . import chat_page as page
+
+    return HTMLResponse(page.render_chat_page())
+
+
+@app.get("/chat/history")
+def chat_history(
+    request: Request, limit: int = 100, before_id: int | None = None,
+) -> dict:
+    from . import auth, chat
+
+    uid = auth.require_user(request)
+    return {"user": uid, "messages": chat.history(uid, limit=limit, before_id=before_id)}
+
+
+@app.post("/chat")
+async def chat_send(request: Request) -> dict:
+    """Send a message to the assistant (session required)."""
+    from . import auth, chat
+
+    uid = auth.require_user(request)
+    body = await request.json()
+    text = (body.get("text") or body.get("body") or "").strip()
+    if not text:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=400, detail="text required")
+    result = chat.send(uid, text)
+    return {
+        "user": uid,
+        "reply": result["reply"],
+        "user_message": result["user_message"],
+        "assistant_message": result["assistant_message"],
+    }
+
+
 @app.post("/slack/events")
 async def slack_events(request: Request, background_tasks: BackgroundTasks):
-    """Slack Events API webhook (primary transport).
+    """Legacy Slack Events API webhook.
 
-    Three jobs: answer Slack's one-time URL-verification challenge, verify the
-    request signature, and dispatch real message events to the engine. We ack
-    within Slack's 3s window by handing the work to a background task — the brain
-    (and any LLM call) runs after we've already returned 200, so Slack never
-    retries us for being slow.
+    Disabled unless ``SLACK_TRANSPORT_ENABLED=true``. In-app chat is the product
+    channel now; this stays for emergency rollback only.
     """
+    settings = get_settings()
+    if not settings.slack_enabled:
+        return Response(status_code=404, content="slack transport disabled")
+
     from . import slack
 
     raw = await request.body()
-    settings = get_settings()
 
     if settings.slack_signing_secret:
         ts = request.headers.get("X-Slack-Request-Timestamp", "")

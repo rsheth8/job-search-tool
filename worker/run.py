@@ -30,7 +30,7 @@ import time
 
 import httpx
 
-from app import ats, fieldmatch
+from app import ats, fieldmatch, formprobe
 
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:8000").rstrip("/")
 TOKEN = os.environ.get("APPLY_API_TOKEN", "")
@@ -45,6 +45,8 @@ USE_AGENT = os.environ.get("WORKER_AGENT", "false").lower() in ("true", "1", "ye
 # trying an "Apply" reveal click (a description page never sprouts a form on its own).
 FORM_WAIT_MS = int(os.environ.get("WORKER_FORM_WAIT_MS", "20000"))
 REVEAL_PROBE_MS = int(os.environ.get("WORKER_REVEAL_PROBE_MS", "3000"))
+MAX_ADVANCE_STEPS = int(os.environ.get("WORKER_MAX_ADVANCE_STEPS", "8"))
+HUMAN_WAIT_SECONDS = int(os.environ.get("WORKER_HUMAN_WAIT_SECONDS", "600"))  # captcha/login
 
 _HEADERS = {"X-Apply-Token": TOKEN} if TOKEN else {}
 
@@ -82,6 +84,9 @@ _EXTRACT_JS = r"""
   };
   const out = [];
   let i = 0;
+  // Clear tags from a previous extract. After Next, step-1 nodes stay in the DOM
+  // (often hidden) with stale ids; fill then hits the hidden field and times out.
+  document.querySelectorAll('[data-jaf-id]').forEach(el => el.removeAttribute('data-jaf-id'));
   const tagit = (el) => { el.setAttribute('data-jaf-id', i); return i++; };
 
   // 1. Text inputs, textareas, native <select>s.
@@ -382,20 +387,10 @@ def _fill_combobox(page, frame, rec: dict, value) -> tuple[bool, str]:
     return False, f"option {opt!r} vanished from the listbox"
 
 
-def fill_form(page, job: dict) -> dict:
-    """Fill the page from the job's identity + answers. Returns a preview summary."""
+def _fill_frames(page, frames, job: dict) -> tuple[list, list]:
+    """Fill recognized fields in the richest frame. Returns (filled, skipped)."""
     identity = job.get("identity", {})
     questions = job.get("questions", [])
-    page.goto(job["url"], wait_until="domcontentloaded", timeout=45000)
-
-    # Probe briefly first: on a job *description* page no amount of waiting produces
-    # a form, so spending the whole budget before trying the "Apply" reveal just
-    # stalls every Lever-style posting for the full timeout.
-    frames = _wait_for_form(page, timeout_ms=REVEAL_PROBE_MS)
-    if not frames and _reveal_form(page):   # landed on a description — open the form
-        frames = _wait_for_form(page, timeout_ms=FORM_WAIT_MS)
-    elif not frames:                        # no reveal to click; it's just slow
-        frames = _wait_for_form(page, timeout_ms=FORM_WAIT_MS - REVEAL_PROBE_MS)
     frame, fields = frames[0] if frames else (page.main_frame, [])
     print(f"[worker] {page.url} — {len(fields)} fillable field(s) "
           f"across {len(page.frames)} frame(s)")
@@ -407,17 +402,12 @@ def fill_form(page, job: dict) -> dict:
         sel = f'[data-jaf-id="{f["id"]}"]' if f.get("id") is not None else None
         key = _match_key(label, hint)
         try:
-            # Belt-and-suspenders: demographic questions are the human's to answer,
-            # on every control type, before any other rule can claim them.
             if _is_eeo(label, hint):
                 _log(label, None, "eeo", "skipped", "demographic — never auto-filled")
                 skipped.append(label)
                 continue
 
-            # --- choice controls: native select, custom combobox, radio group ---
             if kind in ("select", "combobox", "radiogroup"):
-                # option_for is the shared decision so all three agree; a combobox's
-                # options aren't known until it opens, so it resolves its own.
                 if kind == "combobox":
                     value = identity.get(key) if key else None
                     if not key:
@@ -453,14 +443,12 @@ def fill_form(page, job: dict) -> dict:
                     _log(label, key, kind, "skipped", detail)
                     skipped.append(label)
 
-            # --- plain text fields we have a fact for ---
             elif key and identity.get(key):
                 value = str(identity[key])
                 frame.fill(sel, value)
                 _log(label, key, "text", "filled", value[:40])
                 filled.append({"label": label, "value": value})
 
-            # --- free-text / essay questions, answered from the drafted answers ---
             elif f["tag"] == "textarea" or fieldmatch.is_essay_label(label):
                 ans = _pick_answer(label, questions)
                 if ans:
@@ -483,11 +471,205 @@ def fill_form(page, job: dict) -> dict:
     if not fields:
         skipped.append("⚠️ no form fields found on this page — is the URL the "
                        "application form (not the job description)?")
+    return filled, skipped
 
+
+def _open_form(page, job: dict) -> list:
+    """Navigate, optionally reveal, wait for fields. Returns _extract_frames result."""
+    page.goto(job["url"], wait_until="domcontentloaded", timeout=45000)
+    frames = _wait_for_form(page, timeout_ms=REVEAL_PROBE_MS)
+    if not frames and _reveal_form(page):
+        frames = _wait_for_form(page, timeout_ms=FORM_WAIT_MS)
+    elif not frames:
+        frames = _wait_for_form(page, timeout_ms=FORM_WAIT_MS - REVEAL_PROBE_MS)
+    return frames
+
+
+def _probe_page(page) -> dict:
+    """Score the page: JS captcha/button signals + Python fieldmatch on labels."""
+    extract = r"""
+    () => {
+      const vis = (el) => !!(el.offsetParent || el.getClientRects().length);
+      const lbl = (el) => {
+        const bits = [];
+        if (el.id){ const l=document.querySelector(`label[for="${CSS.escape(el.id)}"]`); if(l) bits.push(l.textContent); }
+        const w = el.closest('label'); if (w) bits.push(w.textContent);
+        if (el.getAttribute('aria-label')) bits.push(el.getAttribute('aria-label'));
+        if (el.placeholder) bits.push(el.placeholder);
+        bits.push(el.name||'', el.id||'');
+        return bits.join(' ').replace(/\s+/g,' ').trim();
+      };
+      const labels = [], buttons = [];
+      let hasPassword = false, hasFile = false, captcha = false;
+      const CAPTCHA = /recaptcha|hcaptcha|captcha|cf-turnstile|challenge-platform|arkose/i;
+      for (const n of document.querySelectorAll('iframe, div, [class*="captcha"], [id*="captcha"]')) {
+        const sig = ((n.src||'')+' '+(n.id||'')+' '+(n.className||'')).toLowerCase();
+        if (CAPTCHA.test(sig)) captcha = true;
+      }
+      if (document.querySelector('[data-sitekey], .g-recaptcha, .h-captcha, .cf-turnstile')) captcha = true;
+      for (const el of document.querySelectorAll('input, textarea, select')) {
+        if (!vis(el)) continue;
+        const t = (el.type||'').toLowerCase();
+        if (['hidden','submit','button','image','reset'].includes(t)) continue;
+        if (t === 'password') { hasPassword = true; continue; }
+        if (t === 'file') hasFile = true;
+        labels.push(lbl(el));
+      }
+      for (const el of document.querySelectorAll('button, a[href], [role=button], input[type=submit], input[type=button]')) {
+        if (!vis(el)) continue;
+        const t = (el.innerText||el.textContent||el.value||el.getAttribute('aria-label')||'')
+          .replace(/\s+/g,' ').trim().slice(0,80);
+        if (t) buttons.push(t);
+      }
+      return { labels, buttons, hasPassword, hasFile, captcha };
+    }
+    """
+    best = formprobe.probe_signals(labels=[], button_texts=[])
+    for fr in page.frames:
+        try:
+            raw = fr.evaluate(extract)
+        except Exception:  # noqa: BLE001
+            continue
+        if not isinstance(raw, dict):
+            continue
+        probe = formprobe.probe_signals(
+            labels=list(raw.get("labels") or []),
+            button_texts=list(raw.get("buttons") or []),
+            has_password=bool(raw.get("hasPassword")),
+            has_file=bool(raw.get("hasFile")),
+            captcha_hit=bool(raw.get("captcha")),
+            known_ats=ats.is_fillable_form(page.url),
+        )
+        if probe["kind"] in ("captcha", "login"):
+            return probe
+        if probe["score"] >= best.get("score", 0):
+            best = probe
+    return best
+
+
+def _click_advance(page) -> bool:
+    """Click Next/Continue in any frame. Never clicks Submit."""
+    js = r"""
+    () => {
+      const vis = (el) => !!(el.offsetParent || el.getClientRects().length);
+      const ADVANCE = /^\s*(next|continue|save\s*&\s*continue|review(\s+application)?|proceed)\s*$/i;
+      const NOT = /submit|send application|finish|complete application|cancel|back|previous|sign\s*in|log\s*in/i;
+      for (const el of document.querySelectorAll('button, a[href], [role=button], input[type=button]')) {
+        if (!vis(el)) continue;
+        const t = (el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || '')
+          .replace(/\s+/g,' ').trim();
+        if (!t || NOT.test(t)) continue;
+        if (ADVANCE.test(t)) { el.click(); return t; }
+      }
+      return null;
+    }
+    """
+    for fr in page.frames:
+        try:
+            label = fr.evaluate(js)
+        except Exception:  # noqa: BLE001
+            continue
+        if label:
+            print(f"[worker] advanced via {label!r}")
+            page.wait_for_timeout(1500)
+            return True
+    return False
+
+
+def _wait_for_human(page, job: dict, reason: str) -> bool:
+    """Soft-pause until captcha/login clears (or timeout). Returns True if cleared."""
+    print(f"[worker] needs human: {reason}")
+    uid = job.get("user") or job.get("user_id")
+    if uid:
+        try:
+            from app import push
+            push.notify_needs_human(uid, reason)
+        except Exception as e:  # noqa: BLE001
+            print(f"[worker] needs_human push failed: {e}")
+    deadline = time.time() + HUMAN_WAIT_SECONDS
+    while time.time() < deadline:
+        page.wait_for_timeout(2000)
+        probe = _probe_page(page)
+        if probe["kind"] not in ("captcha", "login"):
+            print("[worker] blocker cleared — resuming autopilot")
+            return True
+    print(f"[worker] human wait timed out ({HUMAN_WAIT_SECONDS}s)")
+    return False
+
+
+def fill_form(page, job: dict) -> dict:
+    """Fill the page from the job's identity + answers. Returns a preview summary."""
+    frames = _open_form(page, job)
+    filled, skipped = _fill_frames(page, frames, job)
     return {
         "filled": filled,
         "skipped": skipped[:20],
         "screenshot_url": _screenshot(page),
+    }
+
+
+def drive_form(page, job: dict) -> dict:
+    """Simplify-style autopilot: fill → Next/Continue → refill until Submit-only.
+
+    Never clicks Submit. Soft-pauses on captcha/login and waits for the human.
+    """
+    frames = _open_form(page, job)
+    all_filled, all_skipped = [], []
+    steps = 0
+
+    while steps < MAX_ADVANCE_STEPS:
+        probe = _probe_page(page)
+        print(f"[worker] probe kind={probe['kind']} score={probe['score']} "
+              f"fillable={probe['fillable_count']} advance={probe.get('advance_label')!r}")
+
+        if probe["kind"] in ("captcha", "login"):
+            reason = probe.get("blocker_reason") or probe["kind"]
+            if not _wait_for_human(page, job, reason):
+                return {
+                    "status": "blocked",
+                    "reason": reason,
+                    "filled": all_filled,
+                    "skipped": all_skipped[:20],
+                    "screenshot_url": _screenshot(page),
+                }
+            frames = _wait_for_form(page, timeout_ms=FORM_WAIT_MS)
+            continue
+
+        if probe["kind"] == "unknown" and probe["fillable_count"] == 0:
+            if probe.get("reveal_label") and _reveal_form(page):
+                frames = _wait_for_form(page, timeout_ms=FORM_WAIT_MS)
+                steps += 1
+                continue
+            if not all_filled:
+                return {
+                    "status": "blocked",
+                    "reason": probe.get("blocker_reason")
+                              or "No application form on this page",
+                    "filled": all_filled,
+                    "skipped": all_skipped[:20],
+                    "screenshot_url": _screenshot(page),
+                }
+            break
+
+        frames = _extract_frames(page) or frames
+        filled, skipped = _fill_frames(page, frames, job)
+        all_filled.extend(filled)
+        all_skipped.extend(skipped)
+
+        probe = _probe_page(page)
+        if probe.get("submit_visible") and not probe.get("advance_label"):
+            break
+        if not _click_advance(page):
+            break
+        steps += 1
+        frames = _wait_for_form(page, timeout_ms=FORM_WAIT_MS)
+
+    return {
+        "status": "ready",
+        "filled": all_filled,
+        "skipped": all_skipped[:20],
+        "screenshot_url": _screenshot(page),
+        "steps": steps,
     }
 
 
@@ -554,14 +736,11 @@ def submit_form(page) -> None:
 
 def handle_job(browser, job: dict) -> None:
     rid = job["request_id"]
-    # Safety net: the server gates this too, but never fill a non-first-party URL —
-    # aggregator/login/captcha pages have no form, so hand off to the desktop extension.
-    if not ats.is_fillable_form(job.get("url")):
+    if not ats.may_autosubmit(job.get("url")):
         _api("POST", "/worker/result", json={
             "request_id": rid, "status": "failed",
-            "error": "Not a directly fillable form (aggregator / login / captcha) — "
-                     "open it on your computer and finish with the browser extension."})
-        print(f"[worker] req {rid}: {job.get('url')} isn't a first-party ATS form — handed off")
+            "error": "Not a usable apply URL."})
+        print(f"[worker] req {rid}: bad url {job.get('url')!r}")
         return
     job["resume"] = _fetch_resume(job)
     page = browser.new_page()
@@ -578,9 +757,17 @@ def handle_job(browser, job: dict) -> None:
                 print(f"[worker] req {rid}: agent blocked — {preview.get('reason','')}")
                 return
         else:
-            preview = fill_form(page, job)
+            preview = drive_form(page, job)
+            if preview.get("status") == "blocked":
+                _api("POST", "/worker/result", json={
+                    "request_id": rid, "status": "failed",
+                    "error": f"{preview.get('reason', 'blocked')} — finish on your "
+                             "computer with the browser extension, or retry after "
+                             "clearing the captcha/login."})
+                print(f"[worker] req {rid}: blocked — {preview.get('reason','')}")
+                return
         _api("POST", "/worker/preview", json={"request_id": rid, "preview": preview})
-        print(f"[worker] req {rid}: filled {len(preview['filled'])}, awaiting approval")
+        print(f"[worker] req {rid}: filled {len(preview.get('filled') or [])}, awaiting approval")
 
         waited = 0
         while waited < APPROVE_TIMEOUT:

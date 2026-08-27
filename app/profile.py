@@ -38,6 +38,15 @@ def has_profile(user_id: str) -> bool:
     return any((row[f] or "").strip() for f in ("roles", "keywords", "locations"))
 
 
+def public_fields(user_id: str) -> dict:
+    """Search-profile fields the iOS setup wizard reads/writes."""
+    keys = ("roles", "keywords", "locations", "seniority")
+    row = get_profile(user_id)
+    if row is None:
+        return {k: "" for k in keys}
+    return {k: (row[k] or "") for k in keys}
+
+
 def all_profile_users() -> list[str]:
     """Every user with a saved profile (drives aggregator-only discovery sweeps)."""
     with connect() as conn:

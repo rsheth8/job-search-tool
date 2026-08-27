@@ -65,9 +65,16 @@ Apple Developer Program**):
 
 ## Configure
 
-Open **Settings** in the app. Defaults already point at the live deploy
-(`https://job-search-tool.fly.dev`) and your Slack user id (`U07LVJVD4PL`); set the
-`APPLY_API_TOKEN` if your backend requires it.
+Open **Settings** in the app after Sign in with Apple. Defaults point at the live
+deploy (`https://job-search-tool.fly.dev`). Base URL / API token are under
+**Advanced** — testers should not re-point the backend.
+
+TestFlight **Release** archives use `ApplyRelease.entitlements`
+(`aps-environment: production`). Set `APNS_USE_SANDBOX=false` on Fly to match.
+Debug builds keep the sandbox entitlement.
+
+Invite-only: the backend allowlist is `AUTH_ALLOWED_EMAILS`. Tester brief is
+in Settings → For testers and [`deploy/BETA.md`](../deploy/BETA.md).
 
 ## How autofill works
 
@@ -79,7 +86,7 @@ questions from your tailored answers, **skips EEO/demographic fields**, and repo
 how many it filled (and how many still need you). It's the same field-matching brain
 as the desktop extension (`extension/content.js` / `app/fieldmatch.py`).
 
-## The four tabs
+## The five tabs
 
 - **Apply** — matches ready to apply to, plus the top matches you can stage with
   *Prepare application*. Each row says **why** it surfaced ("matches 'backend
@@ -91,7 +98,22 @@ as the desktop extension (`extension/content.js` / `app/fieldmatch.py`).
 - **About me** — how completely the assistant knows you (the lever on how much it
   can fill unattended), and the facts it draws on. Add projects, achievements, and
   reusable answers here; a saved answer is reused verbatim, with no model call.
-- **Settings** — backend, user, token, and notifications.
+- **Chat** — the in-app assistant (reminders, CRM, job questions). Secondary to
+  Apply; same brain that used to live in Slack.
+- **Settings** — account, Send feedback, tester brief, Advanced (backend URL).
+
+## Sign in with Apple
+
+The app gates on an account. In Xcode:
+
+1. Signing & Capabilities → **+ Capability → Sign in with Apple**
+   (also declared in `project.yml` / `Apply.entitlements`).
+2. Backend needs `APPLE_CLIENT_IDS=com.rahil.apply` (and your Team set in Xcode).
+3. To fold your old Slack-keyed data into the new account on first login, set
+   `AUTH_LEGACY_USER_ID=U…` on the server once, then clear it.
+
+Web companion: open `/chat` on the backend (needs `APPLE_SERVICES_ID` for the
+Apple JS button; otherwise use the iOS app).
 
 ## Autofill rules come from the backend
 

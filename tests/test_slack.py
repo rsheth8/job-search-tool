@@ -15,7 +15,13 @@ from app import slack
 
 
 @pytest.fixture(autouse=True)
-def _clear_seen():
+def _clear_seen(monkeypatch):
+    # Webhook is off unless explicitly enabled — turn it on for this module.
+    monkeypatch.setenv("SLACK_TRANSPORT_ENABLED", "true")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    from app import config
+
+    config.get_settings.cache_clear()
     slack._seen_event_ids.clear()
     yield
     slack._seen_event_ids.clear()
@@ -196,10 +202,22 @@ def test_slack_sender_posts_dm(monkeypatch):
     assert posts == [("xoxb-x", "U9", "⏰ follow up?")]
 
 
-def test_get_sender_prefers_slack(monkeypatch):
+def test_get_sender_prefers_slack_when_explicitly_enabled(monkeypatch):
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("SLACK_TRANSPORT_ENABLED", "true")
     from app import config, reminders
 
     config.get_settings.cache_clear()
     reminders._sender_singleton = None
     assert isinstance(reminders.get_sender(), slack.SlackSender)
+
+
+def test_slack_token_alone_does_not_enable_transport(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("SLACK_TRANSPORT_ENABLED", "false")
+    from app import config, reminders
+
+    config.get_settings.cache_clear()
+    reminders._sender_singleton = None
+    assert config.get_settings().slack_enabled is False
+    assert isinstance(reminders.get_sender(), reminders.AppSender)

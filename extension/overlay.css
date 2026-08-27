@@ -3,22 +3,43 @@
   z-index: 2147483647;
   font: 600 12px/1 -apple-system, Segoe UI, Roboto, sans-serif;
   color: #fff;
-  background: #2563eb;
+  background: #5B7C6E;
   border: none;
   border-radius: 7px;
   padding: 6px 10px;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 2px 8px rgba(28, 36, 33, 0.2);
   white-space: nowrap;
 }
-.jaf-chip:hover { background: #1d4ed8; }
+.jaf-chip:hover { background: #4a685c; }
 
-.jaf-filled {
-  outline: 2px solid #22c55e !important;
-  transition: outline 0.2s ease;
+@keyframes jafPulse {
+  0% { box-shadow: 0 0 0 0 rgba(91, 124, 110, 0.45); }
+  70% { box-shadow: 0 0 0 10px rgba(91, 124, 110, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(91, 124, 110, 0); }
+}
+@keyframes jafShimmer {
+  0% { background-position: 0% 50%; opacity: 0; }
+  40% { opacity: 0.55; }
+  100% { background-position: 100% 50%; opacity: 0; }
 }
 
-/* One-click "autofill this page" floating button. */
+.jaf-filled {
+  outline: 2px solid #5B7C6E !important;
+  outline-offset: 2px;
+  animation: jafPulse 0.85s ease-out;
+}
+
+.jaf-veil {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  background: linear-gradient(110deg, transparent 30%, rgba(91,124,110,0.12) 50%, transparent 70%);
+  background-size: 200% 100%;
+  animation: jafShimmer 0.9s ease-out;
+}
+
 .jaf-fab {
   position: fixed;
   z-index: 2147483647;
@@ -26,23 +47,46 @@
   bottom: 18px;
   font: 600 13px/1 -apple-system, Segoe UI, Roboto, sans-serif;
   color: #fff;
-  background: #2563eb;
+  background: #5B7C6E;
   border: none;
   border-radius: 999px;
   padding: 11px 16px;
   cursor: pointer;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 4px 14px rgba(28, 36, 33, 0.22);
 }
-.jaf-fab:hover { background: #1d4ed8; }
+.jaf-fab:hover { background: #4a685c; }
+
+.jaf-status {
+  position: fixed;
+  z-index: 2147483647;
+  right: 18px;
+  bottom: 64px;
+  font: 600 12px/1.35 -apple-system, Segoe UI, Roboto, sans-serif;
+  color: #1C2421;
+  background: rgba(243, 245, 242, 0.96);
+  border: 1px solid rgba(91, 124, 110, 0.25);
+  border-radius: 10px;
+  padding: 10px 14px;
+  max-width: 280px;
+  box-shadow: 0 4px 14px rgba(28, 36, 33, 0.12);
+  display: none;
+}
+.jaf-status[data-kind="need"] {
+  border-color: rgba(120, 110, 90, 0.45);
+  background: rgba(250, 246, 238, 0.97);
+}
+.jaf-status[data-kind="clear"] {
+  border-color: rgba(91, 124, 110, 0.55);
+}
 
 .jaf-toast {
   position: fixed;
   z-index: 2147483647;
   right: 18px;
-  bottom: 64px;
+  bottom: 110px;
   font: 600 13px/1.3 -apple-system, Segoe UI, Roboto, sans-serif;
   color: #fff;
-  background: #111827;
+  background: #1C2421;
   border: 1px solid #374151;
   border-radius: 10px;
   padding: 10px 14px;

@@ -1,35 +1,42 @@
 # Submit worker — live-test checklist
 
-The worker (`worker/run.py`) drives a real browser. Its fill logic is now covered by
-`tests/test_worker_fill.py` (headless Chromium against local fixtures — run that
-first, it's ~60s), so this session is about the one thing fixtures can't prove:
-that **real ATS DOMs match the shapes we imitate**. Budget ~45–60 min.
+The worker (`worker/run.py`) drives a real browser. Fixture tests prove the engines
+against **imitations** of ATS shapes. This session is the one thing fixtures cannot
+prove: that **real Greenhouse / Lever / Ashby DOMs match those shapes**. Budget
+~45–60 min. CI never hits live ATS — you have to.
+
+**Do this first (must be green):**
 
 ```bash
-.venv/bin/python -m pytest tests/test_worker_fill.py -q   # do this before you start
+# local, with Chromium installed
+.venv/bin/python -m pytest tests/test_worker_fill.py tests/test_ios_autofill.py \
+  tests/test_extension_autofill.py tests/test_rules_parity.py -q
 ```
 
+GitHub Actions (`.github/workflows/pytest.yml`) runs that same suite — including
+headless Chromium — on every PR, and **blocks Fly deploy** on `main` until it
+passes. A green CI check is not a live-ATS pass.
+
 **Safety:** the worker **never submits without your explicit approval** — it fills,
-screenshots, and waits. So you can test fill + preview on real postings all day and
-simply **Cancel** instead of Approve. You only ever submit forms you actually mean to.
+screenshots, and waits. Test fill + preview all day and **Cancel**. Only Approve
+forms you actually mean to send.
 
-**Approving from your phone:** you no longer need the web page. When the worker
-reports a preview you get a Slack message listing what it filled and what it left
-for you; reply **`approve`** to submit or **`cancel`** to stop. `in flight` lists
-everything in progress. The `/apply` page still works exactly as before.
+**Approving from your phone:** when the worker reports a preview you get a Slack
+message listing what it filled and what it left for you; reply **`approve`** or
+**`cancel`**. `in flight` lists everything in progress. `/apply` still works.
 
-**Reading a failure:** the worker now logs one line per field —
+**Reading a failure:** the worker logs one line per field —
 `'Email Address' key=email text filled — rahil@…` / `'Gender' key=- eeo skipped —
-demographic`. When something doesn't fill, that line says whether the label failed
+demographic`. If something doesn't fill, that line says whether the label failed
 to match, the identity was empty, or the click threw. Reproduce it by adding a
-fixture to `tests/fixtures/forms/` rather than only tuning against the live site.
+fixture under `tests/fixtures/forms/` rather than only tuning against the live site.
 
 ---
 
 ## 0. Setup (once)
 
 ```bash
-cd ~/Documents/job-search-tool
+# repo root
 .venv/bin/pip install -r worker/requirements.txt
 .venv/bin/python -m playwright install chromium
 ```
@@ -66,8 +73,8 @@ WORKER_HEADLESS=false \
 4. On your phone, check the preview: the **screenshot**, the **filled** chips, and the
    **"Left for you"** (skipped) list.
 5. **Cancel** (for pure tuning) or **Approve** (only if you mean to apply).
-6. Note what was wrong (below), fix `app/fieldmatch.py` / `submit_form`, redeploy the
-   main app if you touched `fieldmatch`, re-test.
+6. Note what was wrong (below), add a fixture + test, fix `app/fieldmatch.py` /
+   `worker/run.py` / the JS engines, then re-run the Chromium suite before redeploy.
 
 ---
 
@@ -77,9 +84,9 @@ The fill logic forks by ATS DOM. Test all three; they fail differently.
 
 | ATS | URL shape | Watch for |
 |-----|-----------|-----------|
-| **Greenhouse** | `boards.greenhouse.io/...` or `job-boards.greenhouse.io` | The friendliest: native `<input>`/`<select>`. Resume upload is a real `<input type=file>` (often hidden behind a styled button) — should attach. |
-| **Lever** | `jobs.lever.co/...` | Native fields; "Additional information" is a `<textarea>` (essay path). Resume field labeled "Resume/CV". |
-| **Ashby** | `jobs.ashbyhq.com/...` | The hard one: many dropdowns are **custom React** widgets, not `<select>` — expect these in skipped (known limitation). Yes/No may be radio groups or React buttons. |
+| **Greenhouse** | `boards.greenhouse.io/...` or `job-boards.greenhouse.io` | Friendliest: native `<input>`/`<select>`. Resume is often a hidden `<input type=file>` behind a styled button — should attach. Newer boards use react-select; if a dropdown stays skipped, capture it as a fixture. |
+| **Lever** | `jobs.lever.co/...` | Native fields; "Additional information" is a `<textarea>` (essay path). Resume field labeled "Resume/CV". Reveal-then-form is covered by `lever_apply_reveal.html` locally. |
+| **Ashby** | `jobs.ashbyhq.com/...` | The hard one: many dropdowns are **custom React** widgets, not `<select>`. Yes/No may be radios **or** big `<button>` pairs (`ashby_yesno_buttons.html` — iOS fills these; extension bulk fill does not; worker may still skip custom widgets). |
 
 And exercise each **field type** at least once across your test forms:
 - text facts (name, email, phone, location, links)
@@ -96,13 +103,14 @@ And exercise each **field type** at least once across your test forms:
 ### A field that should've filled landed in "skipped"
 - **Label not recognized** → add/loosen a regex in `FIELD_RULES` in
   [`app/fieldmatch.py`](../app/fieldmatch.py). Add a case to `tests/test_fieldmatch.py`
-  with the exact label so it's locked in. This fix **also improves the extension**
-  (shared brain).
+  with the exact label so it's locked in. This fix **also improves the extension
+  and iOS** (shared brain).
 - **Dropdown matched the field but no option fit** → the value vs option mismatch is in
   `select_value` (e.g. you have `"Yes"` but options are `"Yes, I am authorized"`). It
   already does exact → substring; widen only if a real case needs it.
-- **Custom React dropdown (Ashby)** → expected skip for now; note the posting so we can
-  decide whether custom-widget support is worth building.
+- **Custom React dropdown (Ashby / Greenhouse react-select)** → expected skip on the
+  worker until that widget is ported. Note the posting URL; first add a fixture, then
+  the engine fix.
 
 ### A field filled with the *wrong* value
 - Two rules matched and the wrong one won → `FIELD_RULES` is **order-sensitive**
@@ -118,7 +126,9 @@ And exercise each **field type** at least once across your test forms:
 - Empty fetch → base resume `.tex` likely missing on the volume (setup note above).
 
 ### An EEO/demographic field got filled
-- It shouldn't — `_NEVER_FILL` blocks these. If one slips through, add the wording to
+- Hard-blocked fields (`orientation`, hispanic/latino, gender identity, DOB, …)
+  must stay empty. Optional demographics (gender/race/veteran/disability) fill **only**
+  when identity has a value. If a hard-blocked one slips through, add the wording to
   `_NEVER_FILL` and a test. **This is the one to never get wrong.**
 
 ### Screenshot looks wrong on the phone
@@ -140,17 +150,26 @@ Keep a running note (paste into the next session) per form:
 
 ```
 ATS / URL:
+surface:  worker (this checklist) / iOS / extension
 filled:   <count + anything notable>
 skipped:  <list — the tuning targets>
 resume:   attached? yes/no
 screenshot: ok? yes/no
+eeo:      hard-blocked empty? optional only if identity set?
 submit:   (only if approved) ok? yes/no
-fix made: <fieldmatch regex / submit selector / none>
+fixture:  added tests/fixtures/forms/<name>.html ? yes/no
+fix made: <fieldmatch regex / worker selector / JS engine / none>
 ```
 
-After a round of `fieldmatch` fixes: `.venv/bin/python -m pytest tests/test_fieldmatch.py -q`,
-then redeploy the main app (`flyctl deploy -a job-search-tool`) so prod serves the
-updated brain to both the worker and the extension.
+After a round of fixes:
+
+```bash
+.venv/bin/python -m pytest tests/test_fieldmatch.py tests/test_worker_fill.py \
+  tests/test_ios_autofill.py tests/test_extension_autofill.py tests/test_rules_parity.py -q
+```
+
+Then redeploy the main app (`flyctl deploy -a job-search-tool`) so prod serves the
+updated brain to the worker, the extension, and the phone. Deploy now waits on CI.
 
 ---
 
@@ -158,5 +177,7 @@ updated brain to both the worker and the extension.
 
 - One real submit went all the way through on Greenhouse **and** Lever (the native-form
   ATSes), logged itself as Applied, and showed a faithful screenshot first.
-- Ashby fills the native fields; remaining skips are only the known custom-React widgets.
-- No EEO/demographic field ever auto-filled across any test.
+- Ashby fills native fields; remaining skips are only known custom-React widgets.
+- No hard-blocked EEO/demographic field ever auto-filled across any test.
+- Any live miss has a fixture + a failing-then-passing Chromium test before you
+  consider it fixed.

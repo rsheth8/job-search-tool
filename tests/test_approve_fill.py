@@ -217,7 +217,7 @@ def test_worker_preview_pushes_the_gate_to_the_user():
     posting = _posting()
     req = fill_requests.create("u1", posting["id"])
     fill_requests.claim_next()
-    sender = reminders.get_sender()          # LogSender: records instead of sending
+    sender = reminders.get_sender()          # AppSender: records + chat transcript
 
     r = TestClient(app).post("/worker/preview", json={
         "request_id": req["id"],

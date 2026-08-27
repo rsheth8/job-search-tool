@@ -1,4 +1,5 @@
-"""Wide job discovery: RSS feeds, SerpApi search, ATS directory rotation.
+"""Wide job discovery: RSS feeds, SerpApi search, ATS directory rotation,
+and the Pitt CSC / Simplify internship list.
 
 Runs for users with a job-search profile (even with zero tracked companies).
 Postings merge into the same ``discovery.tick`` pipeline as board tracking.
@@ -13,10 +14,12 @@ from .jobsources import JobPosting, fetch_source
 from .jobsources import aggregator as agg_src
 from .jobsources import directory as dir_src
 from .jobsources import rss as rss_src
+from .jobsources import swelist as swelist_src
+
 logger = logging.getLogger("wide_discovery")
 
 # Wide sources skip heavy seeding (would baseline thousands of roles).
-_NO_SEED_SOURCES = frozenset({"rss", "aggregator", "directory"})
+_NO_SEED_SOURCES = frozenset({"rss", "aggregator", "directory", "swelist"})
 
 
 def is_wide_source(source: str) -> bool:
@@ -41,7 +44,7 @@ def collect_fresh(
     *,
     existing_keys: set[tuple[str, str]] | None = None,
 ) -> list[JobPosting]:
-    """Pull postings from RSS, aggregator, and directory (profile required)."""
+    """Pull new postings from RSS, SerpApi, the ATS directory, and swelist."""
     if prof is None:
         return []
     settings = get_settings()
@@ -77,6 +80,14 @@ def collect_fresh(
                 seen.add(key)
                 fresh.append(p)
 
+    if "swelist" in sources and settings.job_wide_swelist_enabled:
+        token = (settings.job_swelist_list or swelist_src.DEFAULT_LIST).strip()
+        for p in fetch_source("swelist", token):
+            key = (p.source, p.external_id)
+            if p.external_id and key not in seen:
+                seen.add(key)
+                fresh.append(p)
+
     if fresh:
         logger.info("wide_discovery: %d fresh posting(s) for %s", len(fresh), user_id)
     return fresh
@@ -96,6 +107,20 @@ def ensure_default_feeds_tracked(user_id: str) -> int:
         )
         if row is not None:
             added += 1
+    if (
+        get_settings().job_wide_swelist_enabled
+        and "swelist" in get_settings().job_sources
+    ):
+        token = (get_settings().job_swelist_list or swelist_src.DEFAULT_LIST).strip()
+        meta = swelist_src.resolve_list(token)
+        if meta:
+            from . import jobstore
+
+            row = jobstore.add_tracked_company(
+                user_id, "swelist", meta["list_id"], meta["label"]
+            )
+            if row is not None:
+                added += 1
     return added
 
 
@@ -110,4 +135,6 @@ def describe_wide_status() -> str:
         parts.append(f"ATS directory ({dir_src.board_count()} boards, rotating)")
     if s.job_wide_aggregator_enabled and "aggregator" in s.job_sources:
         parts.append("Google Jobs search" + (" ✓" if s.serpapi_enabled else " — needs SERPAPI_API_KEY"))
+    if s.job_wide_swelist_enabled and "swelist" in s.job_sources:
+        parts.append("Pitt CSC / Simplify internship list")
     return "; ".join(parts) if parts else ""

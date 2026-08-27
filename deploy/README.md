@@ -1,8 +1,8 @@
 # Deploying to Fly.io
 
-Always-on hosting gives you a **stable Slack webhook URL** (no more re-verifying
-after every ngrok restart) and makes **outbound reminders actually fire** — the
-APScheduler loop only delivers due reminders while the server is up.
+Always-on hosting keeps **reminders and discovery ticking** (in-process
+APScheduler) and gives the iOS app a stable API URL. Invite-only beta runbook:
+[`BETA.md`](BETA.md).
 
 ## Why these settings
 
@@ -29,12 +29,12 @@ fly launch --no-deploy
 fly volumes create data --size 1 --region iad
 
 # 4. Set secrets (these are NOT baked into the image — .env is .dockerignored).
+#    See BETA.md for the invite-only iOS set (APPLY_API_TOKEN, AUTH_ALLOWED_EMAILS,
+#    SENTRY_DSN, Apple). AUTH_FAIL_OPEN=false is already in fly.toml.
 fly secrets set \
   ANTHROPIC_API_KEY=sk-ant-... \
-  SLACK_BOT_TOKEN=xoxb-... \
-  SLACK_SIGNING_SECRET=... \
-  APOLLO_API_KEY=... \
-  JOB_ALERT_USER=U0123456789
+  APPLY_API_TOKEN=... \
+  AUTH_ALLOWED_EMAILS=you@example.com
 ```
 
 Only `ANTHROPIC_API_KEY` and the two `SLACK_*` values are needed for the core
@@ -70,7 +70,7 @@ Tailored outputs cache under `/data/resumes/tailored/`. Tectonic is in the Docke
 ```bash
 fly deploy
 fly status                       # confirm one machine is running
-curl https://<app>.fly.dev/health   # router, scheduler, reminder_delivery: slack
+curl https://<app>.fly.dev/health   # router, scheduler, auth.fail_open: false
 ```
 
 ## Repoint Slack (once)
@@ -87,11 +87,9 @@ have to do this again.
 
 ## Smoke test
 
-1. DM the bot: `applied notion swe ii` → expect a "Logged" reply.
-2. `what should I follow up on` → expect a ranked list.
-3. `apply <#>` on a discovered job → link + draft + **PDF resume** attached.
-4. `GET /` in a browser → the dashboard.
-5. Set a near-term reminder and confirm delivery once it's due.
+1. TestFlight: Sign in with Apple → finish setup → matches appear.
+2. `GET /health` → `auth.fail_open` is false, `dev_login` is false.
+3. Unauthenticated `GET /apply/data` → 401.
 
 ## Updating
 

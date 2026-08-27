@@ -15,5 +15,6 @@ pypdf>=5.1.0        # accurate page count for tectonic PDFs (flate-compressed)
 pyjwt>=2.8.0        # the APNs bearer token
 cryptography>=42.0  # ES256 signing of that token (PyJWT's backend)
 h2>=4.1.0           # APNs is HTTP/2 only (httpx needs this for http2=True)
+sentry-sdk>=2.0.0
 # Dev/test
 pytest==8.3.4

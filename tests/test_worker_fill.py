@@ -6,12 +6,13 @@ sites. Here we serve hand-written fixtures that reproduce the shapes real forms
 take (iframes, reveal-then-render, ARIA comboboxes, late SPA paints, EEO sections)
 from a local HTTP server, and drive them with the same Chromium the worker uses.
 
-No network, no credentials, no live site is touched. The module skips cleanly where
-Playwright/Chromium isn't installed, so a browserless CI still passes.
+No network, no credentials, no live site is touched. Local machines without
+Playwright/Chromium skip; CI installs Chromium and must run these.
 
 The two invariants these tests exist to defend:
   1. `fill_form` NEVER submits — a human approves first.
-  2. EEO / demographic fields are NEVER filled, on any control type.
+  2. Hard-blocked EEO fields are NEVER filled; optional demographics
+     (gender/race/veteran/disability) fill only when identity has a value.
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ pytest.importorskip("playwright", reason="browser tests need the playwright pack
 from playwright.sync_api import Error as PlaywrightError  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
+from tests.browserutil import skip_unless_ci_chromium  # noqa: E402
 from worker import run as worker_run  # noqa: E402
 
 FORMS_DIR = Path(__file__).parent / "fixtures" / "forms"
@@ -92,7 +94,7 @@ def browser():
             yield b
             b.close()
     except PlaywrightError as e:  # browser binary not installed on this machine
-        pytest.skip(f"chromium unavailable: {e}")
+        skip_unless_ci_chromium(e)
 
 
 @contextlib.contextmanager
@@ -208,12 +210,30 @@ def test_fill_form_never_submits(browser, server, fixture):
         assert not was_submitted(page)
 
 
-def test_eeo_fields_are_never_filled(browser, server):
+def test_drive_form_advances_two_steps_without_submitting(browser, server):
+    """Autopilot clicks Next, fills step 2, and stops before Submit."""
+    page = browser.new_page()
+    try:
+        job = {"url": f"{server}/two_step_next.html",
+               "identity": IDENTITY, "questions": QUESTIONS, "resume": None}
+        preview = worker_run.drive_form(page, job)
+        assert preview.get("status") != "blocked"
+        assert page.input_value("#email") == "rahil@example.com"
+        assert page.input_value("#phone") == "555-0100"
+        assert page.input_value("#linkedin") == "https://linkedin.com/in/rahil"
+        assert page.get_attribute("body", "data-submitted") is None
+        assert page.is_visible("#submit")
+    finally:
+        page.close()
+
+
+def test_optional_eeo_skipped_when_identity_unset(browser, server):
+    """Default fixture identity has no gender/race/… — those stay empty and are
+    listed as skipped. Hard-blocked fields (hispanic, orientation, transgender)
+    are never filled either."""
     with filled(browser, server, "eeo_present.html") as (page, preview):
-        # identity fields above the EEO section still fill normally
         assert page.input_value("#first_name") == "Rahil"
         assert page.input_value("#email") == "rahil@example.com"
-        # ...and every demographic control is untouched, whatever its type
         assert page.input_value("#gender") == ""
         assert page.input_value("#race") == ""
         assert page.input_value("#veteran") == ""
@@ -222,10 +242,26 @@ def test_eeo_fields_are_never_filled(browser, server):
         assert page.input_value("#orientation") == ""
         assert not page.is_checked("input[name='gender_identity'][value='Yes']")
         assert not page.is_checked("input[name='gender_identity'][value='No']")
-        # and they're surfaced to the human rather than silently dropped
         skipped = " ".join(preview["skipped"]).lower()
         for term in ("gender", "race", "veteran", "disability"):
             assert term in skipped
+
+
+def test_optional_eeo_fills_when_identity_has_values(browser, server):
+    ident = {
+        **IDENTITY,
+        "gender": "Male",
+        "race": "Asian",
+        "veteran_status": "I am not a protected veteran",
+        "disability_status": "No, I do not have a disability",
+    }
+    with filled(browser, server, "eeo_present.html", identity=ident) as (page, _):
+        assert page.input_value("#gender") == "Male"
+        assert page.input_value("#race") == "Asian"
+        assert page.input_value("#veteran") == "I am not a protected veteran"
+        assert page.input_value("#disability") == "No, I do not have a disability"
+        assert page.input_value("#hispanic") == ""
+        assert page.input_value("#orientation") == ""
 
 
 def test_a_long_eeo_question_is_not_answered_as_an_essay(browser, server):

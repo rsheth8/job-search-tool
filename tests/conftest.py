@@ -31,12 +31,25 @@ def temp_db(monkeypatch):
     monkeypatch.setenv("JOB_WIDE_AGGREGATOR_ENABLED", "false")
     monkeypatch.setenv("JOB_WIDE_RSS_ENABLED", "false")
     monkeypatch.setenv("JOB_WIDE_DIRECTORY_ENABLED", "false")
+    monkeypatch.setenv("JOB_WIDE_SWELIST_ENABLED", "false")
     # Neutralize live Slack tokens from .env so the webhook tests post unsigned
     # (no real signing secret) and no test ever calls the Slack Web API. Tests
     # that exercise signing/outbound set these explicitly via monkeypatch.
     monkeypatch.setenv("SLACK_SIGNING_SECRET", "")
     monkeypatch.setenv("SLACK_BOT_TOKEN", "")
+    monkeypatch.setenv("SLACK_TRANSPORT_ENABLED", "false")
+    monkeypatch.setenv("AUTH_ALLOW_DEV_LOGIN", "false")
+    monkeypatch.setenv("AUTH_LEGACY_USER_ID", "")
+    monkeypatch.setenv("AUTH_FAIL_OPEN", "true")
+    monkeypatch.setenv("AUTH_ALLOWED_EMAILS", "")
+    monkeypatch.setenv("APPLY_AUTOSUBMIT_ENABLED", "true")
+    monkeypatch.setenv("SENTRY_DSN", "")
+    monkeypatch.setenv("LLM_MAX_CALLS_PER_USER_PER_DAY", "0")
     monkeypatch.setenv("RESUME_TAILOR_ENABLED", "false")
+    # Autofill/mobile endpoints are token-gated when APPLY_API_TOKEN is set in
+    # .env (prod/local). Clear it so suite requests without X-Apply-Token stay
+    # open; tests that exercise the gate set the token explicitly.
+    monkeypatch.setenv("APPLY_API_TOKEN", "")
     # Twilio outbound is .env-configured in prod; neutralize it so the LogSender/
     # config tests stay hermetic regardless of a real number in .env (the tests
     # that exercise Twilio set these explicitly via monkeypatch).
@@ -49,7 +62,8 @@ def temp_db(monkeypatch):
 
     # Reset cached settings + router singleton so env changes take effect.
     from app import (
-        apollo, config, eligibility, embeddings, insights, matcher, reminders, router,
+        apollo, auth, config, eligibility, embeddings, insights, llm_budget,
+        matcher, reminders, router,
     )
 
     config.get_settings.cache_clear()
@@ -58,11 +72,13 @@ def temp_db(monkeypatch):
     apollo._client_singleton = None  # nor an Apollo client
     apollo._last_discovery_issue = None
     apollo.reset_for_tests()
+    auth.reset_for_tests()
     matcher._llm_client = None  # nor a matcher LLM client/limiter
     matcher._llm_limiter = None
     embeddings.reset_for_tests()  # nor an embedding rate limiter
     eligibility.reset_for_tests()  # nor an eligibility LLM client/limiter
     insights.reset_for_tests()  # nor a deck-TLDR LLM client/limiter
+    llm_budget.set_user("")
 
     from app.db import init_db
 

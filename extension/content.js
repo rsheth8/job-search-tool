@@ -17,7 +17,7 @@
   // Order matters: more specific patterns first (email before address, preferred
   // before first, location before city).
   // Offline fallback, generated from app/fieldmatch.py (rules version
-  // 211cfb5d2aeb). The rules fetched from the backend take priority —
+  // db530a7f5e7c). The rules fetched from the backend take priority —
   // don't hand-edit these; regenerate them from fieldmatch.py, or you have
   // reintroduced exactly the drift this design removes.
   const FALLBACK_RULES = [
@@ -50,9 +50,22 @@
     ["willing_to_relocate", /willing to relocate|open to relocat|able to relocate|relocat/i],
     ["work_authorized", /authori[sz]ed to work|work authori[sz]ation|legally.{0,12}work|eligible to work|right to work/i],
     ["needs_sponsorship", /sponsor(ship)?|require.{0,12}visa|visa.{0,12}status|immigration status/i],
+    ["background_check", /background check|criminal (background|history|record)|background screening/i],
+    ["drug_test", /drug (test|screen|screening)|substance (test|screen)/i],
+    ["over_18", /over 18|18 years|at least 18|age 18|legal age/i],
+    ["can_travel", /willing to travel|able to travel|travel (required|for (work|this))|open to travel/i],
+    ["previously_applied", /previously applied|applied (here|before|to (this|us))|worked (here|for us|at this)|former employee|prior application/i],
+    ["related_to_employee", /related to|relative (at|of)|know anyone|family member|referral|employee of/i],
+    ["work_arrangement", /remote|hybrid|on-?site|onsite|work (from home|arrangement|location preference)/i],
+    ["how_heard", /how did you (hear|learn|find)|where did you hear|referral source|source of (this )?application/i],
+    ["gender", /^\s*gender\s*$|^\s*sex\s*$/i],
+    ["race", /^\s*race\s*$|race\s*\/?\s*ethnicity|racial identity/i],
+    ["ethnicity", /^\s*ethnicity\s*$|ethnic background/i],
+    ["veteran_status", /veteran|protected veteran|military status/i],
+    ["disability_status", /disabilit(y|ies)|disabled/i],
   ];
-  // Labels we never auto-fill or offer to draft (EEO / demographic).
-  const FALLBACK_EEO = /gender|sex\b|race|ethnic|hispanic|latino|veteran|disab|sexual orientation|pronoun.{0,4}optional|national origin|self.?identif|\beeo\b|equal (employment|opportunity)|protected (class|category)|lgbt|marital status|religio|citizenship status|date of birth|\bdob\b/i;
+  // Labels we never auto-fill or offer to draft (hard-blocked EEO).
+  const FALLBACK_EEO = /sexual orientation|pronoun.{0,4}optional|national origin|self.?identif|\beeo\b|equal (employment|opportunity)|protected (class|category)|lgbt|marital status|religio|citizenship status|date of birth|\bdob\b|transgender|lgbtq|hispanic|latino|gender identity/i;
 
   // Replaced by the served rules once init() fetches them.
   let RULES = FALLBACK_RULES;
@@ -63,8 +76,6 @@
   let IDENTITY = {};
   let chip = null;
   let chipFor = null;
-
-  init();
 
   async function init() {
     CFG = await getConfig();
@@ -232,8 +243,13 @@
       if (n) bits.push(n.textContent);
     });
     if (el.placeholder) bits.push(el.placeholder);
-    bits.push(el.name || "", el.id || "");
-    return bits.join(" ").replace(/\s+/g, " ").trim().toLowerCase();
+    let s = bits.join(" ").replace(/\s+/g, " ").trim().toLowerCase();
+    // name/id is last-resort only — stapling them onto a real label breaks
+    // anchored rules ("Gender" + id=gender never matches /^\s*gender\s*$/).
+    if (s.length < 3) {
+      s = [el.name || "", el.id || ""].join(" ").replace(/\s+/g, " ").trim().toLowerCase();
+    }
+    return s;
   }
 
   // Question text for a radio group: a fieldset legend, an aria-labelledby, or the
@@ -369,4 +385,27 @@
     });
   }
   function cssEscape(s) { return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/"/g, '\\"'); }
+
+  // Test seam: Playwright injects __APPLY_TEST, then identity + rules, then
+  // bulkAutofill. Production still boots via init() as before.
+  window.__applyFieldLabel = fieldLabel;
+  window.__applyBulkAutofill = bulkAutofill;
+  window.__applyUseIdentity = (fields) => { IDENTITY = fields || {}; };
+  window.__applyUseRules = (payload) => {
+    if (!payload || !Array.isArray(payload.rules) || !payload.rules.length ||
+        !payload.never_fill) {
+      RULES = FALLBACK_RULES; EEO = FALLBACK_EEO; RULES_SRC = "bundled";
+      return;
+    }
+    try {
+      const flags = payload.flags || "i";
+      RULES = payload.rules.map(([k, pat]) => [k, new RegExp(pat, flags)]);
+      EEO = new RegExp(payload.never_fill, flags);
+      RULES_SRC = payload.version || "served";
+    } catch (e) {
+      RULES = FALLBACK_RULES; EEO = FALLBACK_EEO; RULES_SRC = "bundled";
+    }
+  };
+  window.__applyRulesSrc = () => RULES_SRC;
+  if (!window.__APPLY_TEST) init();
 })();

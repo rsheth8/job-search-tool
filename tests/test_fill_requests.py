@@ -90,17 +90,27 @@ def test_autosubmit_then_worker_claim_carries_package():
     assert job["questions"]                       # per-question answers travel too
 
 
-def test_autosubmit_non_fillable_url_hands_off():
-    """An aggregator/non-ATS URL is not auto-filled: the endpoint reports it as
-    not fillable and creates no worker request."""
+def test_autosubmit_any_http_url_is_claimable():
+    """Non-ATS careers URLs are claimable; formprobe decides after navigation.
+    known_ats stays false for UI confidence."""
     p = JobPosting("aggregator", "agg1", "SWE",
                    "https://careersprint.7f.liveblog365.com/job/1?utm_campaign=google_jobs_apply",
                    company="Acme", location="Remote", description="python")
     pid = jobstore.save_posting("u1", p, relevance_score=0.8, status="queued")["id"]
     c = _client()
     r = c.post("/apply/autosubmit", json={"user": "u1", "posting_id": pid}).json()
+    assert r["fillable"] is True and "request_id" in r
+    assert r.get("known_ats") is False
+    assert c.post("/worker/claim").json().get("request_id") == r["request_id"]
+
+
+def test_autosubmit_rejects_non_http_url():
+    p = JobPosting("bad", "b1", "SWE", "mailto:hr@example.com",
+                   company="Acme", location="Remote", description="python")
+    pid = jobstore.save_posting("u1", p, relevance_score=0.8, status="queued")["id"]
+    c = _client()
+    r = c.post("/apply/autosubmit", json={"user": "u1", "posting_id": pid}).json()
     assert r["fillable"] is False and "request_id" not in r
-    assert c.post("/worker/claim").json() == {}   # nothing queued for the worker
 
 
 def test_worker_preview_then_user_approve_then_submit_logs_application():

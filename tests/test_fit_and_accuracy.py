@@ -159,6 +159,16 @@ def test_dedupe_keeps_two_openings_on_the_same_board():
     assert dropped == 0 and len(kept) == 2
 
 
+def test_dedupe_prefers_swelist_over_rss():
+    postings = [
+        _p(source="rss", external_id="r", title="Software Intern"),
+        _p(source="swelist", external_id="s", title="Software Intern"),
+    ]
+    kept, dropped = quality.dedupe(postings)
+    assert dropped == 1
+    assert [p.source for p in kept] == ["swelist"]
+
+
 def test_dedupe_drops_the_aggregator_copy_but_keeps_both_real_reqs():
     postings = [_p(source="greenhouse", external_id="1", title="Software Engineer"),
                 _p(source="greenhouse", external_id="2", title="Software Engineer"),

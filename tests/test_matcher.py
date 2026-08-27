@@ -65,6 +65,21 @@ def test_generic_words_only_match_inside_phrases():
     assert swe in matcher.prefilter([swe], prof)
 
 
+def test_prefilter_keeps_software_engineering_intern():
+    """Intern titles use 'engineering', not 'engineer' — still a SWE match."""
+    prof = _profile(roles="software engineer", keywords="python")
+    intern = _p("Software Engineering Intern")
+    coop = _p("Software Engineering Co-op")
+    sales = _p("Sales Intern")
+    kept = matcher.prefilter([intern, coop, sales], prof)
+    assert intern in kept
+    assert coop in kept
+    assert sales not in kept
+    # Bare "swe" must expand the same way.
+    swe_prof = _profile(roles="swe", keywords="swe")
+    assert intern in matcher.prefilter([intern], swe_prof)
+
+
 def test_short_terms_match_whole_words_not_substrings():
     # "ai" must match an "AI Engineer" role but NOT words like email/training.
     prof = _profile(roles="ai engineer", keywords="ml")

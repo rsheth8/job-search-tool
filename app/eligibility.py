@@ -239,6 +239,9 @@ def assess_batch(postings: list[JobPosting], profile_block: str) -> dict[int, bo
     client, limiter = _get_llm()
     if not limiter.allow():
         raise RuntimeError("llm rate limited")
+    from . import llm_budget
+    if not llm_budget.consume():
+        raise RuntimeError("llm user daily cap")
     listing = "\n".join(
         f"[{i}] {p.title} — {(p.description or '')[:300]}"
         for i, p in enumerate(postings)

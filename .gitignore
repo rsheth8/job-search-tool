@@ -9,3 +9,7 @@ __pycache__/
 .venv/
 venv/
 .DS_Store
+ios/.derivedData/
+ios/*.xcodeproj/xcuserdata/
+ios/*.xcodeproj/project.xcworkspace/xcuserdata/
+simulator_screenshot*.png

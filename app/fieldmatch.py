@@ -55,17 +55,31 @@ FIELD_RULES: list[tuple[str, str]] = [
     ("willing_to_relocate", r"willing to relocate|open to relocat|able to relocate|relocat"),
     ("work_authorized", r"authori[sz]ed to work|work authori[sz]ation|legally.{0,12}work|eligible to work|right to work"),
     ("needs_sponsorship", r"sponsor(ship)?|require.{0,12}visa|visa.{0,12}status|immigration status"),
+    ("background_check", r"background check|criminal (background|history|record)|background screening"),
+    ("drug_test", r"drug (test|screen|screening)|substance (test|screen)"),
+    ("over_18", r"over 18|18 years|at least 18|age 18|legal age"),
+    ("can_travel", r"willing to travel|able to travel|travel (required|for (work|this))|open to travel"),
+    ("previously_applied", r"previously applied|applied (here|before|to (this|us))|worked (here|for us|at this)|former employee|prior application"),
+    ("related_to_employee", r"related to|relative (at|of)|know anyone|family member|referral|employee of"),
+    ("work_arrangement", r"remote|hybrid|on-?site|onsite|work (from home|arrangement|location preference)"),
+    ("how_heard", r"how did you (hear|learn|find)|where did you hear|referral source|source of (this )?application"),
+    # Optional EEO — only filled when the identity has a value saved.
+    ("gender", r"^\s*gender\s*$|^\s*sex\s*$"),
+    # Avoid a bare "/" so JS regex literals in client fallbacks stay valid.
+    ("race", r"^\s*race\s*$|race\s*/?\s*ethnicity|racial identity"),
+    ("ethnicity", r"^\s*ethnicity\s*$|ethnic background"),
+    ("veteran_status", r"veteran|protected veteran|military status"),
+    ("disability_status", r"disabilit(y|ies)|disabled"),
 ]
 _COMPILED = [(key, re.compile(pat, re.I)) for key, pat in FIELD_RULES]
 
-# Demographic / EEO fields we NEVER auto-fill (sensitive — left to the human).
-# Broad on purpose: a false positive costs one manually-filled field, a false
-# negative answers a protected-class question on the user's behalf.
+# Hard-blocked topics — never auto-fill these even if a value exists.
+# Gender/race/veteran/disability are in FIELD_RULES (opt-in when identity has them).
 _NEVER_FILL = re.compile(
-    r"gender|sex\b|race|ethnic|hispanic|latino|veteran|disab|sexual orientation|"
-    r"pronoun.{0,4}optional|national origin|self.?identif|\beeo\b|"
+    r"sexual orientation|pronoun.{0,4}optional|national origin|self.?identif|\beeo\b|"
     r"equal (employment|opportunity)|protected (class|category)|lgbt|"
-    r"marital status|religio|citizenship status|date of birth|\bdob\b",
+    r"marital status|religio|citizenship status|date of birth|\bdob\b|"
+    r"transgender|lgbtq|hispanic|latino|gender identity",
     re.I,
 )
 
@@ -103,15 +117,15 @@ def rules_payload() -> dict:
 
 
 def is_eeo(label: str) -> bool:
-    """True for demographic / EEO / self-identification labels, which we never fill
-    on the user's behalf — as a *fact* or as a drafted answer. Public so every fill
-    path (extension, worker filler, LLM agent) shares one definition."""
+    """True for sensitive self-ID labels we never fill (orientation, religion, DOB,
+    …). Gender/race/veteran/disability are *not* included here — those map via
+    FIELD_RULES and only fill when the identity has a value."""
     return bool(_NEVER_FILL.search((label or "").strip().lower()))
 
 
 def match_key(label: str) -> str | None:
     """The identity key a field's label maps to, or None. Returns None for
-    demographic/EEO fields so they're never auto-filled."""
+    hard-blocked EEO topics (orientation, religion, DOB, …)."""
     text = (label or "").strip().lower()
     if not text or is_eeo(text):
         return None

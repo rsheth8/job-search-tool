@@ -123,6 +123,21 @@ def tailor_for_posting(
     final_tex = _fit_one_page(edited, company, title, description)
     built = _compile_one_page(final_tex)
     if built is None:
+        # Local/dev fallback: serve the precompiled base PDF when tectonic
+        # isn't available or the one-page fit failed.
+        base_pdf = resume_dir() / f"{variant}.pdf"
+        if base_pdf.is_file():
+            logger.warning(
+                "tailored compile failed for %s @ %s; using base %s.pdf",
+                title, company, variant,
+            )
+            return TailorResult(
+                pdf_bytes=base_pdf.read_bytes(),
+                filename=_filename(title, company),
+                variant=variant,
+                pages=_pdf_page_count(base_pdf) or 1,
+                from_cache=False,
+            )
         logger.error(
             "could not produce a one-page resume for %s @ %s", title, company
         )
@@ -188,6 +203,11 @@ def _edit_via_claude(
         return base_tex
     try:
         import anthropic
+
+        from . import llm_budget
+
+        if not llm_budget.consume():
+            return base_tex
 
         s = get_settings()
         client = anthropic.Anthropic(api_key=s.anthropic_api_key)
@@ -335,9 +355,34 @@ def _tectonic_safe(tex: str) -> str:
     )
 
 
-def _compile_tex(tex: str) -> Path | None:
+def resolve_tectonic() -> str | None:
+    """Locate the tectonic binary: settings path, $PATH, then repo .cache."""
     s = get_settings()
-    tectonic = s.tectonic_bin
+    configured = (s.tectonic_bin or "").strip()
+    if configured and Path(configured).is_file():
+        return str(Path(configured).resolve())
+    if configured and configured != "tectonic":
+        # Non-default path that doesn't exist — don't silently fall through
+        # without logging; still try PATH/cache below.
+        logger.warning("TECTONIC_BIN=%s not found; trying PATH/cache", configured)
+    found = shutil.which(configured or "tectonic")
+    if found:
+        return found
+    # Same fallback the test suite uses (vendored binary under .cache/).
+    cached = Path(__file__).resolve().parents[1] / ".cache" / "tectonic" / "tectonic"
+    if cached.is_file():
+        return str(cached.resolve())
+    return None
+
+
+def _compile_tex(tex: str) -> Path | None:
+    tectonic = resolve_tectonic()
+    if not tectonic:
+        logger.error(
+            "tectonic not found — set TECTONIC_BIN or install tectonic "
+            "(repo ships .cache/tectonic/tectonic)"
+        )
+        return None
     with tempfile.TemporaryDirectory(prefix="resume_") as tmp:
         work = Path(tmp)
         tex_path = work / "resume.tex"

@@ -162,6 +162,9 @@ def summarize_batch(cards: list[dict], profile_block: str) -> dict[int, dict]:
     client, limiter = _get_llm()
     if not limiter.allow():
         raise RuntimeError("llm rate limited")
+    from . import llm_budget
+    if not llm_budget.consume():
+        raise RuntimeError("llm user daily cap")
     listing = "\n".join(
         f"[{i}] {c.get('title', '')} @ {c.get('company', '')} — "
         f"{(c.get('description') or '')[:_DESC_CHARS]}"

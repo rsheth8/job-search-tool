@@ -263,6 +263,10 @@ def _draft_template(company: str, name: str, role: str | None) -> str:
 def _draft_via_claude(company: str, name: str, role: str | None) -> str:
     import anthropic
 
+    from . import llm_budget
+
+    if not llm_budget.consume():
+        raise RuntimeError("llm user daily cap")
     s = get_settings()
     client = anthropic.Anthropic(api_key=s.anthropic_api_key)
     first = _first_name(name)
@@ -342,6 +346,10 @@ def _draft_question_answers_via_claude(
 ) -> list[str]:
     import anthropic
 
+    from . import llm_budget
+
+    if not llm_budget.consume():
+        raise RuntimeError("llm user daily cap")
     s = get_settings()
     client = anthropic.Anthropic(api_key=s.anthropic_api_key)
     desc = (description or "").strip()[:1100]
@@ -443,6 +451,10 @@ def _answer_question_via_claude(
 ) -> str:
     import anthropic
 
+    from . import llm_budget
+
+    if not llm_budget.consume():
+        raise RuntimeError("llm user daily cap")
     s = get_settings()
     client = anthropic.Anthropic(api_key=s.anthropic_api_key)
     desc = (description or "").strip()[:1000]
@@ -494,6 +506,10 @@ def _draft_application_via_claude(
 ) -> str:
     import anthropic
 
+    from . import llm_budget
+
+    if not llm_budget.consume():
+        raise RuntimeError("llm user daily cap")
     s = get_settings()
     client = anthropic.Anthropic(api_key=s.anthropic_api_key)
     desc = (description or "").strip()[:1200]

@@ -67,6 +67,7 @@ final class PushManager: NSObject, ObservableObject {
     private func open(kind: String) {
         switch kind {
         case "preview": selectedTab = 1     // In flight — something awaits approval
+        case "chat": selectedTab = 3        // Chat — reminder / digest
         default: selectedTab = 0            // Apply — new matches to look at
         }
     }

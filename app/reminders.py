@@ -190,16 +190,47 @@ class TwilioSender:
         logger.info("[reminder→%s via twilio] %s", user_id, body)
 
 
+class AppSender:
+    """In-app delivery: append to the chat transcript + APNs push.
+
+    Primary channel now that Slack is retired. Push is best-effort (no-op when
+    APNs isn't configured); the transcript always lands so Chat shows it.
+    ``sent`` mirrors LogSender so tests (and operators) can inspect deliveries.
+    """
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+
+    def send(self, user_id: str, body: str) -> None:
+        from . import chat, push
+
+        text = (body or "").strip()
+        if not text:
+            return
+        self.sent.append((user_id, text))
+        try:
+            chat.append(user_id, "assistant", text)
+        except Exception:  # noqa: BLE001
+            logger.exception("failed to append chat for %s", user_id)
+        # Truncate for the banner; full text is in Chat.
+        title = "Apply"
+        preview = text if len(text) <= 160 else text[:157] + "…"
+        try:
+            push.send(user_id, title, preview, data={"kind": "chat"})
+        except Exception:  # noqa: BLE001
+            logger.exception("push failed for %s", user_id)
+        logger.info("[reminder→%s via app] %s", user_id, preview)
+
+
 _sender_singleton: Sender | None = None
 
 
 def get_sender() -> Sender:
-    """Pick the sender from config: Slack first, then Twilio, else LogSender.
+    """Pick the sender from config: App (chat+push), optional Slack, Twilio, else Log.
 
-    Slack is the primary channel now (no A2P 10DLC gate); Twilio stays as a
-    dormant fallback for if/when outbound SMS is ever approved. Cached so the
-    client isn't rebuilt every poll tick. Tests pass an explicit sender, so they
-    never touch this.
+    In-app chat is the primary channel. Slack only if explicitly re-enabled.
+    Cached so the client isn't rebuilt every poll tick. Tests pass an explicit
+    sender, so they never touch this.
     """
     global _sender_singleton
     if _sender_singleton is not None:
@@ -207,19 +238,22 @@ def get_sender() -> Sender:
     from .config import get_settings
 
     s = get_settings()
+    # Prefer AppSender whenever we have any registered devices *or* simply as
+    # the default product channel — transcript write is always useful, push is
+    # best-effort. Only fall through when an operator explicitly wants Slack.
     if s.slack_enabled:
         from .slack import SlackSender
 
         _sender_singleton = SlackSender(s.slack_bot_token)
-        logger.info("reminder delivery: Slack enabled")
+        logger.info("reminder delivery: Slack enabled (legacy)")
     elif s.outbound_sms_enabled:
         _sender_singleton = TwilioSender(
             s.twilio_account_sid, s.twilio_auth_token, s.twilio_from_number
         )
         logger.info("reminder delivery: Twilio outbound enabled")
     else:
-        _sender_singleton = LogSender()
-        logger.info("reminder delivery: LogSender (no outbound channel configured)")
+        _sender_singleton = AppSender()
+        logger.info("reminder delivery: AppSender (chat + push)")
     return _sender_singleton
 
 

@@ -1,0 +1,65 @@
+<!doctype html>
+<!-- Ashby-style Yes/No choice buttons (NOT native radios). Common Room and many
+     Ashby boards render work-auth / sponsorship as two big buttons. -->
+<html>
+<head><meta charset="utf-8"><title>Apply — Yes/No buttons</title>
+<style>
+  .q { margin: 16px 0; font-family: system-ui, sans-serif; }
+  .prompt { font-weight: 600; margin-bottom: 8px; }
+  .pair { display: flex; gap: 8px; }
+  .pair button {
+    flex: 1; padding: 12px; border: 1px solid #ccc; border-radius: 8px;
+    background: #fff; font-size: 16px; cursor: pointer;
+  }
+  .pair button[aria-pressed="true"] {
+    background: #111; color: #fff; border-color: #111;
+  }
+</style>
+</head>
+<body>
+  <form id="app-form" action="/submitted" method="post">
+    <div class="q" data-field="us_auth">
+      <div class="prompt">Are you legally authorized to work in the United States on a full time basis?*</div>
+      <div class="pair">
+        <button type="button" aria-pressed="false">Yes</button>
+        <button type="button" aria-pressed="false">No</button>
+      </div>
+    </div>
+
+    <div class="q" data-field="ca_auth">
+      <div class="prompt">(If in Canada) Are you legally authorized to work in Canada on a full time basis?*</div>
+      <div class="pair">
+        <button type="button" aria-pressed="false">Yes</button>
+        <button type="button" aria-pressed="false">No</button>
+      </div>
+    </div>
+
+    <div class="q" data-field="sponsor">
+      <div class="prompt">Will you now or in the future require any form of work sponsorship (ie H-1B)?*</div>
+      <div class="pair">
+        <button type="button" aria-pressed="false">Yes</button>
+        <button type="button" aria-pressed="false">No</button>
+      </div>
+    </div>
+
+    <label for="linkedin">Do you have a LinkedIn profile? If so please include it here.</label>
+    <input type="url" id="linkedin" name="linkedin">
+
+    <button type="submit" id="go">Submit Application</button>
+  </form>
+
+  <script>
+    document.querySelectorAll(".pair").forEach(function (pair) {
+      pair.querySelectorAll("button").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          pair.querySelectorAll("button").forEach(function (b) {
+            b.setAttribute("aria-pressed", "false");
+          });
+          btn.setAttribute("aria-pressed", "true");
+          pair.setAttribute("data-selected", btn.textContent.trim());
+        });
+      });
+    });
+  </script>
+</body>
+</html>

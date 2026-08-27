@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     # Token-saving guards for the LLM router.
     llm_rate_limit_per_min: int = 30   # token-bucket cap on paid API calls
     llm_max_sms_chars: int = 480       # truncate inbound SMS before sending
+    # Per-user daily cap on paid Anthropic calls (chat + discovery + drafts).
+    # 0 = unlimited. Testers share one key; this keeps one chatty account from
+    # starving everyone else's scoring budget.
+    llm_max_calls_per_user_per_day: int = 80
 
     twilio_auth_token: str = ""
     twilio_validate_signature: bool = False
@@ -72,7 +76,7 @@ class Settings(BaseSettings):
     job_alert_user: str = ""
     # Free sources are on by default. Paid sources (added later) stay off until
     # explicitly enabled with their own budget caps, mirroring the Apollo guards.
-    job_sources_enabled: str = "greenhouse,lever,ashby,rss,directory"
+    job_sources_enabled: str = "greenhouse,lever,ashby,rss,directory,swelist"
 
     # --- Wide discovery (A/B/C) — profile-driven, no company list required ---
     job_wide_rss_enabled: bool = True
@@ -84,6 +88,10 @@ class Settings(BaseSettings):
     job_wide_aggregator_enabled: bool = False
     serpapi_api_key: str = ""
     job_aggregator_max_per_day: int = 5
+    # Pitt CSC / Simplify internship list (listings.json, not the README buttons).
+    job_wide_swelist_enabled: bool = True
+    job_swelist_list: str = "summer2027"
+    job_swelist_max_age_days: int = 21
 
     # Ghost-job filter (Matching v2, Phase 3): drop never-really-hiring reqs
     # (evergreen language, reposts, stale, scam contact) beyond quality.py's spam
@@ -153,8 +161,22 @@ class Settings(BaseSettings):
     # a personal single-user tool). Always set it before exposing publicly.
     apply_api_token: str = ""
     # Comma-separated allowed CORS origins for the autofill endpoints; "*" allows
-    # any (token still gates writes). Tighten to specific ATS domains in prod.
+    # any (token still gates writes). Prod sets APPLY_CORS_ORIGIN_REGEX instead.
     apply_cors_origins: str = "*"
+    # Optional regex (Starlette allow_origin_regex). Used when origins isn't "*".
+    apply_cors_origin_regex: str = ""
+    # When false, POST /apply/autosubmit is 403 — testers use in-app Autofill.
+    apply_autosubmit_enabled: bool = False
+    # Local/tests: personal APIs accept ?user= without a session when the apply
+    # token is also blank. Production MUST set this false (see fly.toml).
+    auth_fail_open: bool = True
+    # Invite-only Sign in with Apple. Empty = anyone with a valid Apple token.
+    # Comma-separated emails (case-insensitive). Private Relay addresses work.
+    auth_allowed_emails: str = ""
+    # Optional: ping this user_id (chat/Slack) when a tester submits feedback.
+    feedback_notify_user: str = ""
+    # Sentry DSN. Empty = no-op (tests, local). Set as a Fly secret in prod.
+    sentry_dsn: str = ""
 
     # Push notifications to the iPhone app (APNs). Off until PUSH_ENABLED plus all
     # four APNs values are set; app/push.py is a no-op meanwhile, so this ships
@@ -169,6 +191,35 @@ class Settings(BaseSettings):
     apns_bundle_id: str = ""
     apns_key_path: str = ""
     apns_use_sandbox: bool = False
+
+    # --- Sign in with Apple + in-app chat ---------------------------------
+    # Comma-separated audiences accepted on Apple identity tokens. Include the
+    # iOS bundle id (com.rahil.apply) and, for web, the Services ID.
+    apple_client_ids: str = "com.rahil.apply"
+    # Optional Services ID used by the minimal web chat page (Sign in with Apple JS).
+    apple_services_id: str = ""
+    # Session lifetime for Bearer tokens minted at login.
+    auth_session_days: int = 90
+    # When true, POST /auth/dev mints a session without Apple (tests + local).
+    auth_allow_dev_login: bool = False
+    # Stable user id for POST /auth/dev when the client omits user_id. Keeps the
+    # simulator on one account (queue, identity, knowledge) across reinstalls /
+    # Dev sign-ins. Empty = mint a fresh usr_… each time (tests often want that).
+    auth_dev_user_id: str = ""
+    # On first Apple sign-in, fold this legacy Slack/phone user_id into the new
+    # account (one-shot via usermerge). Empty = no migration.
+    auth_legacy_user_id: str = ""
+    # Slack transport is retired once in-app chat ships. Keep false unless you
+    # explicitly need the old Events webhook during a transition.
+    slack_transport_enabled: bool = False
+
+    @property
+    def allowed_emails(self) -> set[str]:
+        return {
+            e.strip().lower()
+            for e in (self.auth_allowed_emails or "").split(",")
+            if e.strip()
+        }
 
     @property
     def serpapi_enabled(self) -> bool:
@@ -206,7 +257,22 @@ class Settings(BaseSettings):
 
     @property
     def slack_enabled(self) -> bool:
-        return bool(self.slack_bot_token.strip())
+        """Slack is off by default now that in-app chat owns the conversation.
+
+        Requires both a bot token *and* an explicit ``SLACK_TRANSPORT_ENABLED=true``
+        so a leftover token in .env can't silently resurrect the old channel.
+        """
+        return self.slack_transport_enabled and bool(self.slack_bot_token.strip())
+
+    @property
+    def push_active(self) -> bool:
+        return bool(
+            self.push_enabled
+            and self.apns_key_id.strip()
+            and self.apns_team_id.strip()
+            and self.apns_bundle_id.strip()
+            and self.apns_key_path.strip()
+        )
 
     @property
     def outbound_sms_enabled(self) -> bool:

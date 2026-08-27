@@ -129,7 +129,7 @@ class Featurizer:
             else 0.0
         )
         is_remote = 1.0 if "remote" in haystack else 0.0
-        first_party = 1.0 if (source or "").lower() in quality.FIRST_PARTY_SOURCES else 0.0
+        first_party = 1.0 if (source or "").lower() in quality.PREFERRED_APPLY_SOURCES else 0.0
         feats = self.llm_feats.get(f"{source or ''}:{external_id or ''}", {})
         llm_vals = [feats.get(f, insights.LLM_DEFAULTS[f]) for f in insights.LLM_FEATURES]
         return [

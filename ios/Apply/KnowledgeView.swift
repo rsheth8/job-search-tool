@@ -1,10 +1,6 @@
 import SwiftUI
 
-/// What the assistant knows about you — and what it still needs.
-///
-/// This is the lever on how much it can fill without asking: an empty store is why
-/// drafted answers read generic, and missing identity fields are why autofill leaves
-/// gaps. Both are shown here, with the fastest thing to fix listed first.
+/// Dossier layout: coverage hero + segmented Experience / Projects / More.
 struct KnowledgeView: View {
     @EnvironmentObject var config: Config
     @State private var items: [KnowledgeItem] = []
@@ -12,87 +8,185 @@ struct KnowledgeView: View {
     @State private var loading = false
     @State private var showAdd = false
     @State private var error: String?
+    @State private var addPrefillHint: String?
+    @State private var addPrefillCategory: String?
+    @State private var segment = 0
 
     private var api: APIClient { APIClient(config: config) }
+
+    private var experience: [KnowledgeItem] {
+        items.filter { $0.category == "achievement" }
+    }
+    private var projects: [KnowledgeItem] {
+        items.filter { $0.category == "project" }
+    }
+    private var other: [KnowledgeItem] {
+        items.filter { !["achievement", "project"].contains($0.category) }
+    }
 
     var body: some View {
         NavigationStack {
             Group {
                 if loading && items.isEmpty && audit == nil {
-                    ProgressView("Loading…")
-                } else if let error {
-                    ContentUnavailableView("Couldn't load", systemImage: "wifi.slash",
-                                           description: Text(error))
+                    PreparingView(message: "Loading…")
+                } else if let error, items.isEmpty && audit == nil {
+                    EmptyStateView(
+                        title: "Couldn't load",
+                        description: error,
+                        retryTitle: "Try again"
+                    ) { Task { await load() } }
                 } else {
-                    list
+                    dossier
                 }
             }
-            .navigationTitle("About me")
-            .toolbar {
-                Button { showAdd = true } label: { Label("Add", systemImage: "plus") }
-            }
+            .toolbar(.hidden, for: .navigationBar)
             .sheet(isPresented: $showAdd) {
-                AddFactView { category, text, label in
+                AddFactView(
+                    initialCategory: addPrefillCategory ?? "project",
+                    initialHint: addPrefillHint
+                ) { category, text, label in
                     try? await api.addKnowledge(category: category, text: text, label: label)
+                    Theme.impact(.soft)
                     await load()
                 }
             }
             .refreshable { await load() }
+            .ambientScreen()
             .task { await load() }
         }
     }
 
-    private var list: some View {
-        List {
-            if let audit {
-                Section("Coverage") {
-                    HStack {
-                        Text("Your details")
-                        Spacer()
-                        Text("\(Int(audit.score * 100))% complete")
-                            .foregroundStyle(audit.score < 0.7 ? .orange : .secondary)
+    private var dossier: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: Theme.spaceL) {
+                HStack(alignment: .top) {
+                    PageHeader(
+                        eyebrow: "About me",
+                        title: "Your dossier",
+                        subtitle: "What drafted answers can cite."
+                    )
+                    Button {
+                        addPrefillHint = nil
+                        addPrefillCategory = nil
+                        showAdd = true
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(Theme.accent)
+                            .frame(width: 40, height: 40)
+                            .background(Color.white.opacity(0.7), in: Circle())
                     }
-                    if !audit.identity_missing.isEmpty {
-                        Text("Missing: " + audit.identity_missing.joined(separator: ", "))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    ForEach(audit.suggestions.prefix(3), id: \.self) { tip in
-                        Label(tip, systemImage: "lightbulb")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                    .padding(.trailing, Theme.spaceL)
+                    .padding(.top, Theme.spaceM)
                 }
-            }
 
-            if items.isEmpty {
-                Section {
-                    Text("Nothing stored yet — that's why drafted answers read generic. "
-                         + "Add a project or an achievement and they'll cite your real work.")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-            } else {
-                ForEach(grouped, id: \.0) { category, facts in
-                    Section(category.capitalized + "s") {
-                        ForEach(facts) { fact in
-                            VStack(alignment: .leading, spacing: 2) {
-                                if let label = fact.label {
-                                    Text(label).font(.caption).foregroundStyle(.secondary)
-                                }
-                                Text(fact.text).font(.subheadline)
-                            }
-                        }
-                        .onDelete { offsets in
-                            Task { await remove(offsets.map { facts[$0].id }) }
+                if let audit {
+                    CoverageMeter(
+                        score: audit.score,
+                        missing: audit.identity_missing,
+                        suggestion: audit.suggestions.first.map { "Add something? \($0)" }
+                    ) {
+                        if let tip = audit.suggestions.first {
+                            addPrefillHint = tip
+                            addPrefillCategory = suggestedCategory(for: tip)
+                            showAdd = true
                         }
                     }
+                    .padding(.horizontal, Theme.spaceL)
                 }
+
+                Picker("", selection: $segment) {
+                    Text("Experience").tag(0)
+                    Text("Projects").tag(1)
+                    Text("More").tag(2)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, Theme.spaceL)
+                .onChange(of: segment) { _, _ in Theme.selection() }
+
+                let shown: [KnowledgeItem] = {
+                    switch segment {
+                    case 0: return experience
+                    case 1: return projects
+                    default: return other
+                    }
+                }()
+
+                if shown.isEmpty {
+                    Text(emptyCopy)
+                        .font(.callout)
+                        .foregroundStyle(Theme.soft)
+                        .padding(.horizontal, Theme.spaceL)
+                        .padding(.top, Theme.spaceS)
+                } else {
+                    LazyVStack(spacing: 12) {
+                        ForEach(shown) { fact in
+                            factCard(fact)
+                                .contextMenu {
+                                    Button(role: .destructive) {
+                                        Theme.impact(.soft)
+                                        Task { await remove([fact.id]) }
+                                    } label: {
+                                        Label("Remove", systemImage: "trash")
+                                    }
+                                }
+                        }
+                    }
+                    .padding(.horizontal, Theme.spaceL)
+                    .animation(Theme.springSoft, value: segment)
+                }
+
+                Color.clear.frame(height: 88)
             }
+            .padding(.top, 8)
         }
     }
 
-    private var grouped: [(String, [KnowledgeItem])] {
-        Dictionary(grouping: items, by: \.category)
-            .sorted { $0.key < $1.key }
-            .map { ($0.key, $0.value) }
+    private var emptyCopy: String {
+        switch segment {
+        case 0: return "No experience saved yet."
+        case 1: return "No projects saved yet."
+        default: return "Strengths, preferences, and saved answers land here."
+        }
+    }
+
+    private func factCard(_ fact: KnowledgeItem) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text((fact.label ?? KnowledgeCategoryStyle.sectionTitle(for: fact.category)))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+                    .textCase(.uppercase)
+                    .tracking(0.6)
+                Spacer()
+                Image(systemName: KnowledgeCategoryStyle.symbol(for: fact.category))
+                    .font(.caption)
+                    .foregroundStyle(Theme.soft)
+            }
+            Text(fact.text)
+                .font(.subheadline)
+                .foregroundStyle(Theme.ink)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.white.opacity(0.72))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Theme.accent.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private func suggestedCategory(for tip: String) -> String {
+        let t = tip.lowercased()
+        if t.contains("project") { return "project" }
+        if t.contains("achievement") || t.contains("impact") { return "achievement" }
+        if t.contains("prefer") || t.contains("want") { return "preference" }
+        if t.contains("strength") || t.contains("skill") { return "strength" }
+        return "project"
     }
 
     private func remove(_ ids: [Int]) async {
@@ -101,20 +195,28 @@ struct KnowledgeView: View {
     }
 
     private func load() async {
-        loading = true; error = nil
+        loading = true
+        error = nil
         defer { loading = false }
         do {
             let response = try await api.fetchKnowledge()
-            items = response.items
-            audit = response.audit
-        } catch { self.error = "\(error)" }
+            withAnimation(Theme.springSoft) {
+                items = response.items
+                audit = response.audit
+            }
+        } catch {
+            if APIClient.isCancellation(error) { return }
+            let msg = APIClient.userMessage(for: error)
+            if !msg.isEmpty { self.error = msg }
+        }
     }
 }
 
-/// Add one fact. A saved *answer* needs the question it answers, so it can be
-/// matched back and reused verbatim next time — that's the whole point of it.
 private struct AddFactView: View {
+    var initialCategory: String = "project"
+    var initialHint: String? = nil
     let onSave: (String, String, String?) async -> Void
+
     @Environment(\.dismiss) private var dismiss
     @State private var category = "project"
     @State private var text = ""
@@ -126,8 +228,12 @@ private struct AddFactView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Picker("Kind", selection: $category) {
-                    ForEach(categories, id: \.self) { Text($0.capitalized).tag($0) }
+                Section {
+                    Picker("Kind", selection: $category) {
+                        ForEach(categories, id: \.self) { cat in
+                            Text(cat.capitalized).tag(cat)
+                        }
+                    }
                 }
                 if category == "answer" {
                     Section("The question") {
@@ -135,12 +241,13 @@ private struct AddFactView: View {
                     }
                 }
                 Section(category == "answer" ? "Your answer" : "The fact") {
-                    TextField(placeholder, text: $text, axis: .vertical).lineLimit(3...8)
+                    TextField(placeholder, text: $text, axis: .vertical)
+                        .lineLimit(3...8)
                 }
-                if category == "answer" {
-                    Text("Saved answers are reused word-for-word when that question comes "
-                         + "up again — no redraft, no cost.")
-                        .font(.caption).foregroundStyle(.secondary)
+                if let initialHint, !initialHint.isEmpty, category != "answer" {
+                    Text(initialHint)
+                        .font(.caption)
+                        .foregroundStyle(Theme.soft)
                 }
             }
             .navigationTitle("Add a fact")
@@ -158,10 +265,13 @@ private struct AddFactView: View {
                             dismiss()
                         }
                     }
+                    .fontWeight(.semibold)
                     .disabled(saving || text.isEmpty
                               || (category == "answer" && question.isEmpty))
                 }
             }
+            .onAppear { category = initialCategory }
+            .tint(Theme.accent)
         }
     }
 

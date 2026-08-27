@@ -1,7 +1,7 @@
 """Adapter parsing tests — pure, offline, fixture JSON (no network)."""
 from __future__ import annotations
 
-from app.jobsources import aggregator, ashby, fetch_source, greenhouse, lever, rss
+from app.jobsources import aggregator, ashby, fetch_source, greenhouse, lever, rss, swelist
 
 
 def test_greenhouse_parse_normalizes_fields_and_strips_html():
@@ -76,6 +76,17 @@ def test_ashby_parse_marks_remote():
 # (fixture-based), since those adapters are feed/search-oriented.
 
 
+def test_swelist_proxy_url_detection():
+    assert swelist.is_proxy_apply_url(
+        "https://job-boards.greenhouse.io/internshiplist2000/jobs/1"
+    )
+    assert swelist.is_proxy_apply_url("https://simplify.jobs/p/abc")
+    assert not swelist.is_proxy_apply_url(
+        "https://job-boards.greenhouse.io/astranis/jobs/4601134006"
+    )
+    assert not swelist.is_proxy_apply_url("https://jobs.lever.co/voltus/abc/apply")
+
+
 def test_parsers_tolerate_garbage():
     assert greenhouse._parse(None, "x") == []
     assert greenhouse._parse({"jobs": [{"title": "no id"}]}, "x") == []
@@ -87,6 +98,9 @@ def test_parsers_tolerate_garbage():
     assert aggregator._parse(None, "x") == []
     assert aggregator._parse({"jobs_results": ["nope"]}, "x") == []
     assert aggregator._parse({"jobs_results": [{}]}, "x") == []
+    assert swelist._parse(None, list_id="summer2027") == []
+    assert swelist._parse({"not": "a list"}, list_id="summer2027") == []
+    assert swelist._parse(["string-not-dict"], list_id="summer2027") == []
 
 
 def test_fetch_source_unknown_returns_empty():

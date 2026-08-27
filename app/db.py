@@ -346,6 +346,59 @@ CREATE TABLE IF NOT EXISTS apply_queue (
     updated_at   TEXT NOT NULL,
     PRIMARY KEY (user_id, posting_id)
 );
+
+-- App accounts (Sign in with Apple). ``id`` is the opaque user_id used everywhere
+-- else in the DB; ``apple_sub`` is Apple's stable subject. ``legacy_user_id``
+-- records a Slack/phone id that was merged into this account on first sign-in.
+CREATE TABLE IF NOT EXISTS users (
+    id              TEXT PRIMARY KEY,
+    apple_sub       TEXT UNIQUE,
+    email           TEXT,
+    display_name    TEXT,
+    legacy_user_id  TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_users_legacy ON users(legacy_user_id);
+
+-- Opaque session tokens (stored hashed). Bearer auth for chat + apply.
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash  TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+
+-- Durable chat transcript for the in-app / web agent. Separate from
+-- conversation_state (which only holds in-flight slot-filling).
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    TEXT NOT NULL,
+    role       TEXT NOT NULL,   -- user | assistant
+    body       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_user ON chat_messages(user_id, id);
+
+-- Per-user paid LLM call log (daily cap). One row per consume().
+CREATE TABLE IF NOT EXISTS llm_usage (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    TEXT NOT NULL,
+    day        TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_user_day ON llm_usage(user_id, day);
+
+-- Invite-only beta feedback from the iOS app.
+CREATE TABLE IF NOT EXISTS feedback (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    TEXT NOT NULL,
+    body       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_user ON feedback(user_id, id);
 """
 
 

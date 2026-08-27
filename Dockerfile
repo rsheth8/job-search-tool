@@ -11,9 +11,13 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 # Tectonic — single-binary LaTeX engine for resume compile + page check.
+# libgraphite2 is a runtime dep of the upstream linux-gnu build; without it
+# tectonic exits 127 ("error while loading shared libraries") and every
+# /apply/resume request 404s even though the binary is on PATH.
 ARG TECTONIC_VERSION=0.15.0
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && apt-get install -y --no-install-recommends \
+         curl ca-certificates libgraphite2-3 \
     && curl -fsSL \
        "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40${TECTONIC_VERSION}/tectonic-${TECTONIC_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
        -o /tmp/tectonic.tgz \
@@ -21,7 +25,9 @@ RUN apt-get update \
     && rm /tmp/tectonic.tgz \
     && apt-get purge -y curl \
     && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && tectonic --version
+ENV TECTONIC_BIN=/usr/local/bin/tectonic
 
 COPY . .
 

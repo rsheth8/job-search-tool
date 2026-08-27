@@ -46,6 +46,9 @@ def test_apply_data_explains_why_each_match_surfaced(client):
     assert "backend engineer" in " ".join(row["reasons"])
     assert "python" in " ".join(row["reasons"])
     assert row["concerns"] == []
+    # un-staged matches must carry the same fillability flag as the queue —
+    # otherwise the phone shows "Aggregator" on every Greenhouse link.
+    assert row["auto_fillable"] is True
 
 
 def test_staged_rows_are_explained_too(client):
@@ -180,6 +183,35 @@ def test_audit_reflects_a_filled_in_identity(client):
     audit = client.get("/apply/knowledge?user=u1").json()["audit"]
     assert audit["score"] > 0.3
     assert "email" in audit["identity_have"]
+
+
+# --- skip / pass from the phone ---------------------------------------------
+
+def test_pass_unstages_and_dismisses(client):
+    """Phone 'Pass' should clear the ready queue *and* drop it from matches."""
+    _profile()
+    posting = _posting()
+    apply_queue.stage("u1", posting["id"])
+    assert client.get("/apply/data?user=u1").json()["queue"]
+
+    r = client.post("/apply/pass", json={"user": "u1", "posting_id": posting["id"]})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    body = client.get("/apply/data?user=u1").json()
+    assert body["queue"] == []
+    assert all(row["posting_id"] != posting["id"] for row in body["queued"])
+    assert jobstore.get_posting("u1", posting["id"])["status"] == "dismissed"
+
+
+def test_remove_only_unstages(client):
+    """Skip-for-now keeps the posting available as a top match."""
+    _profile()
+    posting = _posting()
+    apply_queue.stage("u1", posting["id"])
+    assert client.post("/apply/remove",
+                       json={"user": "u1", "posting_id": posting["id"]}).json()["ok"]
+    body = client.get("/apply/data?user=u1").json()
+    assert body["queue"] == []
+    assert any(row["posting_id"] == posting["id"] for row in body["queued"])
 
 
 # --- token gating -----------------------------------------------------------

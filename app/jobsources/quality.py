@@ -20,6 +20,9 @@ from .base import JobPosting
 # Sources whose results are first-party (real company career systems) → trusted.
 # Directory postings carry the underlying ATS source (greenhouse/lever/ashby).
 FIRST_PARTY_SOURCES = frozenset({"greenhouse", "lever", "ashby"})
+# Prefer these over RSS/aggregator when the same job arrives twice. Swelist
+# listings.json already stores company ATS URLs (not the README Simplify buttons).
+PREFERRED_APPLY_SOURCES = FIRST_PARTY_SOURCES | {"swelist"}
 
 # Company values that signal a placeholder / non-real listing.
 _GENERIC_COMPANY = frozenset({
@@ -132,8 +135,10 @@ def dedupe(postings: list[JobPosting]) -> tuple[list[JobPosting], int]:
         if not key[0] or not key[1]:
             continue
         source = (p.source or "").lower()
-        if key not in winner or (is_first_party(p)
-                                 and winner[key] not in FIRST_PARTY_SOURCES):
+        if key not in winner or (
+            source in PREFERRED_APPLY_SOURCES
+            and winner[key] not in PREFERRED_APPLY_SOURCES
+        ):
             winner[key] = source
 
     kept = []

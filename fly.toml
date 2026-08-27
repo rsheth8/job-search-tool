@@ -1,54 +1,55 @@
-# Fly.io config for Job Search Intelligence.
+# fly.toml app configuration file generated for job-search-tool on 2026-07-26T12:17:30-05:00
 #
-# `fly launch --no-deploy` will overwrite `app`/`primary_region` with your own —
-# the important parts are the volume mount and the always-warm machine, which it
-# preserves. See deploy/README.md for the full runbook.
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "job-search-tool"
-primary_region = "iad"
+app = 'job-search-tool'
+primary_region = 'iad'
 
 [build]
-
 [env]
-  # Point SQLite at the mounted volume so data survives restarts/redeploys.
-  DATABASE_PATH = "/data/job_search.db"
-  RESUME_TEX_DIR = "/data/resumes"
-  # Wide job discovery (needs a profile set via Slack + JOB_ALERT_USER secret).
-  JOB_SOURCES_ENABLED = "greenhouse,lever,ashby,rss,directory"
-  JOB_WIDE_RSS_ENABLED = "true"
-  JOB_WIDE_RSS_FEEDS = "hn-hiring,remoteok,weworkremotely"
-  JOB_WIDE_DIRECTORY_ENABLED = "true"
-  JOB_DIRECTORY_BOARDS_PER_TICK = "24"
-  JOB_DIRECTORY_MAX_JOBS_PER_BOARD = "25"
-  JOB_DIRECTORY_DATA_PATH = "data/ats_boards.json"
-  JOB_POLL_SECONDS = "600"
-  JOB_RELEVANCE_THRESHOLD = "0.6"
-  JOB_MAX_SCORED_PER_TICK = "60"
-  JOB_ALERT_MODE = "digest"
-  JOB_DIGEST_TOP_N = "5"
+  DATABASE_PATH = '/data/job_search.db'
+  JOB_ALERT_MODE = 'digest'
+  JOB_DIGEST_TOP_N = '5'
+  JOB_DIRECTORY_BOARDS_PER_TICK = '24'
+  JOB_DIRECTORY_DATA_PATH = 'data/ats_boards.json'
+  JOB_DIRECTORY_MAX_JOBS_PER_BOARD = '25'
+  JOB_MAX_SCORED_PER_TICK = '60'
+  JOB_POLL_SECONDS = '600'
+  JOB_RELEVANCE_THRESHOLD = '0.6'
+    JOB_SOURCES_ENABLED = 'greenhouse,lever,ashby,rss,directory,swelist'
+    JOB_WIDE_DIRECTORY_ENABLED = 'true'
+    JOB_WIDE_RSS_ENABLED = 'true'
+    JOB_WIDE_RSS_FEEDS = 'hn-hiring,remoteok,weworkremotely'
+    JOB_WIDE_SWELIST_ENABLED = 'true'
+    JOB_SWELIST_LIST = 'summer2027'
+    JOB_SWELIST_MAX_AGE_DAYS = '21'
+  RESUME_TEX_DIR = '/data/resumes'
+  AUTH_FAIL_OPEN = 'false'
+  AUTH_ALLOW_DEV_LOGIN = 'false'
+  APPLY_AUTOSUBMIT_ENABLED = 'false'
+  LLM_MAX_CALLS_PER_USER_PER_DAY = '80'
+  APPLY_CORS_ORIGINS = ''
+  APPLY_CORS_ORIGIN_REGEX = 'https://([a-z0-9-]+\.)*(greenhouse\.io|lever\.co|ashbyhq\.com)|chrome-extension://.*'
 
-# The reminder scheduler is an in-process APScheduler loop, so the machine must
-# stay warm — never auto-stop to zero, or reminders won't fire.
+[[mounts]]
+  source = 'data'
+  destination = '/data'
+
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = "off"
+  auto_stop_machines = 'off'
   auto_start_machines = true
   min_machines_running = 1
 
   [[http_service.checks]]
-    interval = "30s"
-    timeout = "5s"
-    grace_period = "10s"
-    method = "GET"
-    path = "/health"
-
-# Persistent SQLite. Create with:
-#   fly volumes create data --size 1 --region iad
-[mounts]
-  source = "data"
-  destination = "/data"
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/health'
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "512mb"  # wide discovery + resume compile (Tectonic); 256mb OOM'd
+  size = 'shared-cpu-1x'
+  memory = '512mb'

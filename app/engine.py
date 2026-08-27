@@ -130,6 +130,13 @@ GREETING = (
 # ---------------------------------------------------------------------------
 
 def handle_sms(user_id: str, text: str) -> str:
+    from . import llm_budget
+
+    with llm_budget.for_user(user_id):
+        return _handle_sms(user_id, text)
+
+
+def _handle_sms(user_id: str, text: str) -> str:
     text = (text or "").strip()
     if not text:
         return "Text me something like 'applied stripe swe' — or 'help'."

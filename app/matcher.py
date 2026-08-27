@@ -77,6 +77,25 @@ _GENERIC_TOKENS = {
 }
 
 
+def _intern_variants(phrase: str) -> set[str]:
+    """A 'software engineer' profile should still see 'Software Engineering Intern'.
+
+    Whole-word matching treats 'engineer' ≠ 'engineering', so intern/co-op titles
+    would otherwise miss the scoring cap entirely.
+    """
+    if not phrase.endswith(" engineer"):
+        return set()
+    stem = phrase[: -len(" engineer")]
+    return {
+        f"{stem} engineering",
+        f"{stem} engineer intern",
+        f"{stem} engineering intern",
+        f"{stem} engineering internship",
+        f"{stem} engineering co-op",
+        f"{stem} engineering coop",
+    }
+
+
 def _terms(profile: sqlite3.Row | None) -> set[str]:
     """Profile keyword *concepts* for relevance scoring (the heuristic ratio uses
     this as the denominator, so it stays close to what the user actually typed —
@@ -100,13 +119,18 @@ def _match_terms(profile: sqlite3.Row | None) -> set[str]:
         words = _WORD.findall(clause.lower())
         sig = [w for w in words if w not in _STOPWORDS and len(w) >= 2]
         if len(sig) >= 2:
-            terms.add(" ".join(sig))  # e.g. "software engineer", "data scientist"
+            phrase = " ".join(sig)  # e.g. "software engineer", "data scientist"
+            terms.add(phrase)
+            terms.update(_intern_variants(phrase))
         for w in sig:
             # Generic words only gate inside a phrase, never standalone (else
             # "software" matches every software-company posting incl. sales).
             if w not in _GENERIC_TOKENS and (len(w) >= 3 or w in _SYNONYMS):
                 terms.add(w)
-            terms.update(_SYNONYMS.get(w, ()))
+            extras = _SYNONYMS.get(w, ())
+            terms.update(extras)
+            for extra in extras:
+                terms.update(_intern_variants(extra))
     return terms
 
 
@@ -277,6 +301,9 @@ def _llm_score_chunk(postings: list[JobPosting], profile_block: str) -> dict[int
     client, limiter = _get_llm()
     if not limiter.allow():
         raise RuntimeError("llm rate limited")
+    from . import llm_budget
+    if not llm_budget.consume():
+        raise RuntimeError("llm user daily cap")
     listing = "\n".join(
         f"[{i}] {p.title} — {p.location or 'n/a'} | {p.description[:_DESC_CHARS]}"
         for i, p in enumerate(postings)

@@ -1,5 +1,4 @@
-"""URL -> ATS detection: which links the headless worker may auto-fill (first-party
-Greenhouse/Lever/Ashby forms) vs. hand off (aggregator/RSS/login/unknown)."""
+"""URL -> ATS labeling + autosubmit eligibility."""
 from __future__ import annotations
 
 import pytest
@@ -18,6 +17,7 @@ from app import ats
 def test_ats_of_first_party(url, name):
     assert ats.ats_of(url) == name
     assert ats.is_fillable_form(url) is True
+    assert ats.may_autosubmit(url) is True
 
 
 @pytest.mark.parametrize("url", [
@@ -31,6 +31,20 @@ def test_ats_of_first_party(url, name):
     "",
     None,
 ])
-def test_not_fillable(url):
+def test_not_known_ats(url):
     assert ats.ats_of(url) is None
     assert ats.is_fillable_form(url) is False
+
+
+@pytest.mark.parametrize("url", [
+    "https://example.com/careers/apply",
+    "https://careers.instacart.com/jobs/123",
+    "http://localhost:8000/form",
+])
+def test_may_autosubmit_any_http(url):
+    assert ats.may_autosubmit(url) is True
+
+
+@pytest.mark.parametrize("url", ["", None, "mailto:hi@x.com", "javascript:alert(1)"])
+def test_may_autosubmit_rejects_junk(url):
+    assert ats.may_autosubmit(url) is False

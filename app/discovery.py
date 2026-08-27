@@ -87,7 +87,7 @@ def seed_board(user_id: str, source: str, board_token: str, company_name: str | 
     alerts, no scoring), so the user is only alerted on roles that appear AFTER
     they start tracking — not the entire existing backlog. Returns count seeded.
 
-    Wide sources (rss, directory, aggregator) are not seeded — too noisy.
+    Wide sources (rss, directory, aggregator, swelist) are not seeded — too noisy.
     """
     if wide_discovery.is_wide_source(source):
         return 0
@@ -107,6 +107,14 @@ def seed_board(user_id: str, source: str, board_token: str, company_name: str | 
 
 def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
     """Run one discovery pass for ``user_id``. Returns the number of messages sent."""
+    from . import llm_budget
+
+    with llm_budget.for_user(user_id):
+        return _tick(user_id, sender=sender, now=now)
+
+
+def _tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
+    """Run one discovery pass for ``user_id``. Returns the number of messages sent."""
     prof = profile.get_profile(user_id)
     boards = jobstore.list_tracked(user_id)
     if not boards and not profile.has_profile(user_id):
@@ -116,7 +124,7 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
     # 0. Resurface any snoozed postings whose snooze has expired.
     jobstore.wake_snoozed(user_id, (now or datetime.now(timezone.utc)).isoformat())
 
-    # 1. Tracked boards + wide discovery (RSS, directory, aggregator).
+    # 1. Tracked boards + wide discovery (RSS, directory, aggregator, swelist).
     fresh: list[JobPosting] = []
     seen: set[tuple[str, str]] = set()
     for b in boards:
@@ -174,8 +182,11 @@ def tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
         return 0
 
     # 2. Free pre-filter, then cap how many reach the (paid) scorer this tick.
+    #    Newest first so today's internship drops beat a rotating directory backlog.
     #    Postings beyond the cap aren't saved, so they're reconsidered next tick.
-    candidates = matcher.prefilter(fresh, prof)[: settings.job_max_scored_per_tick]
+    candidates = matcher.prefilter(fresh, prof)
+    candidates.sort(key=lambda p: p.posted_at or "", reverse=True)
+    candidates = candidates[: settings.job_max_scored_per_tick]
     if not candidates:
         return 0
     # Eligibility gate (LLM tier, optional): nuanced "could I even apply?" check on

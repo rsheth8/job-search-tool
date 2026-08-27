@@ -1,21 +1,18 @@
-"""Which applicant-tracking system (ATS) a URL points at — and therefore whether
-the headless worker can auto-fill it.
+"""Which applicant-tracking system (ATS) a URL points at.
 
-Auto-submit only works on **first-party ATS application forms** (Greenhouse, Lever,
-Ashby): one clean page, native fields, no login, no captcha. Aggregator links
-(SerpApi / Google-Jobs `…_apply` redirects), RSS description pages, and login- or
-captcha-gated sites have no fillable form on the page — those are handed off to the
-desktop browser extension, not automated. See `worker/README.md`.
+Known first-party hosts (Greenhouse, Lever, Ashby) are a *confidence boost* for
+autofill — not a hard gate. The headless worker may attempt any http(s) apply URL;
+``formprobe`` decides after navigation whether the page is fillable, a login wall,
+or a captcha that needs the human.
 
-Pure + dependency-light (stdlib only), so it's shared by the server (to label queue
-items + gate `/apply/autosubmit`) and the worker (to bail before filling junk).
+Pure + dependency-light (stdlib only), shared by the server and the worker.
 """
 from __future__ import annotations
 
 import re
 from urllib.parse import urlparse
 
-# name -> host regex for the ATSes whose links are a directly fillable form.
+# name -> host regex for ATSes we know well (high-confidence autofill).
 _ATS_HOSTS: list[tuple[str, re.Pattern]] = [
     ("greenhouse", re.compile(r"(^|\.)greenhouse\.io$", re.I)),
     ("lever", re.compile(r"(^|\.)lever\.co$", re.I)),
@@ -24,8 +21,7 @@ _ATS_HOSTS: list[tuple[str, re.Pattern]] = [
 
 
 def ats_of(url: str | None) -> str | None:
-    """The ATS name if ``url`` is a first-party, auto-fillable application form,
-    else None (aggregator / RSS / unknown / login-gated)."""
+    """The ATS name if ``url`` is a known first-party board host, else None."""
     try:
         host = (urlparse((url or "").strip()).hostname or "").lower()
     except Exception:  # noqa: BLE001 — a malformed URL is simply not fillable
@@ -39,6 +35,27 @@ def ats_of(url: str | None) -> str | None:
 
 
 def is_fillable_form(url: str | None) -> bool:
-    """True if the headless worker should auto-fill this URL (a first-party ATS
-    form). False means hand it off to the desktop extension instead."""
+    """True if this is a *known* first-party ATS host (UI confidence label).
+
+    Autopilot itself uses ``may_autosubmit`` + live ``formprobe`` — do not use this
+    to refuse a fill request.
+    """
     return ats_of(url) is not None
+
+
+def may_autosubmit(url: str | None) -> bool:
+    """True if the worker should be allowed to *attempt* this URL.
+
+    Any absolute http(s) URL qualifies; page content decides success. Empty or
+    non-http schemes (mailto, javascript) are refused.
+    """
+    raw = (url or "").strip()
+    if not raw:
+        return False
+    try:
+        parsed = urlparse(raw)
+    except Exception:  # noqa: BLE001
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    return bool(parsed.netloc)
