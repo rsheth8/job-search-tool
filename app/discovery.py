@@ -1,23 +1,26 @@
 """Background job discovery: poll tracked boards + wide sources, alert on matches.
 
 One pass (``tick``) per user: gather postings from tracked boards *and* wide
-discovery (RSS / ATS directory / SerpApi), drop ones we've already seen (dedupe —
-so scoring tokens are spent once per posting, ever), free pre-filter, LLM/heuristic
-score the survivors (capped per tick), persist, and notify per the configured
-alert mode (digest / instant / silent). ``run_all`` sweeps every user with a
-profile and/or tracked boards and is what the scheduler calls.
+discovery (RSS / ATS directory / swelist / YC), drop ones we've already seen
+(dedupe — so scoring tokens are spent once per posting, ever), free pre-filter,
+LLM/heuristic score the survivors (capped per tick), persist, and notify per the
+configured alert mode (digest / instant / silent). ``run_all`` sweeps every
+user with a profile and/or tracked boards and is what the scheduler calls.
 
-Delivery reuses ``reminders.get_sender()`` (Slack → Twilio → Log), so alerts
-ride the exact same channel as reminders — no new transport.
+Delivery reuses ``reminders.get_sender()`` (AppSender), so alerts ride the same
+in-app channel as reminders — no separate transport.
 """
 from __future__ import annotations
 
 import logging
+import os
 import re
+import threading
+import time
 from datetime import datetime, timezone
 
 from . import (
-    eligibility, insights, job_alerts, jobstore, matcher, posting_match, profile,
+    eligibility, job_alerts, jobstore, matcher, posting_match, profile,
     reminders, reranker, wide_discovery,
 )
 from .config import get_settings
@@ -30,11 +33,13 @@ logger = logging.getLogger("discovery")
 
 def _slug_variants(name: str) -> list[str]:
     """Plausible board tokens for a company name, most-likely first."""
-    base = name.strip().lower()
+    raw = name.strip()
+    base = raw.lower()
     out = []
     for v in (re.sub(r"[^a-z0-9]", "", base),          # "acme inc" -> "acmeinc"
               re.sub(r"[^a-z0-9]+", "-", base).strip("-"),  # -> "acme-inc"
-              base.split()[0] if base.split() else ""):     # -> "acme"
+              base.split()[0] if base.split() else "",     # -> "acme"
+              re.sub(r"[^A-Za-z0-9]", "", raw)):           # "Service Now" -> "ServiceNow"
         if v and v not in out:
             out.append(v)
     return out
@@ -43,9 +48,21 @@ def _slug_variants(name: str) -> list[str]:
 def resolve_board(company_name: str) -> dict | None:
     """Probe enabled free boards for one matching a company. All calls are free.
 
-    Tries slug variants against each enabled source; returns the first that
-    actually yields postings, or None if nothing public is found.
+    Tries the sector catalog first (known ATS token), then slug variants against
+    each enabled source. Returns the first that actually yields postings, or None.
     """
+    from . import catalog
+
+    known = catalog.lookup_board(company_name)
+    if known and known["source"] in get_settings().job_sources:
+        posts = fetch_source(known["source"], known["board_token"])
+        if posts:
+            return {
+                "source": known["source"],
+                "board_token": known["board_token"],
+                "company_name": known["company_name"],
+                "count": len(posts),
+            }
     for source in get_settings().job_sources:
         if source in NON_BOARD_SOURCES:
             continue  # search/URL/cursor sources aren't per-company boards — never slug-probe
@@ -63,6 +80,15 @@ def resolve_board(company_name: str) -> dict | None:
 
 # Set on each run_all() so /health can show liveness without a separate store.
 last_tick_at: str | None = None
+
+
+def _deliver_chat(sender, user_id: str, body: str) -> None:
+    """Transcript only. Match push is ``notify_new_matches`` so the banner is
+    one personal alert that opens Apply, not a second generic 'Apply' ping."""
+    try:
+        sender.send(user_id, body, push_alert=False)
+    except TypeError:
+        sender.send(user_id, body)
 
 
 def build_alert_body(posting: JobPosting, score: float, posting_id: int) -> str:
@@ -87,7 +113,7 @@ def seed_board(user_id: str, source: str, board_token: str, company_name: str | 
     alerts, no scoring), so the user is only alerted on roles that appear AFTER
     they start tracking — not the entire existing backlog. Returns count seeded.
 
-    Wide sources (rss, directory, aggregator, swelist) are not seeded — too noisy.
+    Wide sources (rss, directory, swelist) are not seeded — too noisy.
     """
     if wide_discovery.is_wide_source(source):
         return 0
@@ -124,7 +150,17 @@ def _tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
     # 0. Resurface any snoozed postings whose snooze has expired.
     jobstore.wake_snoozed(user_id, (now or datetime.now(timezone.utc)).isoformat())
 
-    # 1. Tracked boards + wide discovery (RSS, directory, aggregator, swelist).
+    # 0b. Grow the rotating directory from catalog names in this user's sector
+    #     so this tick's directory pass can pick up newly learned boards.
+    if settings.job_catalog_probe_enabled:
+        try:
+            from . import catalog_probe
+
+            catalog_probe.probe_for_user(user_id, prof)
+        except Exception:  # noqa: BLE001 — probing must never kill the tick
+            logger.exception("catalog probe failed for %s", user_id)
+
+    # 1. Tracked boards + wide discovery (RSS, directory, swelist, YC).
     fresh: list[JobPosting] = []
     seen: set[tuple[str, str]] = set()
     for b in boards:
@@ -149,12 +185,12 @@ def _tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
         and not jobstore.posting_exists(user_id, p.source, p.external_id)
     ]
     # Reputability gate: keep first-party ATS results; drop placeholder/spam from
-    # the aggregator + RSS feeds before spending scoring tokens on them.
+    # RSS / directory feeds before spending scoring tokens on them.
     fresh, dropped = quality.filter_reputable(fresh)
     if dropped:
         logger.info("discovery: dropped %d low-reputation posting(s) for %s", dropped, user_id)
     # Cross-source dedupe: the same job reaches us from the ATS, an RSS feed, and
-    # the aggregator at once. Source-level dedupe can't see that (different ids),
+    # multiple boards at once. Source-level dedupe can't see that (different ids),
     # so it showed up three times. Keeps the first-party copy — apply direct.
     fresh, duped = quality.dedupe(fresh)
     if duped:
@@ -182,31 +218,26 @@ def _tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
         return 0
 
     # 2. Free pre-filter, then cap how many reach the (paid) scorer this tick.
-    #    Newest first so today's internship drops beat a rotating directory backlog.
+    #    Fillable + fresh first so today's ATS drops beat a rotating RSS backlog.
     #    Postings beyond the cap aren't saved, so they're reconsidered next tick.
+    from . import shortlist
+
     candidates = matcher.prefilter(fresh, prof)
-    candidates.sort(key=lambda p: p.posted_at or "", reverse=True)
+    candidates.sort(key=lambda p: shortlist.discovery_sort_key(p), reverse=True)
     candidates = candidates[: settings.job_max_scored_per_tick]
+    if settings.job_verify_apply_urls and candidates:
+        from .jobsources import alive
+
+        candidates, dead = alive.filter_open(candidates)
+        if dead:
+            logger.info("discovery: dropped %d closed apply URL(s) for %s", dead, user_id)
     if not candidates:
         return 0
-    # Eligibility gate (LLM tier, optional): nuanced "could I even apply?" check on
-    # the capped set. Fail-open — never drops on an LLM error.
-    if settings.eligibility_llm_enabled and candidates:
-        candidates, unfit = eligibility.filter_eligible_llm(candidates, prof)
-        if unfit:
-            logger.info("discovery: LLM dropped %d unqualified posting(s) for %s", unfit, user_id)
-        if not candidates:
-            return 0
 
-    # 3. Score (embeddings/LLM/heuristic; never raises), then personalize the
+    # 3. Score (LLM/heuristic; never raises), then personalize the
     #    ranking with the user's own apply/dismiss model (no-op until trained).
     scored = matcher.score(candidates, prof)
     if settings.reranker_enabled:
-        # Cache the LLM judgement features (fit_score, …) for this set so the
-        # re-ranker's strongest signal isn't defaulted to neutral here the way it
-        # is when discovery skips summarization. No-op unless deck summaries are
-        # enabled + keyed; gated, daily-capped and fail-open inside enrich.
-        insights.enrich_postings(candidates, profile.profile_text(prof))
         reranker.maybe_retrain(user_id, prof)
         scored = reranker.rerank(user_id, prof, scored)
 
@@ -261,20 +292,23 @@ def _tick(user_id: str, *, sender=None, now: datetime | None = None) -> int:
     if notify_batch and mode == "instant":
         for posting, sc, pid in notify_batch:
             try:
-                sender.send(user_id, build_alert_body(posting, sc, pid))
+                _deliver_chat(sender, user_id, build_alert_body(posting, sc, pid))
                 messages_sent += 1
             except Exception:  # noqa: BLE001 — one bad send never stops the batch
                 logger.exception("alert send failed for posting %s", pid)
     elif notify_batch and mode == "digest":
         try:
-            sender.send(user_id, job_alerts.build_digest(notify_batch) + auto_note)
+            _deliver_chat(
+                sender, user_id,
+                job_alerts.build_digest(notify_batch, user_id=user_id) + auto_note,
+            )
             messages_sent = 1
         except Exception:  # noqa: BLE001
             logger.exception("digest send failed for %s", user_id)
     # silent: queued rows only, no outbound message
 
     # A push alongside the chat message, so the phone surfaces new matches without
-    # Slack open. Fail-open and no-op until push is configured — a notification
+    # Fail-open and no-op until push is configured — a notification
     # problem must never cost us the tick's work.
     if notify_batch and mode != "silent":
         try:
@@ -306,6 +340,105 @@ def run_all(*, sender=None) -> int:
             logger.exception("discovery tick failed for %s", user_id)
     last_tick_at = datetime.now(timezone.utc).isoformat()
     return total
+
+
+# ---------------------------------------------------------------------------
+# On-demand kick (quiz complete / pull-to-refresh)
+# ---------------------------------------------------------------------------
+# The scheduler still ticks every JOB_POLL_SECONDS. New testers cannot wait
+# that long for a first match, and pull-to-refresh used to re-read an empty
+# queue. These helpers start *one* pass per user, immediately, without
+# blocking the HTTP response in production.
+
+_kick_lock = threading.Lock()
+_running: dict[str, float] = {}
+_finished_at: dict[str, str] = {}
+_finished_ts: dict[str, float] = {}
+_MAX_CONCURRENT = 2
+_COOLDOWN_SEC = 45.0
+
+
+def reset_for_tests() -> None:
+    """Drop in-flight kick state between tests."""
+    with _kick_lock:
+        _running.clear()
+        _finished_at.clear()
+        _finished_ts.clear()
+
+
+def search_status(user_id: str) -> dict:
+    """What the Apply tab should show: searching now vs last finished pass."""
+    uid = (user_id or "").strip()
+    with _kick_lock:
+        started = _running.get(uid)
+        return {
+            "searching": uid in _running,
+            "started_at": (
+                datetime.fromtimestamp(started, tz=timezone.utc).isoformat()
+                if started else None
+            ),
+            "last_finished_at": _finished_at.get(uid),
+        }
+
+
+def kick(user_id: str, *, force: bool = False) -> dict:
+    """Start a discovery pass for this user if one isn't already running.
+
+    Returns immediately. ``started`` is True when a new pass was launched.
+    Under pytest the tick runs inline so the temp DB isn't unlinked under a
+    background thread.
+    """
+    uid = (user_id or "").strip()
+    if not uid:
+        return {"started": False, "reason": "no_user", **search_status("")}
+    if not profile.has_profile(uid):
+        return {"started": False, "reason": "no_profile", **search_status(uid)}
+
+    with _kick_lock:
+        if uid in _running:
+            return {"started": False, "reason": "already_running", **_status_unlocked(uid)}
+        last = _finished_ts.get(uid)
+        if not force and last is not None and (time.time() - last) < _COOLDOWN_SEC:
+            return {"started": False, "reason": "cooldown", **_status_unlocked(uid)}
+        if len(_running) >= _MAX_CONCURRENT:
+            return {"started": False, "reason": "busy", **_status_unlocked(uid)}
+        _running[uid] = time.time()
+
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        _run_kicked_tick(uid)
+    else:
+        threading.Thread(
+            target=_run_kicked_tick, args=(uid,), daemon=True,
+            name=f"discover-{uid[:16]}",
+        ).start()
+    return {"started": True, "reason": "ok", **search_status(uid)}
+
+
+def _status_unlocked(user_id: str) -> dict:
+    started = _running.get(user_id)
+    return {
+        "searching": user_id in _running,
+        "started_at": (
+            datetime.fromtimestamp(started, tz=timezone.utc).isoformat()
+            if started else None
+        ),
+        "last_finished_at": _finished_at.get(user_id),
+    }
+
+
+def _run_kicked_tick(user_id: str) -> None:
+    global last_tick_at
+    try:
+        tick(user_id)
+    except Exception:  # noqa: BLE001 — HTTP already returned; log and clear
+        logger.exception("on-demand discovery failed for %s", user_id)
+    finally:
+        now = datetime.now(timezone.utc)
+        with _kick_lock:
+            _running.pop(user_id, None)
+            _finished_at[user_id] = now.isoformat()
+            _finished_ts[user_id] = time.time()
+            last_tick_at = now.isoformat()
 
 
 if __name__ == "__main__":

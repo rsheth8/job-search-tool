@@ -7,8 +7,8 @@ from app import eligibility
 from app.jobsources import JobPosting
 
 
-def _profile(seniority="", roles="software engineer", resume="") -> sqlite3.Row:
-    cols = {"roles": roles, "keywords": "", "locations": "", "seniority": seniority,
+def _profile(seniority="", roles="software engineer", resume="", keywords="") -> sqlite3.Row:
+    cols = {"roles": roles, "keywords": keywords, "locations": "", "seniority": seniority,
             "resume_summary": resume, "min_relevance": None}
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -78,6 +78,33 @@ def test_field_filter_respects_config_flag(monkeypatch):
     assert eligibility.is_eligible(_p("Account Executive"), ENTRY)  # not dropped when off
 
 
+def test_empty_profile_looks_technical():
+    assert eligibility.profile_looks_technical(None)
+    assert eligibility.profile_looks_technical(_profile(roles="", keywords=""))
+
+
+def test_marketing_profile_keeps_nontechnical_roles():
+    marketing = _profile(roles="marketing coordinator", keywords="brand")
+    assert not eligibility.profile_looks_technical(marketing)
+    for t in ("Account Executive", "Marketing Coordinator", "Recruiter"):
+        assert eligibility.is_eligible(_p(t), marketing), t
+
+
+def test_swe_profile_still_drops_nontechnical_roles():
+    swe = _profile(roles="software engineer", keywords="python")
+    assert eligibility.profile_looks_technical(swe)
+    assert not eligibility.is_eligible(_p("Account Executive"), swe)
+    assert not eligibility.is_eligible(_p("Marketing Coordinator"), swe)
+
+
+def test_nurse_profile_keeps_nursing_roles():
+    nurse = _profile(roles="registered nurse")
+    assert not eligibility.profile_looks_technical(nurse)
+    assert eligibility.is_eligible(
+        _p("Registered Nurse", desc="Must be a registered nurse."), nurse
+    )
+
+
 def test_big_experience_requirement_ineligible():
     assert not eligibility.is_eligible(_p(desc="We need 8+ years of experience."), ENTRY)
 
@@ -118,34 +145,3 @@ def test_filter_eligible_counts():
              _p("Engineering Manager")]
     kept, dropped = eligibility.filter_eligible(posts, ENTRY)
     assert len(kept) == 1 and dropped == 2
-
-
-# ---------------------------------------------------------------------------
-# LLM tier (injected judge; never hits the network)
-# ---------------------------------------------------------------------------
-
-def test_llm_tier_inactive_is_noop():
-    posts = [_p("Software Engineer")]
-    kept, dropped = eligibility.filter_eligible_llm(posts, ENTRY)  # no key, no flag
-    assert kept == posts and dropped == 0
-
-
-def test_llm_tier_drops_unqualified_with_injected_judge():
-    posts = [_p("Software Engineer", desc="entry friendly"),
-             _p("Quant Researcher", desc="needs a PhD in physics")]
-
-    def judge(postings, profile_block):
-        return {0: True, 1: False}  # keep the first, drop the second
-
-    kept, dropped = eligibility.filter_eligible_llm(posts, ENTRY, assess=judge)
-    assert dropped == 1 and kept[0].title == "Software Engineer"
-
-
-def test_llm_tier_fails_open_on_error():
-    posts = [_p("A"), _p("B")]
-
-    def judge(postings, profile_block):
-        raise RuntimeError("model down")
-
-    kept, dropped = eligibility.filter_eligible_llm(posts, ENTRY, assess=judge)
-    assert kept == posts and dropped == 0  # never drop on error

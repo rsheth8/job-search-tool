@@ -1,0 +1,40 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "totalFound": 1,
+  "content": [
+    {
+      "id": "744000146269339",
+      "name": "Software Engineer",
+      "uuid": "53d1d4eb-3ae1-4dc0-8c4d-30b68849cca4",
+      "company": {
+        "identifier": "ServiceNow",
+        "name": "ServiceNow"
+      },
+      "releasedDate": "2026-08-28T22:52:32.390Z",
+      "location": {
+        "city": "Minneapolis",
+        "region": "Minnesota",
+        "country": "us",
+        "remote": true,
+        "fullLocation": "Minneapolis, Minnesota, United States"
+      },
+      "department": {
+        "id": "2294038",
+        "label": "Engineering"
+      },
+      "function": {
+        "id": "engineering",
+        "label": "Engineering"
+      },
+      "typeOfEmployment": {
+        "id": "permanent",
+        "label": "Full-time"
+      },
+      "experienceLevel": {
+        "id": "entry_level",
+        "label": "Entry Level"
+      }
+    }
+  ]
+}

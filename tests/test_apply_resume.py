@@ -1,12 +1,12 @@
-"""Apply flow attaches tailored resume PDFs to Slack replies."""
+"""Apply flow mentions tailored resume in the chat reply."""
 from __future__ import annotations
 
-from app import jobstore, slack
-from app.engine import consume_attachments, handle_sms
+from app import jobstore
+from app.engine import handle_sms
 from app.jobsources.base import JobPosting
 
 
-def test_apply_job_queues_resume_attachment(monkeypatch, tmp_path):
+def test_apply_job_mentions_tailored_resume(monkeypatch, tmp_path):
     from app import config
 
     minimal = r"""
@@ -42,45 +42,5 @@ One page resume content for testing.
         relevance_score=0.82, status="alerted",
     )
     reply = handle_sms("u", f"apply {row['id']}")
-    assert "Tailored resume attached" in reply or "Reusing saved resume" in reply
-    files = consume_attachments("u")
-    assert len(files) == 1
-    assert files[0][0].endswith(".pdf")
-    assert files[0][1][:4] in (b"%PDF", b"%PDF-test")
-
-
-def test_slack_handle_event_uploads_attachments(monkeypatch):
-    posts: list[tuple] = []
-
-    monkeypatch.setattr(
-        slack,
-        "post_reply_with_attachments",
-        lambda token, ch, uid, reply: posts.append((token, ch, uid, reply)) or True,
-    )
-
-    def fake_handle(user, text):
-        from app.engine import _queue_attachment
-
-        _queue_attachment(user, "Resume_test.pdf", b"%PDF-bytes")
-        return "done"
-
-    monkeypatch.setattr("app.engine.handle_sms", fake_handle)
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
-    from app import config
-
-    config.get_settings.cache_clear()
-
-    slack.handle_event({
-        "type": "event_callback",
-        "event_id": "Ev1",
-        "event": {
-            "type": "message",
-            "text": "apply 1",
-            "user": "U1",
-            "channel": "C1",
-        },
-    })
-
-    assert posts
-    assert posts[0][2] == "U1"
-    assert posts[0][3] == "done"
+    assert "Tailored resume" in reply or "Reusing saved resume" in reply
+    assert "Open Apply" in reply

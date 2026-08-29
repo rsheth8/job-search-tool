@@ -1,0 +1,50 @@
+<!doctype html>
+<!-- WHATWG autocomplete is the browser's own field map. Labels are noise. -->
+<html>
+<head><meta charset="utf-8"><title>Apply — autocomplete only</title></head>
+<body>
+  <form>
+    <label for="q1">Question 1</label>
+    <input id="q1" autocomplete="given-name">
+
+    <label for="q2">Question 2</label>
+    <input id="q2" autocomplete="family-name">
+
+    <label for="q3">Question 3</label>
+    <input id="q3" type="email" autocomplete="email">
+
+    <label for="q4">Question 4</label>
+    <input id="q4" type="tel" autocomplete="tel">
+
+    <label for="q5">Question 5</label>
+    <input id="q5" autocomplete="street-address">
+
+    <label for="q6">Question 6</label>
+    <input id="q6" autocomplete="address-level2">
+
+    <label for="q7">Question 7</label>
+    <input id="q7" autocomplete="address-level1">
+
+    <label for="q8">Question 8</label>
+    <input id="q8" autocomplete="postal-code">
+
+    <label for="q9">Question 9</label>
+    <select id="q9" autocomplete="country-name">
+      <option value="">Select…</option>
+      <option>Canada</option>
+      <option>United States</option>
+    </select>
+
+    <label for="q10">Question 10</label>
+    <input id="q10" autocomplete="organization">
+
+    <label for="q11">Question 11</label>
+    <input id="q11" autocomplete="organization-title">
+
+    <label for="q12">Question 12</label>
+    <input id="q12" type="url" autocomplete="url">
+
+    <button type="submit">Submit</button>
+  </form>
+</body>
+</html>

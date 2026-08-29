@@ -351,15 +351,10 @@ def clear_undo(user_id: str) -> None:
 
 
 def has_recruiter_signal(app_id: int) -> bool:
-    """True if we have a recruiter signal for this application's company.
+    """True if notes mention a recruiter, or a legacy recruiters row exists.
 
-    Two sources, either counts:
-      * a discovered recruiter row for the same user+company (Phase 3, Apollo); or
-      * a note mentioning "recruiter" (the original lightweight signal — still
-        useful when discovery hasn't run).
-
-    The follow-up scorer reads through this one helper, so the Apollo table slots
-    in here without any scorer change.
+    Follow-up scoring uses this as a small priority bonus. Live Apollo discovery
+    is gone; existing ``recruiters`` rows and note text still count.
     """
     with connect() as conn:
         row = conn.execute(

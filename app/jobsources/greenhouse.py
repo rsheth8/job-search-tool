@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from .base import JobPosting, get_json, strip_html
+from .base import JobPosting, first_published, get_json, strip_html
 
 API = "https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true"
 
@@ -20,6 +20,7 @@ def _parse(data, board_token: str) -> list[JobPosting]:
         if ext is None:
             continue
         loc = (j.get("location") or {}).get("name") or ""
+        posted, bumped = first_published(j.get("first_published"), j.get("updated_at"))
         out.append(
             JobPosting(
                 source="greenhouse",
@@ -29,7 +30,8 @@ def _parse(data, board_token: str) -> list[JobPosting]:
                 company=(j.get("company_name") or board_token).strip(),
                 location=loc.strip(),
                 description=strip_html(j.get("content")),
-                posted_at=(j.get("updated_at") or j.get("first_published") or "") or "",
+                posted_at=posted,
+                updated_at=bumped,
             )
         )
     return out

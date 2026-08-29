@@ -57,6 +57,7 @@ def test_an_open_first_party_posting_is_still_trusted():
 def test_ordinary_wording_is_not_read_as_closed():
     assert not ghost.is_closed(_p(description="This role is open and we're hiring."))
     assert not ghost.is_closed(_p(description="Applications are reviewed weekly."))
+    assert not ghost.is_closed(_p(description="This role is closed to remote applicants."))
 
 
 # --- not-really-a-job -------------------------------------------------------
@@ -249,9 +250,18 @@ def test_explain_surfaces_concerns():
 
 def test_explain_credits_applying_direct():
     detail = fit.explain(_p(source="greenhouse"), _profile(), score=0.8)
-    assert "apply direct" in detail["reasons"]
-    assert "apply direct" not in fit.explain(_p(source="aggregator"),
+    assert "fill on site" in detail["reasons"]
+    assert "fill on site" not in fit.explain(_p(source="aggregator"),
                                              _profile(), score=0.8)["reasons"]
+
+
+def test_explain_credits_autofill_on_a_fillable_url():
+    detail = fit.explain(
+        _p(source="greenhouse",
+           url="https://boards.greenhouse.io/acme/jobs/1"),
+        _profile(), score=0.8)
+    assert "autofill" in detail["reasons"]
+    assert "fill on site" not in detail["reasons"]
 
 
 def test_explain_works_with_no_profile_at_all():
@@ -283,7 +293,7 @@ def test_the_review_card_says_why():
     card = job_alerts.build_review_card(
         _p(title="Backend Engineer", description="Python and Go, all day."),
         0.88, 12, position=1, total=3, profile=_profile())
-    assert "✅" in card and "backend engineer" in card
+    assert "Fits " in card and "backend engineer" in card
     assert "python" in card
 
 

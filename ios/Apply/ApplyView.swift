@@ -16,30 +16,37 @@ struct ApplyView: View {
                 ApplyBrowser(item: item, package: package, rules: rules)
             } else if let error {
                 EmptyStateView(
-                    title: "Couldn't prepare this one",
-                    description: error
+                    title: "Couldn't prepare this application",
+                    description: error,
+                    retryTitle: "Try again",
+                    retry: { Task { await load() } },
+                    secondaryTitle: "Send feedback",
+                    secondary: { PushManager.shared.openDeepLink("settings:feedback", fromHorizon: true) }
                 )
             } else {
-                PreparingView(message: "Preparing your application…")
+                PreparingView(message: "Preparing application…")
             }
         }
         // Hide the floating dock for the whole apply flow (including loading),
         // not only after the package arrives — otherwise dock + Autofill stack.
         .onAppear { chrome.dockHidden = true }
-        .task {
-            let api = APIClient(config: config)
-            rules = await RulesCache.refresh(using: api)
-            do { package = try await api.fetchPackage(postingId: item.posting_id) }
-            catch {
-                if APIClient.isCancellation(error) { return }
-                let msg = APIClient.userMessage(for: error)
-                if !msg.isEmpty { self.error = msg }
-            }
+        .task { await load() }
+    }
+
+    private func load() async {
+        error = nil
+        let api = APIClient(config: config)
+        rules = await RulesCache.refresh(using: api)
+        do { package = try await api.fetchPackage(postingId: item.posting_id) }
+        catch {
+            if APIClient.isCancellation(error) { return }
+            let msg = APIClient.userMessage(for: error)
+            if !msg.isEmpty { self.error = msg }
         }
     }
 }
 
-/// Soft chrome over the real form: Autofill, resume, mark applied.
+/// Soft chrome over the real form: Autofill, documents, mark applied.
 private struct ApplyBrowser: View {
     let item: QueueItem
     let package: Package
@@ -52,8 +59,8 @@ private struct ApplyBrowser: View {
     @State private var marking = false
     @State private var confirmApplied = false
     @State private var confirmPass = false
-    @State private var resumeDoc: ResumeDoc?
-    @State private var fetchingResume = false
+    @State private var applyDoc: ApplyDoc?
+    @State private var fetchingDoc = false
     @State private var resumeReadyFlash = false
     @State private var prefetchedResume: URL?
 
@@ -75,6 +82,8 @@ private struct ApplyBrowser: View {
                     ProgressView()
                         .progressViewStyle(.linear)
                         .tint(Theme.accent)
+                        .padding(.horizontal, Theme.spaceL)
+                        .padding(.top, 2)
                         .transition(.opacity)
                 }
 
@@ -89,6 +98,9 @@ private struct ApplyBrowser: View {
         .appToast($toast, bottomPadding: 96)
         .navigationTitle(item.company ?? "Apply")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(Theme.fog, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarColorScheme(.light, for: .navigationBar)
         .toolbar {
             // Nav "Back" pops Apply. Site history lives in the bottom bar so we
             // don't show two competing chevrons under the title.
@@ -97,7 +109,7 @@ private struct ApplyBrowser: View {
                     Button {
                         Task { await skipAndClose() }
                     } label: {
-                        Label("Skip for now", systemImage: "clock")
+                        Label("Back to matches", systemImage: "clock")
                     }
                     Button(role: .destructive) {
                         confirmPass = true
@@ -118,20 +130,23 @@ private struct ApplyBrowser: View {
             if case .ready = state { flashToast("Ready — you submit on the site") }
             if case .failed(let r) = state { flashToast(r) }
         }
-        .onChange(of: model.lastFill?.filled) { _, _ in showFillToast() }
-        .confirmationDialog("Mark this as applied?", isPresented: $confirmApplied,
+        .onChange(of: model.fillSeq) { _, _ in
+            showFillToast()
+            reportFillSkips()
+        }
+        .confirmationDialog("Mark this as filed?", isPresented: $confirmApplied,
                             titleVisibility: .visible) {
-            Button("I applied") {
+            Button("Filed") {
                 marking = true
                 Task {
                     try? await APIClient(config: config).markApplied(postingId: item.posting_id)
-                    Theme.impact(.soft)
+                    Theme.notify(.success)
                     dismiss()
                 }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Logs it in your tracker. Submit on the site first.")
+            Text("Adds this to your tracker. Submit on the company’s site first.")
         }
         .confirmationDialog("Pass on this job?", isPresented: $confirmPass,
                             titleVisibility: .visible) {
@@ -140,36 +155,40 @@ private struct ApplyBrowser: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Removes it from Ready and won’t show it again.")
+            Text("Removes this listing. It won’t appear again.")
         }
-        .sheet(item: $resumeDoc) { doc in ShareSheet(items: [doc.url]) }
+        .sheet(item: $applyDoc) { doc in ShareSheet(items: [doc.url]) }
     }
 
     @ViewBuilder
     private var driveBanner: some View {
         switch model.driveState {
         case .needsHuman(let reason):
-            handoffBanner(
-                title: "Autopilot needs you",
-                detail: reason + " — solve it here, then tap Resume.",
-                tint: Theme.note
+            blockerBanner(
+                title: reason,
+                detail: model.statusLine.isEmpty
+                    ? "Handle this here, then tap Resume."
+                    : model.statusLine,
+                icon: model.lastProbeKind == "captcha"
+                    ? "checkmark.shield.fill"
+                    : "lock.fill"
             )
         case .watchingClear:
             handoffBanner(
-                title: "All clear",
-                detail: "Tap Resume Autopilot to keep going — or finish manually.",
+                title: "Continue",
+                detail: "Tap Resume to fill, or finish the form yourself.",
                 tint: Theme.accent
             )
         case .paused:
             handoffBanner(
                 title: "Paused",
-                detail: "Fill anything you like. Resume when you want autopilot back.",
+                detail: "Fill anything you like. Resume when you want JobPilot to continue.",
                 tint: Theme.soft
             )
         case .filling, .advancing, .probing:
             HStack(spacing: 10) {
                 AutopilotOrb(active: true)
-                Text(model.statusLine.isEmpty ? "Autopilot working…" : model.statusLine)
+                Text(model.statusLine.isEmpty ? "Filling…" : model.statusLine)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(Theme.ink)
                     .lineLimit(2)
@@ -178,16 +197,50 @@ private struct ApplyBrowser: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.fog.opacity(0.94))
+            .background(Color.white.opacity(0.96))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Theme.cloud.opacity(0.5)).frame(height: 1)
+            }
         case .ready:
             handoffBanner(
-                title: "Ready for you",
-                detail: "Review the form and submit yourself — autopilot never sends.",
+                title: "Ready to submit",
+                detail: "Review the form and submit yourself — JobPilot never sends.",
                 tint: Theme.accent
             )
         default:
             EmptyView()
         }
+    }
+
+    private func blockerBanner(title: String, detail: String, icon: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 28, height: 28)
+                .background(Theme.accent.opacity(0.12), in: Circle())
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.ink)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(Theme.ink.opacity(0.72))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.96))
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Theme.accent)
+                .frame(width: 3)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 
     private func handoffBanner(title: String, detail: String, tint: Color) -> some View {
@@ -203,7 +256,17 @@ private struct ApplyBrowser: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(tint.opacity(0.14))
+        .background(Color.white.opacity(0.96))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Theme.cloud.opacity(0.5)).frame(height: 1)
+        }
+        .overlay(alignment: .leading) {
+            if tint == Theme.accent {
+                Rectangle()
+                    .fill(Theme.accent)
+                    .frame(width: 3)
+            }
+        }
     }
 
     private var controls: some View {
@@ -228,7 +291,14 @@ private struct ApplyBrowser: View {
 
                 primaryDriveButton
 
-                Button { fetchResume() } label: {
+                Menu {
+                    Button { fetchResume() } label: {
+                        Label("Resume", systemImage: "doc.text")
+                    }
+                    Button { fetchCover() } label: {
+                        Label("Cover letter", systemImage: "envelope")
+                    }
+                } label: {
                     Image(systemName: resumeReadyFlash || prefetchedResume != nil
                           ? "doc.text.fill" : "doc.text")
                         .font(.body.weight(.medium))
@@ -236,11 +306,11 @@ private struct ApplyBrowser: View {
                         .frame(width: 48, height: 44)
                         .background(Color.white.opacity(0.7), in: Circle())
                 }
-                .disabled(fetchingResume)
+                .disabled(fetchingDoc)
                 .overlay {
-                    if fetchingResume { ProgressView().controlSize(.small) }
+                    if fetchingDoc { ProgressView().controlSize(.small) }
                 }
-                .accessibilityLabel("Resume file")
+                .accessibilityLabel("Documents")
 
                 Button { confirmApplied = true } label: {
                     Image(systemName: "checkmark")
@@ -250,13 +320,13 @@ private struct ApplyBrowser: View {
                         .background(Color.white.opacity(0.7), in: Circle())
                 }
                 .disabled(marking)
-                .accessibilityLabel("I applied")
+                .accessibilityLabel("Filed")
             }
         }
         .padding(.horizontal, 14)
         .padding(.top, 10)
         .padding(.bottom, 10)
-        .background(.ultraThinMaterial)
+        .paperBar()
     }
 
     @ViewBuilder
@@ -264,44 +334,57 @@ private struct ApplyBrowser: View {
         switch model.driveState {
         case .filling, .advancing, .probing:
             Button { model.pauseAutopilot() } label: {
-                Label("Pause", systemImage: "pause.fill")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .foregroundStyle(Theme.ink)
-                    .background(Color.white.opacity(0.85), in: Capsule())
+                HStack(spacing: 8) {
+                    PropellerIcon(speed: .fast, size: 14)
+                    Text("Pause")
+                        .font(.body.weight(.semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .foregroundStyle(Theme.ink)
+                .background(Color.white.opacity(0.85), in: Capsule())
             }
             .buttonStyle(PressableButtonStyle())
         case .needsHuman, .watchingClear, .paused, .ready:
             Button { model.resumeAutopilot() } label: {
-                Label("Resume Autopilot", systemImage: "sparkles")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .foregroundStyle(.white)
-                    .background(Theme.accent, in: Capsule())
+                HStack(spacing: 8) {
+                    PropellerIcon(speed: .still, size: 14)
+                    Text("Resume")
+                        .font(.body.weight(.semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .foregroundStyle(.white)
+                .background(Theme.accent, in: Capsule())
             }
             .buttonStyle(PressableButtonStyle())
         case .failed:
             Button { model.startAutopilot() } label: {
-                Label("Try Autopilot", systemImage: "sparkles")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .foregroundStyle(.white)
-                    .background(Theme.accent, in: Capsule())
+                HStack(spacing: 8) {
+                    PropellerIcon(speed: .still, size: 14)
+                    Text("Try Fill")
+                        .font(.body.weight(.semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .foregroundStyle(.white)
+                .background(Theme.accent, in: Capsule())
             }
             .buttonStyle(PressableButtonStyle())
         case .idle:
             Button { model.autofill() } label: {
-                Label("Autofill", systemImage: "bolt.fill")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .foregroundStyle(.white)
-                    .background(Theme.accent, in: Capsule())
+                HStack(spacing: 8) {
+                    PropellerIcon(speed: model.oneShotFilling ? .fast : .still, size: 16)
+                    Text("Fill")
+                        .font(.body.weight(.semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .foregroundStyle(.white)
+                .background(Theme.accent, in: Capsule())
             }
             .buttonStyle(PressableButtonStyle())
+            .disabled(model.oneShotFilling)
             .simultaneousGesture(LongPressGesture(minimumDuration: 0.6).onEnded { _ in
                 model.startAutopilot()
             })
@@ -325,16 +408,28 @@ private struct ApplyBrowser: View {
         // Drive loop posts its own status; avoid noisy toasts while autopilot runs.
         if model.driveState.isRunning { return }
         if f.filled == 0 && f.essays == 0 {
-            flashToast("No fields matched — form still loading, or name/email missing in About me")
+            flashToast("No fields matched. The form may still be loading, or name and email are missing in You.")
             return
         }
         let more = f.essays > 0 ? " · \(f.essays) need you" : ""
         let stale = f.rules.hasPrefix("bundled") ? " · offline rules" : ""
         flashToast("Filled \(f.filled)\(more)\(stale)")
+        if f.filled > 0 { Theme.notify(.success) }
+    }
+
+    private func reportFillSkips() {
+        let skips = model.lastSkips
+        guard !skips.isEmpty else { return }
+        Task {
+            try? await APIClient(config: config).reportFillSkips(
+                postingId: item.posting_id,
+                url: model.currentURL,
+                skips: skips)
+        }
     }
 
     private func prefetchResume() {
-        guard resumeDoc == nil, !fetchingResume else { return }
+        guard applyDoc == nil, !fetchingDoc else { return }
         Task {
             if let url = try? await APIClient(config: config)
                 .downloadResume(postingId: item.posting_id) {
@@ -349,18 +444,35 @@ private struct ApplyBrowser: View {
 
     private func fetchResume() {
         if let ready = prefetchedResume {
-            resumeDoc = ResumeDoc(url: ready)
+            applyDoc = ApplyDoc(url: ready)
             return
         }
-        fetchingResume = true
+        fetchingDoc = true
         Task {
-            defer { fetchingResume = false }
+            defer { fetchingDoc = false }
             do {
-                resumeDoc = ResumeDoc(url: try await APIClient(config: config)
+                applyDoc = ApplyDoc(url: try await APIClient(config: config)
                     .downloadResume(postingId: item.posting_id))
             }
             catch APIClient.APIError.http(404) { flashToast("No tailored resume yet") }
-            catch { flashToast("Couldn't fetch resume") }
+            catch {
+                flashToast(APIClient.userMessage(for: error))
+            }
+        }
+    }
+
+    private func fetchCover() {
+        fetchingDoc = true
+        Task {
+            defer { fetchingDoc = false }
+            do {
+                applyDoc = ApplyDoc(url: try await APIClient(config: config)
+                    .downloadCover(postingId: item.posting_id))
+            }
+            catch APIClient.APIError.http(404) { flashToast("Couldn't build a cover letter") }
+            catch {
+                flashToast(APIClient.userMessage(for: error))
+            }
         }
     }
 
@@ -380,21 +492,14 @@ struct ShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }
 
-struct ResumeDoc: Identifiable { let id = UUID(); let url: URL }
+struct ApplyDoc: Identifiable { let id = UUID(); let url: URL }
 
-/// Breathing sage orb while autopilot is mid-flight.
+/// Breathing cockpit orb while fill is mid-flight.
 private struct AutopilotOrb: View {
     var active: Bool
-    @State private var pulse = false
 
     var body: some View {
-        Circle()
-            .fill(Theme.accent.opacity(pulse ? 0.95 : 0.45))
-            .frame(width: 10, height: 10)
-            .shadow(color: Theme.accent.opacity(pulse ? 0.45 : 0.1), radius: pulse ? 6 : 2)
-            .onAppear {
-                guard active else { return }
-                withAnimation(Theme.breathe) { pulse = true }
-            }
+        PropellerIcon(speed: active ? .fast : .still, size: 14)
+            .foregroundStyle(Theme.accent)
     }
 }

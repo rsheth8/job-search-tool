@@ -137,6 +137,7 @@ def test_minimal_edit_through_fit_one_page(real_resumes, variant):
         "Software Engineer",
         "python react apis backend",
     )
+    assert fitted is not None
     assert _compile_pages(fitted) == 1
 
 
@@ -151,11 +152,13 @@ def test_overflow_edit_is_trimmed_to_one_page(real_resumes, variant):
         "Backend Software Engineer",
         "python react kubernetes apis spring boot",
     )
+    assert fitted is not None
     assert _compile_pages(fitted) == 1
     assert r"\begin{document}" in fitted
     assert r"\end{document}" in fitted
     # Trim should drop the synthetic bullet, not gut the whole resume.
     assert r"\section{PROFESSIONAL EXPERIENCE}" in fitted
+    assert resume_tailor.section_order(fitted) == resume_tailor.section_order(bloated)
 
 
 def test_tailor_for_posting_one_page_after_minimal_edit(real_resumes, monkeypatch):
@@ -210,12 +213,18 @@ def test_tailor_reuses_cached_resume_without_reediting(real_resumes, monkeypatch
     assert edits["n"] == 1
 
     second = resume_tailor.tailor_for_posting(
-        "u1", "Stripe", "Backend Engineer", "python react apis", posting_id=99
+        "u1", "Stripe", "Backend Engineer", "python react apis", posting_id=10
     )
     assert second is not None and second.from_cache
     assert second.pages == 1
     assert second.pdf_bytes == first.pdf_bytes
-    assert edits["n"] == 1, "cache hit should skip Claude + recompile"
+    assert edits["n"] == 1, "same posting should skip Claude + recompile"
+
+    other = resume_tailor.tailor_for_posting(
+        "u1", "Stripe", "Backend Engineer", "python react apis", posting_id=99
+    )
+    assert other is not None and not other.from_cache
+    assert edits["n"] == 2, "a different posting must tailor a new résumé"
 
 
 def test_picked_variant_matches_posting(real_resumes, monkeypatch):

@@ -10,6 +10,11 @@ struct QueueItem: Codable, Identifiable, Hashable {
     let source: String?
     let status: String?
     let auto_fillable: Bool?
+    /// autofill | direct | browser — how this apply link should be labeled.
+    let apply_kind: String?
+    /// True for the five "apply these today" shortlist items.
+    let apply_today: Bool?
+    let fresh: Bool?
     /// Why this surfaced, in words — a bare percentage can't be argued with.
     /// Computed server-side by `app/fit.py`.
     let why: String?
@@ -18,10 +23,9 @@ struct QueueItem: Codable, Identifiable, Hashable {
 
     var id: Int { posting_id }
 
-    /// True when this is a first-party ATS form (Greenhouse/Lever/Ashby) the autofill
-    /// can actually drive — vs. an aggregator (Built In, RSS, etc.) that's login-walled.
-    /// Mirrors the backend's `app/ats.py`: trust the backend flag when present, else
-    /// sniff the URL host. (The live deploy may not send `auto_fillable` yet.)
+    /// True when this is a high-confidence Autofill host (Greenhouse/Lever/Ashby).
+    /// Other public forms still get Fill after the page probe; this flag is for
+    /// ranking and labels, not a hard gate.
     var isFirstParty: Bool {
         if let f = auto_fillable { return f }
         return Self.looksLikeATS(url)
@@ -39,34 +43,28 @@ struct QueueItem: Codable, Identifiable, Hashable {
         if raw.contains("gh_jid=") { return true }
         return false
     }
+
+    /// Honest label: Autofill (known ATS) vs Fill (company site / public form).
+    var applyKindLabel: String {
+        switch apply_kind {
+        case "autofill": return "Autofill"
+        case "direct": return "Fill"
+        case "browser": return "Open & fill"
+        default: return isFirstParty ? "Autofill" : "Open & fill"
+        }
+    }
 }
 
 struct QueueResponse: Codable {
     let queued: [QueueItem]?   // top matches not yet staged
     let queue: [QueueItem]?    // staged, ready to apply
+    let discovery: DiscoveryStatus?
 }
 
-/// One application the submit worker is handling, from `GET /apply/inflight`.
-struct InFlightRow: Codable, Identifiable, Hashable {
-    let id: Int                  // posting id
-    let label: String
-    let state: String            // human-readable ("waiting on your approval")
-    let awaiting: Bool           // true when it's the human's turn
-    let request_id: Int?
-    let status: String?          // pending | filling | preview | approved | submitting
-    let preview: FillPreview?
-}
-
-/// What the worker filled, and what it left for you.
-struct FillPreview: Codable, Hashable {
-    let filled: [FilledField]?
-    let skipped: [String]?
-    let screenshot_url: String?
-}
-
-struct FilledField: Codable, Hashable {
-    let label: String
-    let value: String
+struct DiscoveryStatus: Codable {
+    let searching: Bool?
+    let started_at: String?
+    let last_finished_at: String?
 }
 
 /// One stored fact about you, from `GET /apply/knowledge`.
@@ -104,6 +102,9 @@ struct RulesPayload: Codable, Equatable {
     let version: String?
     /// Optional probe patterns from the backend; ignored by older app builds.
     let formprobe: FormProbePayload?
+    /// name/id patterns; optional so an old cache still decodes.
+    let attr_rules: [[String]]?
+    let autocomplete: [String: String]?
 }
 
 struct FormProbePayload: Codable, Equatable {
@@ -148,10 +149,18 @@ struct ChatMessage: Codable, Identifiable, Hashable {
     let created_at: String?
 }
 
+struct AgentConfirm: Codable, Hashable {
+    let pending: Bool
+}
+
 struct ChatSendResult: Codable {
     let reply: String
     let user_message: ChatMessage?
     let assistant_message: ChatMessage?
+    let suggestions: [String]?
+    let deep_link: String?
+    let confirm: AgentConfirm?
+    let intent: String?
 }
 
 struct SetupStatus: Codable {
@@ -160,6 +169,46 @@ struct SetupStatus: Codable {
     let has_profile: Bool
     let identity_score: Double
     let identity_missing: [String]?
+    let identity_have: [String]?
+    let onboarding: String?
     let profile: [String: String]
     let identity: [String: String]
+}
+
+struct ImportResult: Codable {
+    let ok: Bool?
+    let source: String
+    let filled: [String]
+    let knowledge_added: Int
+    let identity_score: Double?
+    let note: String?
+}
+
+struct HealthInfo: Codable {
+    let status: String?
+    let db_ok: Bool?
+    struct AuthFlags: Codable {
+        let fail_open: Bool?
+        let sentry: Bool?
+        let dev_login: Bool?
+    }
+    struct BetaFlags: Codable {
+        let invite_ready: Bool?
+    }
+    let auth: AuthFlags?
+    let beta: BetaFlags?
+}
+
+/// One logged application, from `GET /apply/applications`.
+struct FiledApplication: Codable, Identifiable, Hashable {
+    let id: Int
+    let company: String?
+    let role: String?
+    let status: String?
+    let applied_at: String?
+    let next_follow_up_at: String?
+}
+
+struct ApplicationsResponse: Codable {
+    let applications: [FiledApplication]?
 }

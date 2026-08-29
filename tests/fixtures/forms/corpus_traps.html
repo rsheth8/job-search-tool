@@ -1,0 +1,54 @@
+<!doctype html>
+<!-- Precision traps. Filling any of these is worse than leaving them blank. -->
+<html>
+<head><meta charset="utf-8"><title>Apply — traps</title></head>
+<body>
+  <form>
+    <label for="first">First name</label>
+    <input id="first" name="first_name" autocomplete="given-name">
+
+    <label for="email">Email</label>
+    <input id="email" type="email" name="email">
+
+    <label for="curpay">Current salary</label>
+    <input id="curpay" name="current_salary">
+
+    <label for="code">Referral code</label>
+    <input id="code" name="referral_code">
+
+    <label for="color">Favorite color</label>
+    <input id="color" name="favorite_color">
+
+    <label for="salut">Title</label>
+    <select id="salut" name="salutation">
+      <option value="">Select…</option>
+      <option>Mr</option>
+      <option>Ms</option>
+      <option>Mx</option>
+    </select>
+
+    <label for="bday">Birthday</label>
+    <input id="bday" type="date" name="birth_date" autocomplete="bday">
+
+    <label for="orient">Sexual orientation</label>
+    <input id="orient" name="orientation">
+
+    <label for="gid">Gender identity</label>
+    <select id="gid" name="gender_identity">
+      <option value="">Select…</option>
+      <option>Man</option>
+      <option>Woman</option>
+    </select>
+
+    <label for="citizen">Citizenship status</label>
+    <input id="citizen" name="citizenship">
+
+    <fieldset>
+      <legend>National origin</legend>
+      <input id="origin" name="national_origin">
+    </fieldset>
+
+    <button type="submit">Submit</button>
+  </form>
+</body>
+</html>

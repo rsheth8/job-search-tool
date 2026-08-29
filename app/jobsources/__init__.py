@@ -1,19 +1,19 @@
 """Job-source adapters: pull open postings from public job boards.
 
 Each source exposes ``fetch(board_token) -> list[JobPosting]``. The free ATS
-boards (Greenhouse, Lever, Ashby) need no auth. Adapters are deliberately
-resilient — a network error, a bad token, or a shape change returns ``[]``
-(logged) instead of raising, so one flaky board never breaks a discovery tick.
+boards (Greenhouse, Lever, Ashby, Workable, SmartRecruiters) need no auth.
+Adapters are deliberately resilient — a network error, a bad token, or a
+shape change returns ``[]`` (logged) instead of raising, so one flaky board
+never breaks a discovery tick.
 
 ``fetch_source(source, token)`` dispatches by name; ``SOURCES`` lists the ones
-wired up. Paid sources (aggregator, linkedin) are added later behind config
-flags and slot into this same registry.
+wired up.
 """
 from __future__ import annotations
 
 import logging
 
-from . import aggregator, ashby, directory, greenhouse, lever, rss, swelist
+from . import ashby, directory, greenhouse, lever, rss, smartrecruiters, swelist, workable, yc
 from .base import JobPosting
 
 logger = logging.getLogger("jobsources")
@@ -23,16 +23,17 @@ SOURCES = {
     "greenhouse": greenhouse.fetch,
     "lever": lever.fetch,
     "ashby": ashby.fetch,
+    "workable": workable.fetch,
+    "smartrecruiters": smartrecruiters.fetch,
     "rss": rss.fetch,
-    "aggregator": aggregator.fetch,
     "directory": directory.fetch,
     "swelist": swelist.fetch,
+    "yc": yc.fetch,
 }
 
 # Sources whose ``board_token`` is a URL/search query/cursor, not a per-company
-# slug. ``resolve_board`` must never slug-probe these — for the paid aggregator
-# that would also burn budget on guesses.
-NON_BOARD_SOURCES = frozenset({"rss", "aggregator", "directory", "swelist"})
+# slug. ``resolve_board`` must never slug-probe these.
+NON_BOARD_SOURCES = frozenset({"rss", "directory", "swelist", "yc"})
 
 
 def fetch_source(source: str, board_token: str) -> list[JobPosting]:

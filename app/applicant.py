@@ -31,19 +31,19 @@ TEXT_FIELDS = (
     # links
     "linkedin", "github", "portfolio",
     # education
-    "school", "degree", "discipline", "gpa", "grad_year",
+    "school", "degree", "discipline", "gpa", "grad_year", "intern_season",
     # experience
     "current_company", "current_title", "years_experience",
     # logistics commonly asked on applications
     "salary_expectation", "start_date", "work_arrangement", "how_heard",
     # optional EEO (only filled when set — see fieldmatch)
-    "gender", "race", "ethnicity", "veteran_status", "disability_status",
+    "gender", "race",     "ethnicity", "hispanic_latino", "veteran_status", "disability_status",
 )
 # Yes/No questions. Rendered as "Yes"/"No" for selects/radios by autofill_map.
 BOOL_FIELDS = (
     "work_authorized", "needs_sponsorship", "willing_to_relocate",
     "background_check", "drug_test", "over_18", "can_travel",
-    "previously_applied", "related_to_employee",
+    "previously_applied", "related_to_employee", "hispanic_latino",
 )
 FIELDS = TEXT_FIELDS + BOOL_FIELDS
 
@@ -98,7 +98,33 @@ def autofill_map(user_id: str) -> dict:
                 out[k] = digits or v
             else:
                 out[k] = v
+    month, year = _split_grad(str(out.get("grad_year") or ""))
+    if month:
+        out["grad_month"] = month
+    if year:
+        out["grad_year_num"] = year
     return out
+
+
+_MONTH_CANON = (
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)
+
+
+def _split_grad(raw: str) -> tuple[str | None, str | None]:
+    """'December 2027' → ('December', '2027') for month/year dropdowns."""
+    if not raw:
+        return None, None
+    year_m = re.search(r"((?:19|20)\d{2})", raw)
+    year = year_m.group(1) if year_m else None
+    low = raw.lower()
+    month = None
+    for name in _MONTH_CANON:
+        if name.lower() in low or (len(name) >= 3 and name[:3].lower() in low.split()):
+            month = name
+            break
+    return month, year
 
 
 def identity_block(user_id: str) -> str:

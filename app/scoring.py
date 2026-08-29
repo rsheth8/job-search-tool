@@ -9,9 +9,8 @@ Score (per the spec):  days_since_last_activity * 2  +  stage_weight  +  recruit
   quiet does. This is the staleness signal that actually drives follow-ups.
 - stage_weight rewards later stages — a pending Onsite is more worth chasing
   than a fresh application.
-- recruiter_bonus fires when we have a recruiter signal for the company. Today
-  that's detected from notes mentioning a recruiter; in Phase 3 the Apollo
-  ``recruiters`` table becomes the source and this hook stays the same.
+- recruiter_bonus fires when notes (or a legacy recruiters row) signal a
+  recruiter for the company.
 
 Pure functions here (easy to test offline); orchestration that touches the DB
 lives in ``rank_followups``.

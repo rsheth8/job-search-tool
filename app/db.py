@@ -184,6 +184,7 @@ CREATE TABLE IF NOT EXISTS job_postings (
     relevance_score REAL,
     status          TEXT NOT NULL DEFAULT 'new',  -- new|alerted|applied|dismissed|snoozed|seeded
     snoozed_until   TEXT,                         -- when a 'snoozed' posting should resurface
+    sort_order      INTEGER,                       -- user rank on Apply; NULL = score order
     embedding       BLOB                          -- float32 JD vector (Matching v2); NULL when off
 );
 
@@ -215,6 +216,15 @@ CREATE TABLE IF NOT EXISTS discovery_cursors (
     cursor_key    TEXT PRIMARY KEY,
     position      INTEGER NOT NULL DEFAULT 0,
     updated_at    TEXT NOT NULL
+);
+
+-- Board tokens learned from apply URLs (swelist / RSS / YC) and merged into
+-- the rotating ATS directory. Distinct from the curated JSON file.
+CREATE TABLE IF NOT EXISTS directory_learned_boards (
+    source        TEXT NOT NULL,
+    board_token   TEXT NOT NULL,
+    learned_at   TEXT NOT NULL,
+    PRIMARY KEY (source, board_token)
 );
 
 -- Paid / rate-limited wide-discovery API calls (SerpApi aggregator).
@@ -288,26 +298,9 @@ CREATE TABLE IF NOT EXISTS posting_summaries (
     created_at   TEXT NOT NULL
 );
 
--- Phase 2 submit pipeline: a request for the headless worker to fill (and, after
--- the user approves the preview, submit) a public application form. Status walks
--- pending -> filling -> preview -> approved -> submitting -> submitted | failed.
--- We NEVER submit without an explicit user approval of the filled preview.
-CREATE TABLE IF NOT EXISTS fill_requests (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id      TEXT NOT NULL,
-    posting_id   INTEGER NOT NULL REFERENCES job_postings(id) ON DELETE CASCADE,
-    status       TEXT NOT NULL DEFAULT 'pending',
-    preview_json TEXT,            -- {screenshot_url, filled:[{label,value}], skipped:[...]}
-    error        TEXT,
-    created_at   TEXT NOT NULL,
-    updated_at   TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_fill_requests_status ON fill_requests(status);
-
--- Semi-auto application queue (Track C): postings the user has staged to apply
--- to, with a pre-assembled package (draft answers + tailored resume) ready for a
--- final human review. Status walks staged -> ready -> submitted; we NEVER submit
--- a form automatically — 'submitted' is the user confirming they sent it.
+-- Semi-auto application queue: postings staged to apply, with a pre-assembled
+-- package (draft answers + tailored resume). Status walks staged -> ready ->
+-- submitted; the human always clicks Submit in the iOS WebView.
 -- Personal knowledge: the durable facts about the user that make an application
 -- answer specific rather than generic — projects, achievements, strengths, work
 -- preferences, and reusable canned answers to questions every ATS asks. Grounds
@@ -315,7 +308,7 @@ CREATE INDEX IF NOT EXISTS idx_fill_requests_status ON fill_requests(status);
 CREATE TABLE IF NOT EXISTS user_knowledge (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id    TEXT NOT NULL,
-    category   TEXT NOT NULL,   -- project | achievement | strength | preference | answer
+    category   TEXT NOT NULL,   -- experience | project | achievement | strength | preference | answer
     label      TEXT,            -- for 'answer': the question it answers
     text       TEXT NOT NULL,
     created_at TEXT NOT NULL,
@@ -330,6 +323,7 @@ CREATE TABLE IF NOT EXISTS device_tokens (
     user_id    TEXT NOT NULL,
     token      TEXT NOT NULL,
     platform   TEXT NOT NULL DEFAULT 'ios',
+    timezone   TEXT,                          -- IANA id from the phone (push greetings)
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (user_id, token)
@@ -344,6 +338,7 @@ CREATE TABLE IF NOT EXISTS apply_queue (
     resume_path  TEXT,                            -- cached tailored-resume PDF path
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL,
+    sort_order   INTEGER,                          -- user rank; lower is sooner (Next)
     PRIMARY KEY (user_id, posting_id)
 );
 
@@ -396,9 +391,30 @@ CREATE TABLE IF NOT EXISTS feedback (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id    TEXT NOT NULL,
     body       TEXT NOT NULL,
+    context    TEXT,
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_user ON feedback(user_id, id);
+
+-- Labels Autofill skipped (unmatched wording, empty identity, no listed option).
+-- Grows the phrasing table from jobs the user actually applies to.
+CREATE TABLE IF NOT EXISTS fill_skips (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT NOT NULL,
+    label       TEXT NOT NULL,
+    label_norm  TEXT NOT NULL,
+    reason      TEXT NOT NULL,
+    key         TEXT,
+    url         TEXT,
+    posting_id  INTEGER,
+    count       INTEGER NOT NULL DEFAULT 1,
+    first_seen  TEXT NOT NULL,
+    last_seen   TEXT NOT NULL,
+    options     TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fill_skips_dedupe
+    ON fill_skips(user_id, label_norm, reason);
+CREATE INDEX IF NOT EXISTS idx_fill_skips_user ON fill_skips(user_id, last_seen);
 """
 
 
@@ -447,6 +463,13 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     aq_cols = {r[1] for r in conn.execute("PRAGMA table_info(apply_queue)")}
     if aq_cols and "questions_json" not in aq_cols:
         conn.execute("ALTER TABLE apply_queue ADD COLUMN questions_json TEXT")
+    if aq_cols and "sort_order" not in aq_cols:
+        conn.execute("ALTER TABLE apply_queue ADD COLUMN sort_order INTEGER")
+    if post_cols and "sort_order" not in post_cols:
+        conn.execute("ALTER TABLE job_postings ADD COLUMN sort_order INTEGER")
+    dev_cols = {r[1] for r in conn.execute("PRAGMA table_info(device_tokens)")}
+    if dev_cols and "timezone" not in dev_cols:
+        conn.execute("ALTER TABLE device_tokens ADD COLUMN timezone TEXT")
     # posting_summaries moved from (tldr, fit) columns to a JSON blob; the old rows
     # are a regenerable cache, so just rebuild the table on the richer schema.
     sum_cols = {r[1] for r in conn.execute("PRAGMA table_info(posting_summaries)")}
@@ -456,3 +479,6 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             "CREATE TABLE posting_summaries (cache_key TEXT PRIMARY KEY, "
             "summary_json TEXT NOT NULL, created_at TEXT NOT NULL)"
         )
+    fb_cols = {r[1] for r in conn.execute("PRAGMA table_info(feedback)")}
+    if fb_cols and "context" not in fb_cols:
+        conn.execute("ALTER TABLE feedback ADD COLUMN context TEXT")

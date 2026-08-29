@@ -22,9 +22,8 @@ def test_unauthenticated_apply_data_is_401_when_fail_closed(monkeypatch):
     monkeypatch.setenv("AUTH_FAIL_OPEN", "false")
     config.get_settings.cache_clear()
     assert _client().get("/apply/data?user=u1").status_code == 401
-    assert _client().get("/").status_code == 401
-    assert _client().get("/apply").status_code == 401
-    assert _client().get("/train").status_code == 401
+    assert _client().get("/chat/history").status_code == 401
+    assert _client().get("/auth/me").status_code == 401
 
 
 def test_session_user_a_cannot_read_user_b(monkeypatch):
@@ -77,6 +76,7 @@ def test_allowlist_rejects_unknown_email(monkeypatch):
     res = _client().post("/auth/apple", json={"identity_token": "fake"})
     assert res.status_code == 403
     assert "invite-only" in res.json()["detail"]
+    assert "privaterelay" in res.json()["detail"]
 
 
 def test_allowlist_accepts_listed_email(monkeypatch):
@@ -102,7 +102,7 @@ def test_allowlist_empty_allows_anyone(monkeypatch):
     assert _client().post("/auth/apple", json={"identity_token": "fake"}).status_code == 200
 
 
-def test_html_dashboard_session_ignores_query_user(monkeypatch):
+def test_session_user_cannot_override_with_query_user(monkeypatch):
     monkeypatch.setenv("AUTH_FAIL_OPEN", "false")
     monkeypatch.setenv("AUTH_ALLOW_DEV_LOGIN", "true")
     config.get_settings.cache_clear()
@@ -112,6 +112,8 @@ def test_html_dashboard_session_ignores_query_user(monkeypatch):
     store.create_application("usr_alice", "AliceCo", "SWE")
     store.create_application("usr_bob", "BobCo", "PM")
     tok = c.post("/auth/dev", json={"user_id": "usr_alice"}).json()["token"]
-    html = c.get("/?user=usr_bob", headers={"Authorization": f"Bearer {tok}"}).text
-    assert "AliceCo" in html
-    assert "BobCo" not in html
+    data = c.get(
+        "/apply/data?user=usr_bob",
+        headers={"Authorization": f"Bearer {tok}"},
+    ).json()
+    assert data["user"] == "usr_alice"

@@ -77,16 +77,33 @@ def test_same_id_is_noop():
 
 def _train_local():
     """Build a profile + 6/6 swipe labels + a trained model under 'local'."""
-    from app import trainer
+    from app.db import connect
 
     profile.set_profile("local", roles="software engineer")
     applicant.set_identity("local", {"email": "ada@x.com"})
-    for i in range(6):
-        trainer.record_label("local", {"source": "greenhouse", "external_id": f"p{i}",
-                             "title": "Software Engineer", "relevance_score": 0.6}, "like")
-    for i in range(6):
-        trainer.record_label("local", {"source": "rss", "external_id": f"n{i}",
-                             "title": "Sales Rep", "relevance_score": 0.2}, "pass")
+    with connect() as conn:
+        for i in range(6):
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO training_labels
+                    (user_id, source, external_id, company, title, location, url,
+                     description, relevance_score, label, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                """,
+                ("local", "greenhouse", f"p{i}", None, "Software Engineer",
+                 None, None, None, 0.6, "like"),
+            )
+        for i in range(6):
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO training_labels
+                    (user_id, source, external_id, company, title, location, url,
+                     description, relevance_score, label, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                """,
+                ("local", "rss", f"n{i}", None, "Sales Rep",
+                 None, None, None, 0.2, "pass"),
+            )
     assert reranker.train("local", profile.get_profile("local")) is not None
 
 
@@ -110,7 +127,7 @@ def test_export_import_moves_trained_brain_to_a_fresh_db(tmp_path):
     added = usermerge.import_user(brain, "U07LVJVD4PL", conn=pc)
     assert added["training_labels"] == 12 and added["reranker_models"] == 1
 
-    # The model, profile, identity, and labels all landed under the Slack id.
+    # The model, profile, identity, and labels all landed under the target id.
     model = pc.execute("SELECT model_json FROM reranker_models WHERE user_id = ?",
                        ("U07LVJVD4PL",)).fetchone()
     assert model is not None

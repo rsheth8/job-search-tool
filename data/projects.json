@@ -1,0 +1,299 @@
+{
+  "projects": [
+    {
+      "id": "distill",
+      "name": "Distill",
+      "tagline": "AI-Powered Chrome Extension",
+      "dates": "Apr 2026 -- Present",
+      "github": "https://github.com/rsheth8/distill",
+      "tracks": ["aiml", "swe"],
+      "keywords": [
+        "chrome", "extension", "llm", "anthropic", "claude", "openai", "gemini",
+        "groq", "javascript", "sse", "jwt", "supabase", "docker", "byok",
+        "prompt", "summar", "browser", "manifest"
+      ],
+      "latex_bullets": [
+        "Built a Chrome MV3 extension with multi-provider LLM integration (\\textbf{Anthropic Claude}, \\textbf{OpenAI}, \\textbf{Gemini}, \\textbf{Groq}) for progressive article summarization, highlight analysis, and comprehension check-ins",
+        "Architected BYOK routing inference browser-to-provider; optional self-hosted \\textbf{Express} backend with \\textbf{SSE} streaming, \\textbf{JWT} auth, and \\textbf{Supabase} persistence; CI via GitHub Actions, Vitest, Docker on Fly.io"
+      ],
+      "summary": "Distill (Apr 2026–present): Chrome MV3 extension with multi-provider LLM integration (Anthropic Claude, OpenAI, Gemini, Groq) for progressive article summarization, highlight analysis, and comprehension check-ins. BYOK routes inference browser-to-provider; optional Express backend with SSE, JWT, and Supabase. GitHub Actions, Vitest, Docker on Fly.io. https://github.com/rsheth8/distill"
+    },
+    {
+      "id": "pantrypal",
+      "name": "PantryPal",
+      "tagline": "Household App",
+      "dates": "July 2025 -- Present",
+      "github": "https://github.com/rsheth8/PantryPal",
+      "tracks": ["swe"],
+      "keywords": [
+        "react native", "expo", "mobile", "ios", "android", "supabase",
+        "postgresql", "jwt", "ocr", "vision", "spoonacular", "zustand",
+        "offline", "household", "typescript"
+      ],
+      "latex_bullets": [
+        "Built offline-first sync with optimistic UI in \\textbf{React Native} and a \\textbf{PostgreSQL}/Supabase backend; delta-sync cut load time \\textbf{$\\sim$50\\%} vs.\\ full fetches on slow connections",
+        "Integrated \\textbf{Google Vision API} OCR (\\textbf{90\\%+} accuracy) and \\textbf{Spoonacular} meal planning, eliminating manual entry; \\textbf{JWT} auth with role scoping and household join codes"
+      ],
+      "summary": "PantryPal (July 2025–present): React Native + Expo household app with a PostgreSQL/Supabase backend. Offline-first sync and optimistic UI; delta-sync ~50% faster on slow connections. Google Vision OCR at 90%+ plus Spoonacular meal planning; JWT auth with role scoping. https://github.com/rsheth8/PantryPal"
+    },
+    {
+      "id": "mydrive",
+      "name": "MyDrive",
+      "tagline": "Multi-Objective Route Planner, Chicagoland",
+      "dates": "2025",
+      "github": "https://github.com/rsheth8/MyDrive",
+      "tracks": ["aiml", "swe"],
+      "keywords": [
+        "xgboost", "machine learning", "fastapi", "osmnx", "networkx",
+        "routing", "streamlit", "expo", "pwa", "python", "mapbox", "osrm",
+        "folium", "graph"
+      ],
+      "latex_bullets": [
+        "Trained an \\textbf{XGBoost} accident-risk classifier on fused crash and weather data; re-weighted an \\textbf{OSMnx} road graph by predicted risk and routed via \\textbf{NetworkX} across \\textbf{8 presets} (time, tolls, stress, safety, reliability)",
+        "Built a \\textbf{FastAPI} backend with 10 endpoints serving a \\textbf{Streamlit} desktop UI, mobile \\textbf{PWA}, and \\textbf{Expo} native shell; Folium risk heatmap and \\textbf{OSRM/Mapbox} turn-by-turn"
+      ],
+      "summary": "MyDrive (2025): Chicagoland multi-objective route planner. XGBoost accident-risk classifier on crash + weather data; OSMnx/NetworkX routing across 8 presets. FastAPI backend serving Streamlit, a mobile PWA, and Expo; Folium heatmap and OSRM/Mapbox navigation. https://github.com/rsheth8/MyDrive"
+    },
+    {
+      "id": "songsift",
+      "name": "SongSift",
+      "tagline": "Full-Stack Music Analysis \\& Recommendation Workbench",
+      "dates": "Dec 2025 -- Mar 2026",
+      "github": "https://github.com/rsheth8/SongSift",
+      "tracks": ["aiml", "swe"],
+      "keywords": [
+        "librosa", "recommendation", "collaborative", "kmeans", "networkx",
+        "flask", "react", "typescript", "audio", "mfcc", "spotify", "scikit-learn",
+        "nlp", "sentiment", "music"
+      ],
+      "latex_bullets": [
+        "Extracted MFCCs, chroma, spectral, and tempo features via \\textbf{librosa}; built \\textbf{3 recommendation strategies} (content-based, collaborative filtering, hybrid) through a \\textbf{Flask} REST API",
+        "Implemented \\textbf{KMeans} playlist clustering, \\textbf{NetworkX} similarity graph with 3 path algorithms, beat-matched mashup studio, and lyric sentiment analysis; frontend in \\textbf{React + TypeScript}"
+      ],
+      "summary": "SongSift (Dec 2025–Mar 2026): local music analysis workbench. librosa audio features; content-based, collaborative, and hybrid recommenders via Flask. KMeans playlists, NetworkX similarity graph, beat-matched mashups, lyric sentiment; React + TypeScript frontend. https://github.com/rsheth8/SongSift"
+    },
+    {
+      "id": "hindsight",
+      "name": "Hindsight",
+      "tagline": "Daily Investing Judgment Puzzle",
+      "dates": "2026",
+      "github": "https://github.com/rsheth8/Hindsight",
+      "tracks": ["swe", "aiml"],
+      "keywords": [
+        "next.js", "react", "typescript", "expo", "elo", "brier", "calibration",
+        "anthropic", "claude", "fintech", "invest", "rating", "vercel"
+      ],
+      "latex_bullets": [
+        "Built a Next.js + Expo daily puzzle that grades investing judgment (not luck): anonymized real price windows, confidence slider, and a 3-axis skill rating (calibration via Brier, Claude-graded reasoning, outcome) with a luck filter",
+        "Server-side problem generation and grading (Financial Modeling Prep); heuristic fallback so the game still runs without API keys; Vitest + Playwright coverage"
+      ],
+      "summary": "Hindsight (2026): Next.js + Expo daily puzzle that grades investing judgment — anonymized price windows, Brier calibration, Claude-graded reasoning, Elo-style rating with a luck filter. FMP for history; works without keys via a fallback problem bank. https://github.com/rsheth8/Hindsight"
+    },
+    {
+      "id": "lockin",
+      "name": "LockIn",
+      "tagline": "Native iOS Daily-Routine App",
+      "dates": "Aug 2026 -- Present",
+      "github": "https://github.com/rsheth8/LockIn",
+      "tracks": ["swe"],
+      "keywords": [
+        "ios", "swift", "swiftui", "healthkit", "eventkit", "screentime",
+        "icloud", "swiftdata", "xcode", "mobile", "native", "calorie", "workout"
+      ],
+      "latex_bullets": [
+        "Shipped a native \\textbf{SwiftUI} daily-driver: metabolic macros (Mifflin-St Jeor), sleep/caffeine windows, meals and workouts slotted around EventKit, HealthKit weigh-ins, and Screen Time shields during focus/workouts",
+        "SwiftData persistence with private iCloud sync, local-only progress photos, Apple/Google/local accounts, and an xcodebuild unit suite covering engines, persistence, and check-in paths"
+      ],
+      "summary": "LockIn (Aug 2026–present): native SwiftUI iOS app that plans and enforces a daily routine — TDEE/macros, sleep engine, meals (Spoonacular or on-device DB) and workouts slotted around Calendar, HealthKit weigh-ins, Screen Time shields, SwiftData + iCloud sync. https://github.com/rsheth8/LockIn"
+    },
+    {
+      "id": "msad",
+      "name": "MSAD",
+      "tagline": "Stock Research \\& Trading-Practice Dashboard",
+      "dates": "2026",
+      "github": "https://github.com/rsheth8/MSAD",
+      "tracks": ["swe", "aiml"],
+      "keywords": [
+        "next.js", "typescript", "fintech", "stock", "options", "backtest",
+        "anthropic", "redis", "oauth", "monte carlo", "black-scholes", "screener"
+      ],
+      "latex_bullets": [
+        "Built a Next.js stock-research dashboard: A--F report cards vs peers, an AI tutor grounded in live fundamentals (Anthropic), conviction journal + calibration scoring, and hypothesis-lab backtests vs buy-and-hold / S\\&P 500",
+        "Server-side market-data aggregation (Financial Modeling Prep), options greeks / Monte Carlo, read-only brokerage X-ray via SnapTrade, Google OAuth, and Redis/KV caching so keys never hit the browser"
+      ],
+      "summary": "MSAD (2026): Next.js stock research and practice dashboard — report cards, grounded AI tutor, calibration journal, backtests, market replay, options/Monte Carlo, SnapTrade risk X-ray. Server-side FMP + Anthropic; Redis cache. https://github.com/rsheth8/MSAD"
+    },
+    {
+      "id": "record_finder",
+      "name": "Record Finder",
+      "tagline": "Vinyl Discovery from Spotify Taste",
+      "dates": "2026",
+      "github": "https://github.com/rsheth8/record_finder",
+      "tracks": ["swe", "aiml"],
+      "keywords": [
+        "next.js", "spotify", "recommendation", "discogs", "oauth", "drizzle",
+        "sqlite", "typescript", "recsys", "cron", "email", "vinyl", "nextauth"
+      ],
+      "latex_bullets": [
+        "Personalized vinyl recommendations from a taste quiz or Spotify listening history, scored against Discogs' live catalog with fair-value flags and wishlist price-drop emails (Resend + Vercel Cron)",
+        "Next.js App Router + NextAuth (Spotify OAuth), Drizzle/SQLite (Turso in prod), guest-to-account merge, and a recommendation pipeline with caching, de-dupe, and diversity"
+      ],
+      "summary": "Record Finder (2026): Next.js vinyl discovery — quiz or Spotify taste vector scored against Discogs, fair-value badges, wishlist price-drop alerts. NextAuth, Drizzle/SQLite, Vercel Cron + Resend. https://github.com/rsheth8/record_finder"
+    },
+    {
+      "id": "textbook_rag",
+      "name": "Textbook RAG Assistant",
+      "tagline": "Spring Boot Textbook Q\\&A",
+      "dates": "2025 -- 2026",
+      "github": "https://github.com/rsheth8/Textbook_RAG_Assistant",
+      "tracks": ["swe", "aiml"],
+      "keywords": [
+        "java", "spring boot", "rag", "llm", "ollama", "postgresql", "pdf",
+        "maven", "docker", "thymeleaf", "retrieval", "pgvector", "backend"
+      ],
+      "latex_bullets": [
+        "Spring Boot 3 / Java 17 app: upload a textbook PDF (Apache PDFBox), store text in \\textbf{PostgreSQL}, retrieve the best-matching passage, and answer via Ollama or Open WebUI so replies stay textbook-faithful",
+        "Docker Compose + Railway deploy; pgvector/Spring AI wired for a planned embeddings upgrade (current retrieval is keyword/paragraph scoring, not vector search)"
+      ],
+      "summary": "Textbook RAG Assistant (2025–2026): Spring Boot + Java 17. PDFBox ingestion into PostgreSQL, passage retrieval, Ollama/Open WebUI answers that stick to the book. Docker/Railway. Retrieval today is keyword/paragraph scoring; pgvector is scaffolded. https://github.com/rsheth8/Textbook_RAG_Assistant"
+    },
+    {
+      "id": "bar4bar",
+      "name": "Bar4Bar",
+      "tagline": "Auto-Synced Karaoke Lyrics",
+      "dates": "2026",
+      "github": "https://github.com/rsheth8/smart_lyric",
+      "tracks": ["swe", "aiml"],
+      "keywords": [
+        "electron", "javascript", "spotify", "whisper", "audio", "karaoke",
+        "lyrics", "wav2vec", "alignment", "typescript", "vercel", "onnx"
+      ],
+      "latex_bullets": [
+        "Projector-ready karaoke display that clocks Spotify, local files, or a live turntable (Chromaprint/ACRCloud) and highlights lyrics word-by-word from catalog LRC or Whisper transcription",
+        "Optional wav2vec2 CTC forced alignment and MDX-Net vocal isolation on desktop (Electron); same renderer as a Vercel web app via a shared clock interface"
+      ],
+      "summary": "Bar4Bar / smart_lyric (2026): auto-synced karaoke lyrics for Spotify, local audio, or vinyl (fingerprint ID). Lyric catalogs plus Whisper fallback; optional wav2vec2 alignment. Electron desktop + Vercel web. https://github.com/rsheth8/smart_lyric"
+    },
+    {
+      "id": "infratrack",
+      "name": "InfraTrack",
+      "tagline": "AWS Cost Dashboard for Teams",
+      "dates": "2026",
+      "github": "https://github.com/rsheth8/InfraTrack",
+      "tracks": ["swe"],
+      "keywords": [
+        "aws", "fastapi", "react", "postgres", "sqlalchemy", "cloud", "cost",
+        "observability", "budget", "python", "recharts", "finops"
+      ],
+      "latex_bullets": [
+        "Full-stack cloud-spend dashboard (\\textbf{FastAPI} + React): per-team AWS cost by service, budget vs month-to-date spend, and threshold email alerts evaluated out-of-band",
+        "SQLAlchemy on Postgres/SQLite; ships with a synthetic 90-day cost generator so the UI is demoable before Cost Explorer is wired"
+      ],
+      "summary": "InfraTrack (2026): FastAPI + React AWS cost dashboard — per-team spend vs budget, service breakdown, threshold alerts. Synthetic demo data with a marked swap point for Cost Explorer. https://github.com/rsheth8/InfraTrack"
+    },
+    {
+      "id": "movie_sentiment",
+      "name": "Movie Sentiment Comparison",
+      "tagline": "Embeddings+MLP vs Zero-Shot Flan-T5",
+      "dates": "2026",
+      "github": "https://github.com/rsheth8/movie-sentiment-comparison",
+      "tracks": ["aiml"],
+      "keywords": [
+        "pytorch", "nlp", "sentiment", "huggingface", "transformers",
+        "sentence-transformers", "flan-t5", "embeddings", "scikit-learn",
+        "jupyter", "classification"
+      ],
+      "latex_bullets": [
+        "Compared a frozen sentence-transformer + PyTorch MLP head (\\textbf{76.8\\%} test accuracy) against zero-shot \\textbf{Flan-T5-small} (\\textbf{84.1\\%}) on Rotten Tomatoes reviews, plus a 50\\% majority baseline",
+        "Broke errors down by review length and inspected FP/FN examples side-by-side so the write-up showed \\emph{where} each approach fails, not just a leaderboard number"
+      ],
+      "summary": "Movie Sentiment Comparison (2026, CSCI 4521): embeddings+MLP (76.8% test acc) vs zero-shot Flan-T5-small (84.1%) on Rotten Tomatoes; majority baseline 50%. Error analysis by review length. https://github.com/rsheth8/movie-sentiment-comparison"
+    },
+    {
+      "id": "storelytics",
+      "name": "Storelytics",
+      "tagline": "In-Store Foot-Traffic Computer Vision",
+      "dates": "2022",
+      "github": "https://github.com/rsheth8/Storelytics",
+      "tracks": ["aiml", "swe"],
+      "keywords": [
+        "opencv", "computer vision", "deepface", "redis", "firebase",
+        "react native", "expo", "python", "dlib", "realtime"
+      ],
+      "latex_bullets": [
+        "Two-camera OpenCV pipeline: dlib face encodings (no stored photos) in Redis with a distributed lock, visit open/close in Firebase, DeepFace labels on exit",
+        "React Native / Expo owner dashboard subscribed to Firestore for live visit counts, dwell time, and aggregate charts"
+      ],
+      "summary": "Storelytics (2022): doorway cameras → OpenCV + face_recognition encodings in Redis (no photos stored), DeepFace on exit, Firebase/Firestore persistence, React Native dashboard for visit counts and dwell time. Class/portfolio CV project, not a production analytics product. https://github.com/rsheth8/Storelytics"
+    },
+    {
+      "id": "portfolio",
+      "name": "Audio-Reactive Portfolio",
+      "tagline": "WebGL Site + Grounded AI Assistant",
+      "dates": "2026",
+      "github": "https://github.com/rsheth8/portfolio",
+      "tracks": ["swe"],
+      "keywords": [
+        "next.js", "three.js", "webgl", "web audio", "typescript", "mcp",
+        "anthropic", "react three fiber", "spotify", "frontend"
+      ],
+      "latex_bullets": [
+        "Next.js portfolio with React Three Fiber scenes driven by a shared Web Audio analyser (file, mic, iTunes, or Spotify PKCE) so every visual pulses to bass/mids/highs",
+        "Ask-AI chat + stdio MCP server over a single `data/site.ts` source of truth, with tool calls to GitHub so answers stay grounded"
+      ],
+      "summary": "Audio-reactive portfolio (2026): Next.js + R3F visuals driven by Web Audio; Ask-AI assistant and MCP tools grounded in site data + live GitHub. https://portfolio-rsheth8s-projects.vercel.app/ https://github.com/rsheth8/portfolio"
+    },
+    {
+      "id": "roadtrip",
+      "name": "Western Roadtrip 2026",
+      "tagline": "Interactive Trip Companion PWA",
+      "dates": "2026",
+      "github": "https://github.com/rsheth8/roadtrip-interactive-map",
+      "tracks": ["swe"],
+      "keywords": [
+        "react", "typescript", "maplibre", "pwa", "firebase", "vercel",
+        "tailwind", "geolocation", "maps", "vite"
+      ],
+      "latex_bullets": [
+        "Installable React/Vite PWA: MapLibre 3D route map, day-by-day itinerary, and a live mode that auto-switches from trip dates",
+        "Firebase Realtime Database for crew location, checklist, and gas log (localStorage fallback); Vercel function proxies Splitwise so tokens stay server-side"
+      ],
+      "summary": "Western Roadtrip 2026: React + MapLibre PWA with itinerary, live crew location (Firebase), weather, budget/Splitwise proxy, and installable offline cache. https://github.com/rsheth8/roadtrip-interactive-map"
+    },
+    {
+      "id": "jobpilot",
+      "name": "JobPilot",
+      "tagline": "Personal Job-Search Engine",
+      "dates": "2026 -- Present",
+      "github": "https://github.com/rsheth8/job-search-tool",
+      "tracks": ["swe"],
+      "keywords": [
+        "fastapi", "python", "sqlite", "postgres", "postgresql", "docker",
+        "ios", "swift", "ats", "ranking", "autofill", "latex", "discovery",
+        "greenhouse", "matching", "backend", "full stack", "full-stack"
+      ],
+      "latex_bullets": [
+        "FastAPI + SQLite job-search engine: wide ATS/RSS discovery, heuristic + LLM relevance scoring, a personalized re-ranker, and an iOS client that autofills Greenhouse/Lever/Ashby forms",
+        "Per-posting one-page LaTeX resumes (Tectonic) and drafted answers grounded in a personal knowledge store --- the human always submits"
+      ],
+      "summary": "JobPilot / job-search-tool (2026–present): FastAPI job-search engine with ATS discovery, scoring/re-ranking, iOS autofill, and tailored one-page LaTeX resumes. Never auto-submits. https://github.com/rsheth8/job-search-tool"
+    },
+    {
+      "id": "ai_slack_bot",
+      "name": "AI Slack Bot",
+      "tagline": "Go NLU + Knowledge Pipeline",
+      "dates": "2026",
+      "github": "https://github.com/rsheth8/ai-slack-bot",
+      "tracks": ["swe"],
+      "keywords": [
+        "go", "golang", "slack", "websocket", "concurrency", "goroutine",
+        "nlu", "wit.ai", "wolfram"
+      ],
+      "latex_bullets": [
+        "Go Slack bot over Socket Mode: Wit.ai extracts intent/entities, Wolfram Alpha Spoken Answer returns the fact, reply posted in-channel",
+        "Async command logging on a dedicated goroutine/channel so observability never blocks the request path"
+      ],
+      "summary": "AI Slack Bot (2026): small Go bot — Slack Socket Mode, Wit.ai NLU, Wolfram Alpha answers, goroutine logging. Concurrency exercise, not an LLM chatbot. https://github.com/rsheth8/ai-slack-bot"
+    }
+  ]
+}

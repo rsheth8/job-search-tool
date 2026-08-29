@@ -1,0 +1,25 @@
+<!doctype html>
+<!-- Workable's real shape. Each field sits in its own empty <label>, and the
+     only text label in the surrounding block belongs to First name. Walking up
+     for "the first label under an ancestor" therefore named *every* field in the
+     block "first name" — and the engine typed the first name into city,
+     postcode and country. A container holding more than one control cannot name
+     any single one of them. -->
+<html>
+<head><meta charset="utf-8"><title>Apply — Northwind</title></head>
+<body>
+  <form>
+    <div class="block">
+      <span class="styles--label" id="firstname_label">First name</span>
+      <label><input type="text" id="firstname" name="firstname"
+                    aria-labelledby="firstname_label"></label>
+      <div class="row">
+        <label><input type="text" id="city" name="city"></label>
+        <label><input type="text" id="postcode" name="postcode"></label>
+        <label><input type="text" id="country" name="country"></label>
+      </div>
+    </div>
+    <button type="submit">Submit application</button>
+  </form>
+</body>
+</html>

@@ -43,6 +43,8 @@ final class AuthManager: NSObject, ObservableObject {
         } catch {
             if let api = error as? APIClient.APIError, case .http(401) = api {
                 signOutLocal()
+                lastError = "Session expired. Sign in again."
+                return
             }
             // Network blips: keep the local session; the next call will 401 if dead.
         }
@@ -170,7 +172,7 @@ extension AuthManager: ASAuthorizationControllerDelegate {
                ns.code == ASAuthorizationError.canceled.rawValue {
                 return
             }
-            self.lastError = error.localizedDescription
+            self.lastError = APIClient.appleAuthMessage(error)
         }
     }
 }

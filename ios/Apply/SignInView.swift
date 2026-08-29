@@ -1,20 +1,37 @@
 import AuthenticationServices
 import SwiftUI
 
-/// Shown when there’s no session. Apply stays the product; Chat (and the rest)
+/// Shown when there’s no session. JobPilot is the product; Chat (and the rest)
 /// need an account first.
 struct SignInView: View {
     @EnvironmentObject var auth: AuthManager
     @EnvironmentObject var config: Config
+    @EnvironmentObject var setup: SetupGate
+    @State private var showQuizDemo = false
 
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: Theme.spaceL) {
-                PageHeader(
-                    eyebrow: "Apply",
-                    title: "Sign in",
-                    subtitle: "Your account keeps matches, answers, and chat in sync."
-                )
+                VStack(alignment: .leading, spacing: 10) {
+                    PropellerIcon(speed: auth.busy ? .medium : .still, size: 48)
+                        .foregroundStyle(Theme.accent)
+                        .padding(.bottom, 4)
+
+                    Text("JobPilot")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.horizon)
+                        .textCase(.uppercase)
+                        .tracking(1.2)
+
+                    Text("Sign in")
+                        .font(Theme.title(34))
+                        .foregroundStyle(Theme.ink)
+
+                    Text("Your account keeps matches, answers, and applications in one place.")
+                        .font(.body)
+                        .foregroundStyle(Theme.soft)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 SignInWithAppleButton(.signIn) { request in
                     request.requestedScopes = [.fullName, .email]
@@ -30,7 +47,7 @@ struct SignInView: View {
                         let ns = error as NSError
                         if ns.domain == ASAuthorizationError.errorDomain,
                            ns.code == ASAuthorizationError.canceled.rawValue { return }
-                        auth.lastError = error.localizedDescription
+                        auth.lastError = APIClient.appleAuthMessage(error)
                     }
                 }
                 .signInWithAppleButtonStyle(.black)
@@ -39,22 +56,27 @@ struct SignInView: View {
                 .disabled(auth.busy)
 
                 #if targetEnvironment(simulator)
-                // SIWA's Apple Account password sheet often hangs on Simulator.
-                // Backend must have AUTH_ALLOW_DEV_LOGIN=true (local uvicorn).
                 Button {
                     Task { await auth.signInDev() }
                 } label: {
                     Text("Dev sign-in (simulator)")
                         .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
                         .frame(maxWidth: .infinity)
                         .frame(height: 48)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(Theme.cloud, lineWidth: 1)
+                        )
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(PressableButtonStyle())
                 .disabled(auth.busy)
                 #endif
 
                 if auth.busy {
-                    ProgressView().controlSize(.small)
+                    Text("Signing in…")
+                        .font(.caption)
+                        .foregroundStyle(Theme.soft)
                 }
 
                 if let err = auth.lastError, !err.isEmpty {
@@ -67,6 +89,17 @@ struct SignInView: View {
                     .font(.caption)
                     .foregroundStyle(Theme.soft)
 
+                Button {
+                    showQuizDemo = true
+                } label: {
+                    Text("Preview the profile quiz")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Theme.accent)
+                }
+                .buttonStyle(PressableButtonStyle())
+                .padding(.top, 4)
+                .accessibilityLabel("Preview the profile quiz")
+
                 #if targetEnvironment(simulator)
                 Text("Simulator tip: Sign in with Apple often sticks on the password sheet. Use Dev sign-in against a local backend with AUTH_ALLOW_DEV_LOGIN=true, or sign into Settings → Apple Account first.")
                     .font(.caption)
@@ -76,8 +109,14 @@ struct SignInView: View {
                 Spacer()
             }
             .padding(.horizontal, Theme.spaceL)
-            .padding(.top, Theme.spaceM)
+            .padding(.top, Theme.spaceXL)
+            .toolbar(.hidden, for: .navigationBar)
             .ambientScreen()
+            .fullScreenCover(isPresented: $showQuizDemo) {
+                SetupView(mode: .demo)
+                    .environmentObject(config)
+                    .environmentObject(setup)
+            }
         }
     }
 

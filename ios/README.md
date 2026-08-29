@@ -2,12 +2,13 @@
 
 A small native iOS app (SwiftUI + WKWebView). It's a **browser in your hand** that
 knows your job profile: tap a match → it opens the real application form in-app →
-hit **⚡ Autofill** to fill your identity + tailored answers → solve any captcha /
-attach the resume yourself → submit on the site → **✓ I applied** logs it.
+hit **⚡ Autofill** to fill your identity + tailored answers → attach the résumé
+yourself → **Submit** on the site → **✓ I applied** logs it.
 
 Why this and not a headless robot: an in-app browser is a *real* browser session
 (your cookies, your IP, your taps), so logins, captchas, and anti-bot defenses are
-just you using a browser — autofill rides on top. It's the robust, consistent path.
+just you using a browser — autofill rides on top. **Autofill is the only autofill
+surface**; there is no desktop extension or auto-submit worker.
 
 All the brains stay in the existing FastAPI backend — matches, identity, tailored
 per-question answers, resume, application tracking. This app is a thin, fast mobile
@@ -20,14 +21,16 @@ ios/
   project.yml        XcodeGen — the whole Xcode project, defined in text
   Apply/
     ApplyApp.swift     @main + tab shell
-    Config.swift       backend URL / user / token (UserDefaults; sane defaults)
+    Config.swift       backend URL / token (UserDefaults; sane defaults)
     Models.swift       Codable models for the API
     APIClient.swift    async networking to the backend
-    Autofill.swift     the injected autofill engine (ported from extension/content.js)
+    Autofill.swift     injected autofill engine (JS matcher)
     WebView.swift      WKWebView wrapper; injects the profile every page load
-    QueueView.swift    your staged matches
-    ApplyView.swift    the in-app apply browser (Autofill + I-applied controls)
-    SettingsView.swift backend config
+    QueueView.swift    staged matches (Apply tab)
+    ApplyView.swift    in-app apply browser (Autofill + I-applied controls)
+    KnowledgeView.swift  About tab — projects, achievements, coverage audit
+    ChatView.swift     in-app assistant
+    SettingsView.swift account, feedback, tester brief
 ```
 
 ## Build & run on your iPhone
@@ -80,27 +83,25 @@ in Settings → For testers and [`deploy/BETA.md`](../deploy/BETA.md).
 
 `Autofill.swift` injects two scripts on every page load (main frame **and** iframes):
 your profile (`window.__APPLY`) at document start, and the matcher at document end.
-The native **⚡ Autofill** button calls `window.__applyAutofill()`, which fills text
-fields, native dropdowns, and Yes/No radios from your identity, fills free-text
-questions from your tailored answers, **skips EEO/demographic fields**, and reports
-how many it filled (and how many still need you). It's the same field-matching brain
-as the desktop extension (`extension/content.js` / `app/fieldmatch.py`).
+The native **Fill** button calls `window.__applyFillOrPause()`, which fills text
+fields, native dropdowns, react-select comboboxes, and Yes/No button pairs from your
+identity, fills free-text questions from your tailored answers, **skips EEO/demographic
+fields**, and reports how many it filled (and how many still need you). Login walls
+and CAPTCHAs pause instead of filling. Rules match `app/fieldmatch.py` (served from
+`GET /apply/rules`). Sign-in cookies live in the shared `WKWebsiteDataStore`.
 
-## The five tabs
+## The four tabs
 
-- **Apply** — matches ready to apply to, plus the top matches you can stage with
-  *Prepare application*. Each row says **why** it surfaced ("matches 'backend
-  engineer' · python, go · remote · apply direct") and flags concerns. Paints from a
-  local cache instantly, so a slow network never shows you an empty screen.
-- **In flight** — what the submit worker is doing, and the **approval gate**: the
-  filled fields, what was left for you, the worker's screenshot, and Approve /
-  Cancel. Nothing is ever submitted without that tap.
-- **About me** — how completely the assistant knows you (the lever on how much it
-  can fill unattended), and the facts it draws on. Add projects, achievements, and
-  reusable answers here; a saved answer is reused verbatim, with no model call.
-- **Chat** — the in-app assistant (reminders, CRM, job questions). Secondary to
-  Apply; same brain that used to live in Slack.
-- **Settings** — account, Send feedback, tester brief, Advanced (backend URL).
+- **Apply** — matches ready to apply to, plus top matches you can stage with
+  *Prepare application*. Each row says **why** it surfaced and flags concerns. Paints
+  from a local cache instantly, so a slow network never shows an empty screen.
+- **About** — how completely the assistant knows you (coverage audit), plus projects,
+  achievements, and reusable answers. A saved answer is reused verbatim with no model call.
+- **Chat** — the in-app assistant (reminders, CRM, job questions). Same brain as the
+  CLI; digests and reminders also land here.
+- **Settings** — account, Send feedback, tester brief, Diagnostics (copy last
+  request id), Advanced (backend URL). Send feedback attaches app version and
+  the last failed request so you can match it to server logs.
 
 ## Sign in with Apple
 
@@ -109,34 +110,29 @@ The app gates on an account. In Xcode:
 1. Signing & Capabilities → **+ Capability → Sign in with Apple**
    (also declared in `project.yml` / `Apply.entitlements`).
 2. Backend needs `APPLE_CLIENT_IDS=com.rahil.apply` (and your Team set in Xcode).
-3. To fold your old Slack-keyed data into the new account on first login, set
-   `AUTH_LEGACY_USER_ID=U…` on the server once, then clear it.
+3. To fold old dev-keyed data into the new account on first login, set
+   `AUTH_LEGACY_USER_ID=local` (or your old id) on the server once, then clear it.
 
-Web companion: open `/chat` on the backend (needs `APPLE_SERVICES_ID` for the
+In-app Chat tab talks to `POST /chat` (Bearer session).
 Apple JS button; otherwise use the iOS app).
 
 ## Autofill rules come from the backend
 
-`app/fieldmatch.py` is the one source of truth for all three autofill surfaces (this
-app, the desktop extension, the submit worker). The app fetches the rules from
+`app/fieldmatch.py` is the source of truth. The app fetches rules from
 `GET /apply/rules` and caches them; the copy bundled in `Autofill.swift` is only an
-offline fallback, generated from the Python.
+offline fallback.
 
-This matters because the hand-ported copy had **drifted**: it carried a narrower EEO
-list than the backend, so the phone would fill marital status, religion, citizenship
-status, and date of birth — fields the worker refuses. `tests/test_ios_autofill.py`
-now runs this app's actual JavaScript engine against real form fixtures in headless
-Chromium and proves it never fills those, on served *or* bundled rules. The fill
-toast says "offline rules" when the bundled set ran, so staleness is visible.
+The bundled fallback had **drifted** in the past (narrower EEO list). `tests/test_ios_autofill.py`
+runs this app's JavaScript engine against form fixtures and proves it never fills
+blocked demographics. The fill toast says "offline rules" when the bundled set ran.
 
-If you edit the fallback rules by hand you've reintroduced the drift — regenerate
-them from `app/fieldmatch.py` instead (a test fails if they diverge).
+If you edit fallback rules by hand you reintroduce drift — regenerate from
+`app/fieldmatch.py` instead (a test fails if they diverge).
 
 ## Notifications
 
 Turn them on in **Settings** (asked on demand, not at launch). You get told when new
-matches land, and when a filled application is waiting on your approval; tapping
-either lands on the tab that answers it.
+matches land; tapping opens the Apply tab.
 
 Requires the backend to have APNs credentials (`PUSH_ENABLED` + `APNS_KEY_ID`,
 `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_KEY_PATH`), which needs the paid Apple
@@ -147,10 +143,17 @@ TestFlight or you'll get `BadDeviceToken`.
 
 ## Known limitations
 
-- **Resume = one tap.** iOS won't let an app inject a file into a web `<input
-  type=file>` (security). The PDF is pre-downloaded when the form opens, so the
-  Resume button opens the share sheet instantly — but you still pick it from Files
+- **Résumé and cover letter = you attach.** iOS won't let an app inject a file into
+  a web `<input type=file>` (security). The résumé PDF is pre-downloaded when
+  the form opens (`GET /apply/resume`). Cover letter is optional and built when
+  you pick it from the documents menu (`GET /apply/cover`) — not on every
+  Preflight. Both open the share sheet; you still pick the file from Files
   yourself. That tap is the floor; it can't be removed.
+- **You always Submit.** Autofill never clicks the final submit button.
 - **Exotic custom dropdowns** may still not fill. ARIA comboboxes
   (`role=combobox`/`listbox`) do; widgets that expose neither role don't, and you
   set those by hand.
+- **Workday widgets / LinkedIn Easy Apply** still need you (login-gated or a
+  different UX). Public HTML forms, Workable, and SmartRecruiters get the same
+  Fill pass; login and CAPTCHA pause with a banner. Sign-in cookies persist
+  across applications.

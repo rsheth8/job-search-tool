@@ -29,6 +29,15 @@ def test_has_profile_false_until_meaningful():
     assert profile.has_profile("nobody")
 
 
+def test_prefs_round_trip_and_delete():
+    profile.update_prefs("u", onboarding="started", extra="keep")
+    assert profile.get_prefs("u")["onboarding"] == "started"
+    profile.update_prefs("u", extra=None)
+    prefs = profile.get_prefs("u")
+    assert prefs["onboarding"] == "started"
+    assert "extra" not in prefs
+
+
 def test_profile_text_renders_present_fields_only():
     profile.set_profile("u", roles="SWE", locations="Remote")
     text = profile.profile_text(profile.get_profile("u"))

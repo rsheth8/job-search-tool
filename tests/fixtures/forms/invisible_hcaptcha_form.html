@@ -1,0 +1,25 @@
+<!doctype html>
+<!-- Lever's real shape: a full application form with an .h-captcha that the
+     hCaptcha script has already drawn — two child iframes, zero height, because
+     it is running in invisible mode. Nobody is being challenged. Reading the
+     bare class as "challenge" made the app refuse to fill the whole form. -->
+<html>
+<head><meta charset="utf-8"><title>Apply — Gopuff</title></head>
+<body>
+  <form id="application">
+    <label for="name">Full name</label>
+    <input type="text" id="name" name="name">
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email">
+    <label for="phone">Phone</label>
+    <input type="tel" id="phone" name="phone">
+    <label for="linkedin">LinkedIn URL</label>
+    <input type="text" id="linkedin" name="urls[LinkedIn]">
+    <div class="h-captcha" style="height:0;overflow:hidden">
+      <iframe src="about:blank" title="hCaptcha" style="height:0"></iframe>
+      <iframe src="about:blank" title="hCaptcha challenge" style="height:0"></iframe>
+    </div>
+    <button type="submit">Submit application</button>
+  </form>
+</body>
+</html>

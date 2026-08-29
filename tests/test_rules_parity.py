@@ -47,15 +47,21 @@ LABELS = [
     "Current salary", "Start date", "When could you start?", "Notice period",
     "Are you willing to relocate?", "Are you authorized to work in the US?",
     "Will you require visa sponsorship?",
-    "How did you hear about us?",
+    "How did you hear about us?", "How did you hear about this opportunity?",
+    "Referral source", "Preferred work location", "Country/Region",
+    "What is your gender?", "Please select your race",
+    "Are you 18 years of age or older?",
+    "Will you now or in the future require sponsorship?",
+    "Most recent employer", "Area of study", "Cell phone",
+    "Where are you currently living?",
     # Optional demographics — map to keys (fill only when identity has a value)
     "Gender", "Race / Ethnicity", "Are you a protected veteran?",
-    "Disability status",
+    "Disability status", "Are you Hispanic or Latino?",
     # Hard-blocked EEO — every one of these must resolve to no key, in both engines
     "Sexual orientation", "National origin",
     "Voluntary Self-Identification", "EEO information", "Marital status",
     "Religion", "Do you identify as LGBTQ+?", "Date of birth", "DOB",
-    "Citizenship status", "Are you Hispanic or Latino?",
+    "Citizenship status", "Gender identity", "Birthday",
     # near-misses that should match nothing
     "Favorite color", "Referral code", "",
 ]
@@ -121,7 +127,7 @@ def test_both_engines_refuse_the_same_hard_blocked_eeo_labels(js_matcher):
         "Sexual orientation", "National origin",
         "Voluntary Self-Identification", "EEO information", "Marital status",
         "Religion", "Do you identify as LGBTQ+?", "Date of birth", "DOB",
-        "Citizenship status", "Are you Hispanic or Latino?",
+        "Citizenship status", "Gender identity", "Birthday",
     ]
     for r in js_matcher(eeo_labels):
         assert r["eeo"] is True, f"JS would fill the EEO field {r['label']!r}"
@@ -131,7 +137,8 @@ def test_both_engines_refuse_the_same_hard_blocked_eeo_labels(js_matcher):
 
 def test_optional_demographics_are_not_hard_blocked(js_matcher):
     for r in js_matcher(["Gender", "Race / Ethnicity",
-                         "Are you a protected veteran?", "Disability status"]):
+                         "Are you a protected veteran?", "Disability status",
+                         "Are you Hispanic or Latino?"]):
         assert r["eeo"] is False, f"{r['label']!r} wrongly hard-blocked"
         assert r["key"] is not None
         assert not fieldmatch.is_eeo(r["label"])
@@ -148,6 +155,8 @@ def test_ordinary_fields_are_not_swept_up_as_eeo(js_matcher):
 def test_payload_shape_and_version():
     payload = fieldmatch.rules_payload()
     assert payload["rules"] and all(len(r) == 2 for r in payload["rules"])
+    assert payload["attr_rules"] and all(len(r) == 2 for r in payload["attr_rules"])
+    assert payload["autocomplete"]["given-name"] == "first_name"
     assert payload["never_fill"] and payload["flags"] == "i"
     assert len(payload["version"]) == 12
     # stable across calls, so a client can cache on it
@@ -170,7 +179,6 @@ def test_payload_is_json_serializable():
 
 CLIENTS = [
     ("ios/Apply/Autofill.swift", "FALLBACK_EEO"),
-    ("extension/content.js", "FALLBACK_EEO"),
 ]
 
 
@@ -189,6 +197,10 @@ def test_client_fallback_rules_match_python(relpath, eeo_const):
 
     missing = [k for k, _ in payload["rules"] if f'["{k}", /' not in source]
     assert not missing, f"{relpath} fallback is missing rules: {missing}"
+
+    attr_chunk = source.split("FALLBACK_ATTR_RULES")[1].split("FALLBACK_AUTOCOMPLETE")[0]
+    missing_attr = [k for k, _ in payload["attr_rules"] if f'["{k}", /' not in attr_chunk]
+    assert not missing_attr, f"{relpath} attr fallback missing: {missing_attr}"
 
     m = _re.search(rf"const {eeo_const} = /(.*)/i;", source)
     assert m, f"no {eeo_const} in {relpath}"

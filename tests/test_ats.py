@@ -1,4 +1,4 @@
-"""URL -> ATS labeling + autosubmit eligibility."""
+"""URL -> ATS labeling."""
 from __future__ import annotations
 
 import pytest
@@ -13,11 +13,24 @@ from app import ats
     ("https://jobs.lever.co/acme/abc-def", "lever"),
     ("https://jobs.ashbyhq.com/acme/uuid", "ashby"),
     ("HTTPS://Jobs.Lever.CO/Acme/X", "lever"),  # case-insensitive host
+    ("https://apply.workable.com/acme/j/ABCDEF/", "workable"),
+    ("https://jobs.smartrecruiters.com/ServiceNow/744000146269339", "smartrecruiters"),
 ])
 def test_ats_of_first_party(url, name):
     assert ats.ats_of(url) == name
-    assert ats.is_fillable_form(url) is True
-    assert ats.may_autosubmit(url) is True
+    if name in ats.FILLABLE_SOURCES:
+        assert ats.is_fillable_form(url) is True
+    else:
+        assert ats.is_fillable_form(url) is False
+
+
+def test_apply_kind_labels():
+    assert ats.apply_kind("https://boards.greenhouse.io/acme/jobs/1") == "autofill"
+    assert ats.apply_kind("https://apply.workable.com/acme/j/ABCDEF/") == "direct"
+    assert ats.apply_kind("https://remoteok.com/jobs/1", source="rss") == "browser"
+    assert ats.apply_kind("https://example.com/jobs/1", source="greenhouse") == "direct"
+    assert ats.apply_kind("https://careers.example.com/apply/1") == "browser"
+    assert ats.apply_kind("https://www.linkedin.com/jobs/view/123") == "browser"
 
 
 @pytest.mark.parametrize("url", [
@@ -36,15 +49,46 @@ def test_not_known_ats(url):
     assert ats.is_fillable_form(url) is False
 
 
-@pytest.mark.parametrize("url", [
-    "https://example.com/careers/apply",
-    "https://careers.instacart.com/jobs/123",
-    "http://localhost:8000/form",
+@pytest.mark.parametrize("url,source,token", [
+    ("https://job-boards.greenhouse.io/astranis/jobs/4601134006", "greenhouse", "astranis"),
+    ("https://boards.greenhouse.io/embed/job_app?for=stripe&token=1", "greenhouse", "stripe"),
+    ("https://jobs.lever.co/voltus/b7833dd8/apply", "lever", "voltus"),
+    ("https://jobs.ashbyhq.com/mechanize/1ef28bb2/application", "ashby", "mechanize"),
+    ("https://apply.workable.com/grayce/j/B5D022B13D/apply", "workable", "grayce"),
+    ("https://jobs.smartrecruiters.com/ServiceNow/744000146269339", "smartrecruiters", "ServiceNow"),
 ])
-def test_may_autosubmit_any_http(url):
-    assert ats.may_autosubmit(url) is True
+def test_board_from_url(url, source, token):
+    assert ats.board_from_url(url) == (source, token)
 
 
-@pytest.mark.parametrize("url", ["", None, "mailto:hi@x.com", "javascript:alert(1)"])
-def test_may_autosubmit_rejects_junk(url):
-    assert ats.may_autosubmit(url) is False
+@pytest.mark.parametrize("url", [
+    "https://job-boards.greenhouse.io/internshiplist2000/jobs/1",
+    "https://simplify.jobs/p/abc",
+    "https://www.linkedin.com/jobs/view/123",
+    "https://apply.workable.com/j/ABCDEF",  # company slug missing
+])
+def test_board_from_url_skips_proxies_and_junk(url):
+    assert ats.board_from_url(url) is None
+
+
+@pytest.mark.parametrize("url,source,token,job_id", [
+    ("https://job-boards.greenhouse.io/astranis/jobs/4601134006", "greenhouse", "astranis", "4601134006"),
+    ("https://boards.greenhouse.io/embed/job_app?for=stripe&token=1", "greenhouse", "stripe", "1"),
+    ("https://jobs.lever.co/voltus/b7833dd8/apply", "lever", "voltus", "b7833dd8"),
+    ("https://jobs.ashbyhq.com/mechanize/1ef28bb2/application", "ashby", "mechanize", "1ef28bb2"),
+    ("https://apply.workable.com/grayce/j/B5D022B13D/apply", "workable", "grayce", "B5D022B13D"),
+    ("https://jobs.smartrecruiters.com/ServiceNow/744000146269339", "smartrecruiters", "ServiceNow", "744000146269339"),
+])
+def test_posting_ref(url, source, token, job_id):
+    assert ats.posting_ref(url) == (source, token, job_id)
+
+
+def test_json_probe_url_for_ats_with_a_job_api():
+    assert ats.json_probe_url(
+        "https://boards.greenhouse.io/acme/jobs/111"
+    ) == "https://boards-api.greenhouse.io/v1/boards/acme/jobs/111"
+    assert ats.json_probe_url(
+        "https://jobs.lever.co/acme/abcd-ef01/apply"
+    ) == "https://api.lever.co/v0/postings/acme/abcd-ef01"
+    assert ats.json_probe_url("https://jobs.ashbyhq.com/acme/uuid-1") is None
+    assert ats.json_probe_url("https://remoteok.com/jobs/1") is None

@@ -49,20 +49,22 @@ def test_featurizer_shape_and_values():
     assert x[2] == 1.0                  # title_hit ("software engineer" in title)
     assert x[4] == 1.0                  # is_remote
     assert x[5] == 1.0                  # first_party (greenhouse)
+    assert x[6] == pytest.approx(0.3)  # unknown posted_at
+    assert x[7] == 0.0                  # url not fillable
 
 
-def test_featurizer_llm_features_from_cache_else_neutral():
-    from app.insights import LLM_FEATURES
-    base = len(reranker.FEATURES) - len(LLM_FEATURES)
-    feat = reranker.Featurizer(_profile(), {
-        "greenhouse:job1": {"fit_score": 0.9, "tech_overlap": 0.8, "stretch": 0.2}})
-    hit = feat.features(title="X", location="", description="", source="greenhouse",
-                        relevance=0.5, external_id="job1")
-    miss = feat.features(title="X", location="", description="", source="greenhouse",
-                         relevance=0.5, external_id="unknown")
-    assert hit[base + LLM_FEATURES.index("fit_score")] == 0.9      # from cache
-    assert hit[base + LLM_FEATURES.index("tech_overlap")] == 0.8
-    assert miss[base:] == [0.5, 0.5, 0.5]                          # all neutral defaults
+def test_featurizer_freshness_and_fillable():
+    from datetime import datetime, timedelta, timezone
+
+    feat = reranker.Featurizer(_profile())
+    now = datetime.now(timezone.utc)
+    x = feat.features(
+        title="X", location="", description="", source="greenhouse",
+        relevance=0.5, posted_at=(now - timedelta(hours=6)).isoformat(),
+        url="https://boards.greenhouse.io/acme/jobs/1",
+    )
+    assert x[6] == pytest.approx(1.0)
+    assert x[7] == 1.0
 
 
 def test_featurizer_relevance_defaults_when_missing():
@@ -70,7 +72,7 @@ def test_featurizer_relevance_defaults_when_missing():
     x = feat.features(title="X", location="", description="", source="rss", relevance=None)
     assert x[0] == pytest.approx(0.5)
     assert x[5] == 0.0  # rss is not first-party
-
+    assert len(x) == len(reranker.FEATURES)
 
 # ---------------------------------------------------------------------------
 # Pure-Python logistic regression learns a separable signal

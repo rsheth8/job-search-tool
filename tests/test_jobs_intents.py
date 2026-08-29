@@ -91,7 +91,8 @@ def test_queue_job_stages_without_applying():
         relevance_score=0.82, status="queued",
     )
     reply = handle_sms("u", f"queue {row['id']}")
-    assert "/apply" in reply and "Backend Engineer" in reply
+    assert "Apply" in reply and "Backend Engineer" in reply
+    assert "/apply" not in reply
 
     # Staged into the apply queue…
     assert [it["posting_id"] for it in apply_queue.list_queue("u")] == [row["id"]]
@@ -220,7 +221,9 @@ def test_jobs_listing_states(monkeypatch):
     )
     reply = handle_sms("u", "any new jobs")
     assert "Backend Engineer" in reply and "82%" in reply
-    assert "queue" in reply.lower()
+    assert "Acme" in reply
+    assert "Here are the strongest" not in reply
+    assert "walk you through" in reply.lower() or "open Apply" in reply
 
 
 # --- assisted apply (Phase 2) ----------------------------------------------
@@ -400,8 +403,8 @@ def test_tracking_list_shows_counts_and_threshold(monkeypatch):
     )
     listed = handle_sms("u", "what am i tracking")
     assert "Acme" in listed
-    assert "seen" in listed and "new" in listed
-    assert "Matching" in listed  # threshold line
+    assert "new" in listed.lower()
+    assert "Matching" in listed
 
 
 def test_review_jobs_walkthrough(monkeypatch):
@@ -422,7 +425,7 @@ def test_review_jobs_walkthrough(monkeypatch):
     assert "Role B" in skipped and "1 of 1" in skipped
 
     applied = handle_sms("u", "apply")
-    assert "Logged" in applied and "Role B" in applied
+    assert "Queued" in applied and "Role B" in applied
     assert jobstore.count_queued("u") == 0
 
     from app import store

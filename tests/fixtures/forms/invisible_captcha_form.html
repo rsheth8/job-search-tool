@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- Greenhouse's real shape: an ordinary application form plus an *invisible*,
+     score-based reCAPTCHA Enterprise. All it puts in the page is the anchor
+     badge iframe and a hidden response textarea — it asks the person for
+     nothing. Treating that as a wall meant refusing to fill the most common
+     application form on the internet. Note: no [data-sitekey] element, which is
+     exactly what separates it from a v2 checkbox. -->
+<html>
+<head><meta charset="utf-8"><title>Job Application — Northwind</title></head>
+<body>
+  <form id="application_form">
+    <label for="first_name">First Name</label>
+    <input type="text" id="first_name" name="first_name">
+    <label for="last_name">Last Name</label>
+    <input type="text" id="last_name" name="last_name">
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email">
+    <label for="phone">Phone</label>
+    <input type="tel" id="phone" name="phone">
+    <button type="submit">Submit application</button>
+  </form>
+  <iframe title="reCAPTCHA"
+          src="https://www.recaptcha.net/recaptcha/enterprise/anchor?ar=1&amp;k=xyz"
+          width="256" height="60" style="border:0"></iframe>
+  <textarea id="g-recaptcha-response-100000" name="g-recaptcha-response"
+            style="display:none"></textarea>
+</body>
+</html>

@@ -1,0 +1,16 @@
+<!doctype html>
+<!-- CAPTCHA challenge in front of an otherwise fillable form. Probe wins. -->
+<html>
+<head><meta charset="utf-8"><title>Verify — Acme Careers</title></head>
+<body>
+  <h1>Confirm you're human</h1>
+  <div class="g-recaptcha" data-sitekey="test-site-key"></div>
+  <form id="application_form">
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email">
+    <label for="first_name">First name</label>
+    <input type="text" id="first_name" name="first_name">
+    <button type="submit">Submit application</button>
+  </form>
+</body>
+</html>

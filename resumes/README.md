@@ -23,19 +23,21 @@ Set `RESUME_TEX_DIR=/data/resumes` on Fly (already in `fly.toml`).
 
 ## Tailored cache
 
-When you `apply <#>`, the bot saves one-page tailored PDFs + `.tex` under:
+When you stage/apply to a posting, the engine saves one-page tailored PDFs + `.tex` under:
 
 ```
-$RESUME_TEX_DIR/tailored/<your_slack_user_id>/
+$RESUME_TEX_DIR/tailored/<user_id>/
 ```
 
-Reuses cached resumes for the same company/role — no re-generation unless needed.
+Reuses a cached résumé only for the same posting, or the same company + title
++ job-description hash. A nearby title at the same company is tailored again.
 
-## Smoke tests
+## How testers get the PDF
 
-```bash
-.venv/bin/python3 scripts/test_slack_upload.py --scopes-only
-SLACK_TEST_USER=U0... .venv/bin/python3 scripts/test_slack_upload.py
-```
+- **iOS:** the apply browser pre-downloads the tailored PDF (`GET /apply/resume?posting_id=…`)
+  and opens the share sheet — you still attach it manually in the WebView (iOS cannot
+  set `<input type=file>`). Cover letters are the same documents menu, built on tap
+  (`GET /apply/cover`), not on every Preflight.
+- **Chat / owner tools:** same endpoint, or download from the `/apply` review page.
 
-Requires Slack bot scopes: `chat:write`, `files:write`.
+There is no Slack attachment path — delivery is in-app only.

@@ -29,6 +29,7 @@ from . import reminders
 from . import scoring
 from . import stats as stats_mod
 from . import store
+from . import voice
 from .config import get_settings
 from .conversation import Pending
 from .intents import Intent, ParsedMessage
@@ -40,21 +41,9 @@ from .router import (
     parse_edit_change,
 )
 
-# Slack file attachments queued by the last reply (e.g. tailored resume PDF).
-_pending_attachments: dict[str, list[tuple[str, bytes]]] = {}
-
-
-def consume_attachments(user_id: str) -> list[tuple[str, bytes]]:
-    """Pop file attachments for ``user_id`` (filename, bytes)."""
-    return _pending_attachments.pop(user_id, [])
-
-
-def _queue_attachment(user_id: str, filename: str, data: bytes) -> None:
-    _pending_attachments.setdefault(user_id, []).append((filename, data))
-
 # Intents that collect slots before they can run.
 SLOT_INTENTS = {
-    Intent.APPLY, Intent.UPDATE, Intent.NOTE, Intent.REMIND, Intent.OUTREACH,
+    Intent.APPLY, Intent.UPDATE, Intent.NOTE, Intent.REMIND,
     Intent.DELETE,
 }
 
@@ -64,7 +53,6 @@ REQUIRED: dict[Intent, list[str]] = {
     Intent.UPDATE: ["company", "status"],
     Intent.NOTE: ["company", "note"],
     Intent.REMIND: ["company", "time_reference"],
-    Intent.OUTREACH: ["company"],
 }
 
 # The menu — shown on "help"/"menu"/"?" and (with a welcome line) on a greeting.
@@ -77,9 +65,8 @@ MENU = (
     "  \"stripe oa received\" — update the stage\n"
     "  \"google rejected\" · \"ramp offer!\" — any stage\n"
     "\n"
-    "▸ NOTES & RECRUITERS\n"
+    "▸ NOTES\n"
     "  \"note stripe recruiter was great\" — jot a note\n"
-    "  \"reach out to a recruiter at stripe\" — find contacts + draft an intro\n"
     "\n"
     "▸ DATES\n"
     "  \"stripe oa due friday\" — set a deadline\n"
@@ -113,16 +100,18 @@ MENU = (
     "  \"undo\" — reverse my last change\n"
     "  \"no, I meant figma\" — correct me mid-answer · \"cancel\" — scrap it\n"
     "\n"
+    "▸ THE APP\n"
+    "  \"how do I autofill\" — Autofill, Submit, résumé attach\n"
+    "  \"change my phone to 555…\" — update form details\n"
+    "  \"take me to settings\" — jump to a tab\n"
+    "\n"
     "💡 Combine them: \"applied to notion and airtable, both PM\". "
     "Text \"help\" anytime to see this again."
 )
 
 HELP = MENU
 
-GREETING = (
-    "👋 Hey! I'm your job-search assistant — I track applications, deadlines, "
-    "and follow-ups right here over text.\n\n" + MENU
-)
+GREETING = f"Hey — {voice.HORIZON_BLURB}"
 
 
 # ---------------------------------------------------------------------------
@@ -133,19 +122,36 @@ def handle_sms(user_id: str, text: str) -> str:
     from . import llm_budget
 
     with llm_budget.for_user(user_id):
-        return _handle_sms(user_id, text)
+        return _handle_sms(user_id, text, pre_parsed=None)
 
 
-def _handle_sms(user_id: str, text: str) -> str:
+def handle_action(user_id: str, parsed: ParsedMessage, text: str) -> str:
+    """Dispatch a pre-parsed agent action through the same engine as chat."""
+    from . import llm_budget
+
+    with llm_budget.for_user(user_id):
+        return _handle_sms(user_id, text, pre_parsed=parsed)
+
+
+def _handle_sms(user_id: str, text: str, pre_parsed: ParsedMessage | None) -> str:
     text = (text or "").strip()
     if not text:
-        return "Text me something like 'applied stripe swe' — or 'help'."
-    if convo.is_help(text):
-        return HELP
+        return "Ask me to find jobs, edit your details, or how Autofill works — or say help."
 
     pending = convo.get_pending(user_id)
-    actions = get_router().parse_actions(text)
+    actions = [pre_parsed] if pre_parsed is not None else get_router().parse_actions(text)
     primary = actions[0] if actions else None
+
+    if (not pending.active and primary is not None
+            and primary.intent == Intent.HELP_APP and primary.confidence >= 0.7):
+        return _start(user_id, primary, text)
+
+    # Bare "commands" / "menu" still dump the long list. Don't let "help" inside
+    # a real command ("help me log stripe") steal the turn.
+    if (pre_parsed is None and convo.is_help(text)
+            and (primary is None or primary.intent == Intent.UNKNOWN
+                 or primary.confidence < 0.5)):
+        return HELP
 
     if pending.active and pending.intent == Intent.JOBS_REVIEW.value:
         # skip / apply / apply N / stop / dismiss all stay in the walkthrough;
@@ -161,6 +167,16 @@ def _handle_sms(user_id: str, text: str) -> str:
         convo.clear_pending(user_id)
         pending = convo.get_pending(user_id)  # now inactive — fall through to dispatch
 
+    if pending.active and pending.awaiting == "go":
+        breakout = (
+            primary is not None
+            and _looks_like_new_command(primary, text, pending)
+        )
+        if not breakout:
+            return _continue(user_id, pending, primary or ParsedMessage(intent=Intent.UNKNOWN, confidence=0.1), text)
+        convo.clear_pending(user_id)
+        pending = convo.get_pending(user_id)
+
     if pending.active:
         if convo.is_cancel(text):
             convo.clear_pending(user_id)
@@ -172,6 +188,8 @@ def _handle_sms(user_id: str, text: str) -> str:
 
     if len(actions) > 1:
         return _start_multi(user_id, actions, text)
+    if primary is None:
+        primary = ParsedMessage(intent=Intent.UNKNOWN, confidence=0.1)
     return _start(user_id, primary, text)
 
 
@@ -213,12 +231,20 @@ def _looks_like_new_command(p: ParsedMessage, text: str, pending: Pending) -> bo
     """
     if convo.is_affirmation(text) or convo.is_negation(text) or convo.is_correction(text):
         return False
+    if pending.awaiting == "go":
+        if convo.is_hop_go(text) or convo.is_hop_stay(text):
+            return False
+        if p.intent == Intent.HELP_APP:
+            from . import agent
+            tab = agent.navigate_tab(p.message)
+            if not tab or tab == pending.slots.get("tab"):
+                return False
     if (
         p.intent in (Intent.LIST, Intent.QUERY, Intent.STATS, Intent.DEADLINE,
                      Intent.CHECK, Intent.UNDO, Intent.JOBS, Intent.JOBS_REVIEW,
                      Intent.TRACK, Intent.PROFILE, Intent.APPLY_JOB,
                      Intent.QUEUE_JOB, Intent.DISMISS_JOB, Intent.SNOOZE_JOB,
-                     Intent.TUNE)
+                     Intent.TUNE, Intent.HELP_APP, Intent.SET_IDENTITY)
         and p.confidence >= 0.7
     ):
         return True
@@ -279,18 +305,18 @@ def _start(user_id: str, p: ParsedMessage, raw: str) -> str:
         return _do_snooze_job(user_id, p)
     if p.intent == Intent.TUNE:
         return _do_tune(user_id, p)
-    if p.intent == Intent.APPROVE_FILL:
-        return _do_approve_fill(user_id, p)
-    if p.intent == Intent.APPLY_STATUS:
-        return _do_apply_status(user_id)
     if p.intent == Intent.REMEMBER:
         return _do_remember(user_id, p)
     if p.intent == Intent.KNOWLEDGE:
         return _do_knowledge(user_id)
+    if p.intent == Intent.HELP_APP:
+        return _do_help_app(user_id, p)
+    if p.intent == Intent.SET_IDENTITY:
+        return _do_set_identity(user_id, p)
     # UNKNOWN
     if convo.is_greeting(raw):
-        return GREETING
-    smalltalk = convo.smalltalk_reply(raw)
+        return voice.greeting_reply(user_id, raw)
+    smalltalk = convo.smalltalk_reply(raw, name=voice.first_name(user_id))
     if smalltalk:
         return smalltalk
     return _do_unknown(p, memory)
@@ -323,6 +349,10 @@ def _continue(user_id: str, pending: Pending, p: ParsedMessage, raw: str) -> str
     # machinery, so it's resolved here in full (including any correction prefix).
     if intent == Intent.EDIT:
         return _continue_edit(user_id, slots, awaiting, raw)
+    if intent == Intent.SET_IDENTITY:
+        return _continue_identity(user_id, slots, awaiting, p, raw)
+    if intent == Intent.HELP_APP:
+        return _continue_go(user_id, slots, awaiting, raw)
 
     # "no, figma" / "actually google" — re-parse the remainder as the new value.
     if convo.is_correction(raw):
@@ -482,7 +512,6 @@ def _ask(intent: Intent, slot: str, slots: dict) -> str:
         (Intent.REMIND, "company"): "Remind you about which company?",
         (Intent.REMIND, "time_reference"):
             f"When should I remind you about {company}? (e.g. in 3 days)",
-        (Intent.OUTREACH, "company"): "Reach out to a recruiter at which company?",
     }
     return table.get((intent, slot), f"What's the {slot}?")
 
@@ -499,7 +528,6 @@ def _execute(user_id: str, intent: Intent, slots: dict, raw: str) -> str:
         Intent.UPDATE: _do_update,
         Intent.NOTE: _do_note,
         Intent.REMIND: _do_remind,
-        Intent.OUTREACH: _do_outreach,
         Intent.DELETE: _do_delete,
         Intent.BULK: _do_bulk,
     }[intent](user_id, slots, raw)
@@ -639,48 +667,6 @@ def _humanize_when(when) -> str:
     return f"on {when.date().isoformat()}"
 
 
-def _do_outreach(user_id: str, slots: dict, raw: str) -> str:
-    company = slots["company"]
-    app = store.find_application(user_id, company)
-    app_id = app["id"] if app else None
-    discovery = outreach.discover_for_company(user_id, company, application_id=app_id)
-    recruiters = discovery.recruiters
-
-    if not recruiters:
-        from . import apollo as apollo_mod
-
-        issue = apollo_mod.discovery_issue()
-        if issue:
-            return issue
-        if not get_settings().apollo_enabled:
-            return (
-                f"To find recruiters at {company} I need an Apollo API key "
-                "(set APOLLO_API_KEY in .env). Once it's set, text this again "
-                "and I'll pull contacts and draft an intro."
-            )
-        return (
-            f"I couldn't find recruiters at {company} right now. "
-            "Try again later, or add a contact name and I'll draft something."
-        )
-
-    top = recruiters[0]
-    role = app["role"] if app else None
-    draft = outreach.draft_outreach(company, top, role=role)
-
-    contact = top["name"] + (f" — {top['title']}" if top["title"] else "")
-    link = f"\n{top['linkedin_url']}" if top["linkedin_url"] else ""
-    more = f"\n(+{len(recruiters) - 1} more at {company})" if len(recruiters) > 1 else ""
-    footnote = outreach.apollo_footnote(discovery)
-    footnote_line = f"\n\n({footnote})" if footnote else ""
-    return (
-        f"Found {len(recruiters)} contact(s) at {company}. Top pick:\n"
-        f"{contact}{link}{more}\n\n"
-        f"Draft:\n{draft}\n\n"
-        "Copy/paste to send — I won't send anything automatically."
-        f"{footnote_line}"
-    )
-
-
 # ---------------------------------------------------------------------------
 # Non-slot intents
 # ---------------------------------------------------------------------------
@@ -737,17 +723,52 @@ def _window_label(ref: str) -> str:
     return label
 
 
+def _row_get(row, key, default=None):
+    """sqlite3.Row, dict, or JobPosting."""
+    try:
+        val = row[key]
+        return default if val is None else val
+    except Exception:
+        return getattr(row, key, default)
+
+
+def _speak_place(location: str | None) -> str:
+    loc = (location or "").strip()
+    if not loc:
+        return ""
+    if loc.lower() in ("remote", "hybrid", "anywhere", "worldwide"):
+        return f", {loc.lower()}"
+    return f" in {loc}"
+
+
+def _speak_posting(p, score=None) -> str:
+    """One role in a spoken sentence — never a Slack-style dump line."""
+    title = str(_row_get(p, "title") or "a role").strip()
+    company = str(_row_get(p, "company") or "a company").strip()
+    loc = _row_get(p, "location") or ""
+    sc = score if score is not None else _row_get(p, "relevance_score")
+    pct = f" — {round(sc * 100)}% match" if sc is not None else ""
+    return f"{title} at {company}{_speak_place(loc)}{pct}"
+
+
+def _speak_app(a) -> str:
+    role = a["role"]
+    suffix = f" as {role}" if role else ""
+    return f"{a['company']}{suffix} ({a['status']})"
+
+
 def _do_recent(user_id: str, ref: str, window) -> str:
     start, end = window
     apps = store.applications_in_window(user_id, start, end)
     label = _window_label(ref)
     if not apps:
-        return f"Nothing logged {label}. Text 'applied <company>' to add one."
-    lines = [f"{len(apps)} application(s) {label}:"]
-    for a in apps[:15]:
-        role = f" — {a['role']}" if a["role"] else ""
-        lines.append(f"• {a['company']}{role} [{a['status']}]")
-    return "\n".join(lines)
+        return f"Nothing logged {label}. Say “applied Stripe SWE” to add one."
+    named = [_speak_app(a) for a in apps[:3]]
+    lead = f"{len(apps)} application{'s' if len(apps) != 1 else ''} {label}."
+    if len(apps) == 1:
+        return f"{lead} {named[0]}."
+    extra = f" and {len(apps) - 3} more" if len(apps) > 3 else ""
+    return f"{lead} {', '.join(named[:-1])}, and {named[-1]}{extra}."
 
 
 def _do_list(user_id: str, p: ParsedMessage, memory: dict) -> str:
@@ -761,25 +782,29 @@ def _do_list(user_id: str, p: ParsedMessage, memory: dict) -> str:
     if target and target != "Applied":
         apps = [a for a in apps if a["status"].lower() == target.lower()]
     if not apps:
-        return "No applications yet. Text 'applied <company> <role>' to start."
-    lines = ["Your applications:"]
-    for a in apps[:15]:
-        role = f" — {a['role']}" if a["role"] else ""
-        lines.append(f"• {a['company']}{role} [{a['status']}]")
-    return "\n".join(lines)
+        return "No applications yet. Mark Filed on Apply, or say “applied Stripe SWE”."
+    named = [_speak_app(a) for a in apps[:3]]
+    if len(apps) == 1:
+        return f"You've logged one application: {named[0]}."
+    extra = f" and {len(apps) - 3} more" if len(apps) > 3 else ""
+    return (
+        f"You've logged {len(apps)} applications. "
+        f"{', '.join(named[:-1])}, and {named[-1]}{extra}."
+    )
 
 
 def _do_query(user_id: str, p: ParsedMessage, memory: dict) -> str:
     ranked = scoring.rank_followups(user_id)
     if not ranked:
-        return "Nothing open to follow up on right now. \U0001f389"
-    lines = ["Top to follow up on:"]
-    for a, _score, b in ranked[:5]:
-        role = f" — {a['role']}" if a["role"] else ""
-        days = int(b["stale_days"])
-        quiet = "today" if days == 0 else f"{days}d quiet"
-        lines.append(f"• {a['company']}{role} [{a['status']}] — {quiet}")
-    return "\n".join(lines)
+        return "Nothing open to follow up on right now."
+    a, _score, b = ranked[0]
+    days = int(b["stale_days"])
+    quiet = "today" if days == 0 else f"{days} day{'s' if days != 1 else ''} quiet"
+    lead = f"I'd follow up on {_speak_app(a)} — {quiet}."
+    if len(ranked) == 1:
+        return lead
+    rest = [_speak_app(row[0]) for row in ranked[1:3]]
+    return lead + " Also " + ", then ".join(rest) + "."
 
 
 def _do_jobs(user_id: str) -> str:
@@ -794,19 +819,31 @@ def _do_jobs(user_id: str) -> str:
     total = counts.get("queued", 0) + counts.get("alerted", 0)
     if not posts:
         if not jobstore.list_tracked(user_id) and not profile_mod.has_profile(user_id):
-            return ("You're not tracking anything yet. Set your profile (e.g. "
-                    "\"looking for new grad SWE roles, remote\") or "
-                    "'track openings at <company>'.")
-        return "No jobs in your queue yet — I'll send a digest when new matches land."
-    lines = [f"🆕 {total} match(es) in your queue — top {len(posts)}:"]
-    if total > len(posts):
-        lines.append("(say 'review jobs' to walk through them one by one)")
-    for p in posts:
-        score = p["relevance_score"]
-        pct = f" · {round(score * 100)}%" if score is not None else ""
-        loc = f" — {p['location']}" if p["location"] else ""
-        lines.append(f"• #{p['id']} {p['title']} @ {p['company']}{loc}{pct}")
-    return "\n".join(lines)
+            return (
+                "You're not tracking anything yet. Tell me what you want — "
+                "new-grad SWE, remote or NYC — or a company to watch."
+            )
+        return voice.with_name(
+            user_id,
+            "No jobs in your queue yet, {name} — I'll ping you when new matches land.",
+            "No jobs in your queue yet — I'll ping you when new matches land.",
+        )
+    top = _speak_posting(posts[0])
+    if total == 1:
+        return (
+            f"You've got one match: {top}.\n\n"
+            "I can walk you through it, or you can open Apply."
+        )
+    bits = [f"You have {total} matches. The strongest is {top}."]
+    if len(posts) > 1:
+        bits.append(f"Next is {_speak_posting(posts[1])}.")
+    rest = total - min(2, len(posts))
+    if rest > 0:
+        bits.append(f"{rest} more {'is' if rest == 1 else 'are'} waiting on Apply.")
+    return (
+        " ".join(bits)
+        + "\n\nWant me to walk you through them, or open Apply?"
+    )
 
 
 def _do_track(user_id: str, p: ParsedMessage, raw: str) -> str:
@@ -815,23 +852,27 @@ def _do_track(user_id: str, p: ParsedMessage, raw: str) -> str:
     if action == "list":
         stats = jobstore.board_stats(user_id)
         if not stats:
-            return "Not tracking any companies yet. Try 'track openings at <company>'."
-        lines = [f"👀 Tracking {len(stats)} board(s):"]
-        for s in stats:
+            return "You're not watching any companies yet. Name one and I'll track its board."
+        n = len(stats)
+        lead = f"You're watching {n} board{'s' if n != 1 else ''}."
+        bits = []
+        for s in stats[:4]:
             b = s["board"]
             name = b["company_name"] or b["board_token"]
-            fresh = f"{s['fresh']} new" if s["fresh"] else "0 new"
-            lines.append(f"• {name} ({b['source']}) — {fresh}, {s['total']} seen")
-        # Overall posting counts + the active match threshold.
+            if s["fresh"]:
+                bits.append(f"{name} has {s['fresh']} new")
+            else:
+                bits.append(f"{name} is quiet")
+        extra = f", and {n - 4} more" if n > 4 else ""
+        body = lead + " " + ", ".join(bits) + extra + "."
         counts = jobstore.counts_by_status(user_id)
         alerted = counts.get("queued", 0) + counts.get("alerted", 0)
-        applied = counts.get("applied", 0)
         default = get_settings().job_relevance_threshold
         thresh = profile_mod.effective_threshold(profile_mod.get_profile(user_id), default)
-        tail = f"\n🎚️ Matching ≥ {round(thresh * 100)}%"
-        if alerted or applied:
-            tail += f" · {alerted} to review, {applied} applied"
-        return "\n".join(lines) + tail
+        body += f" Matching at {round(thresh * 100)}%+."
+        if alerted:
+            body += f" {alerted} to review on Apply."
+        return body
 
     company = p.company
     if action == "feed":
@@ -881,7 +922,7 @@ def _do_profile(user_id: str, p: ParsedMessage, raw: str) -> str:
         if not text:
             return ("No profile yet. Tell me what you're after, e.g. "
                     "\"I'm looking for new grad SWE roles, remote or NYC\".")
-        return "🧭 Your job-search profile:\n" + text
+        return "Here's your search profile — what I'm matching on:\n\n" + text
 
     roles, locations = _split_profile_criteria(criteria)
     if not roles:
@@ -890,15 +931,16 @@ def _do_profile(user_id: str, p: ParsedMessage, raw: str) -> str:
     profile_mod.set_profile(user_id, roles=roles, keywords=roles, locations=locations or None)
     from . import wide_discovery
 
-    wide_discovery.ensure_default_feeds_tracked(user_id)
-    saved = profile_mod.profile_text(profile_mod.get_profile(user_id))
-    wide = wide_discovery.describe_wide_status()
-    msg = "Got it — I'll match new jobs against:\n" + saved
+    saved_prof = profile_mod.get_profile(user_id)
+    wide_discovery.ensure_default_feeds_tracked(user_id, saved_prof)
+    saved = profile_mod.profile_text(saved_prof)
+    wide = wide_discovery.describe_wide_status(saved_prof)
+    msg = "Got it — I'll match new jobs against:\n\n" + saved
     if wide:
-        msg += f"\n\n🔎 Wide discovery on: {wide}"
+        msg += f"\n\nWide discovery is on: {wide}"
     msg += (
         "\n\nYou don't need a company list — I'll poll feeds and rotate through "
-        "many job boards. Optional: 'track openings at <company>' for favorites."
+        "job boards. Say “track openings at Stripe” for a favorite."
     )
     return msg
 
@@ -929,17 +971,17 @@ def _do_apply_job(user_id: str, p: ParsedMessage, raw: str) -> str:
         pid = (p.message or "").strip()
         if pid.isdigit():
             return (
-                f"I don't have job #{pid} on file. Text 'any new jobs' to see "
-                "the latest matches and their numbers."
+                f"I don't have job #{pid} on file. Say “show new jobs” to see "
+                "the latest matches."
             )
         if p.company:
             return (
                 f"I don't have an open posting from {p.company} to apply to. "
-                "Text 'any new jobs' to see what I've found."
+                "Say “show new jobs” to see what I've found."
             )
         return (
-            "Which posting? Reply 'apply <#>' with a number from an alert, "
-            "or 'any new jobs' to see them."
+            "Which posting? Ask me to walk through your matches, "
+            "or say “show new jobs”."
         )
 
     if posting["status"] == "applied":
@@ -980,7 +1022,6 @@ def _do_apply_job(user_id: str, p: ParsedMessage, raw: str) -> str:
             posting_id=posting["id"],
         )
         if tailored:
-            _queue_attachment(user_id, tailored.filename, tailored.pdf_bytes)
             assert tailored.pages == 1
             if tailored.from_cache:
                 resume_line = (
@@ -989,8 +1030,8 @@ def _do_apply_job(user_id: str, p: ParsedMessage, raw: str) -> str:
                 )
             else:
                 resume_line = (
-                    f"\n📎 Tailored resume attached ({tailored.variant.upper()}, "
-                    "1 page — saved for next time)."
+                    f"\n📎 Tailored resume ready ({tailored.variant.upper()}, "
+                    "1 page — saved for next time). Open Apply to download it."
                 )
     except Exception:
         import logging
@@ -1013,7 +1054,7 @@ def _posting_label(posting) -> str:
 def _posting_not_found(p: ParsedMessage, verb: str) -> str:
     pid = (p.message or "").strip()
     if pid.isdigit():
-        return f"I don't have job #{pid}. Text 'any new jobs' to see the current matches."
+        return f"I don't have job #{pid}. Say “show new jobs” to see the current matches."
     if p.company:
         return f"I don't have an open posting from {p.company} to {verb}."
     return (f"Which posting should I {verb}? Reply '{verb} <#>' with a number "
@@ -1022,7 +1063,7 @@ def _posting_not_found(p: ParsedMessage, verb: str) -> str:
 
 def _do_queue_job(user_id: str, p: ParsedMessage) -> str:
     """Stage a surfaced posting into the apply queue. We pre-assemble the
-    application package (draft answers + tailored resume) for review at /apply —
+    application package (draft answers + tailored resume) for review on Apply —
     nothing is applied or submitted here."""
     spec = (p.message or "").strip()
     if spec == "all" or spec.startswith("top:"):
@@ -1036,12 +1077,17 @@ def _do_queue_job(user_id: str, p: ParsedMessage) -> str:
 
     label = _posting_label(posting)
     if not apply_queue.stage(user_id, posting["id"]):
-        return (f"#{posting['id']} ({label}) is already in your apply queue — "
-                "review and submit it at /apply.")
-    return (
-        f"📥 Staged #{posting['id']} ({label}) to your apply queue. I'll have the "
-        "application package (draft answers + tailored resume) ready to review and "
-        "submit at /apply — I never submit anything for you."
+        from . import agent
+        return agent.offer_tab_hop(
+            user_id, f"job:{posting['id']}",
+            f"#{posting['id']} ({label}) is already in your apply queue — "
+            "Autofill, then you tap Submit. I never submit.",
+        )
+    from . import agent
+    return agent.offer_tab_hop(
+        user_id, f"job:{posting['id']}",
+        f"Staged {label} to your apply queue. I'll have the application package "
+        "ready — Autofill, then you tap Submit.",
     )
 
 
@@ -1056,10 +1102,17 @@ def _do_queue_bulk(user_id: str, n: int | None) -> str:
         fresh = fresh[:n]
     count = sum(1 for r in fresh if apply_queue.stage(user_id, r["id"]))
     if not count:
-        return ("Nothing new to queue — your top matches are already staged. "
-                "Text 'any new jobs' to see what's there.")
-    return (f"📥 Staged {count} match{'es' if count != 1 else ''} to your apply "
-            "queue — each gets a prepared application to review & submit at /apply.")
+        from . import agent
+        return agent.offer_tab_hop(
+            user_id, "apply",
+            "Nothing new to queue — your top matches are already staged.",
+        )
+    from . import agent
+    return agent.offer_tab_hop(
+        user_id, "apply",
+        f"Staged {count} match{'es' if count != 1 else ''} to your apply "
+        "queue. Autofill, then you tap Submit.",
+    )
 
 
 def _do_dismiss_job(user_id: str, p: ParsedMessage) -> str:
@@ -1083,132 +1136,14 @@ def _do_snooze_job(user_id: str, p: ParsedMessage) -> str:
             f"{when.date().isoformat()} — it'll resurface in 'any new jobs' then.")
 
 
-def fill_preview_message(user_id: str, req: dict, preview: dict) -> str:
-    """The Slack message that puts the approval gate on the phone: what got filled,
-    what was left for the human, and the two words that decide it."""
-    label = fill_label(user_id, req)
-    filled = preview.get("filled") or []
-    skipped = [s for s in (preview.get("skipped") or []) if s]
-
-    if preview.get("status") == "blocked":
-        return (f"🚧 Couldn't fill {label} — {preview.get('reason', 'blocked')}. "
-                "Open it on your computer and finish with the browser extension.")
-
-    plural = "" if len(filled) == 1 else "s"
-    lines = [f"🤖 Filled {label} — {len(filled)} field{plural} ready for review."]
-    lines += [f"  ✓ {e.get('label', '?')}: {str(e.get('value', ''))[:40]}"
-              for e in filled[:8]]
-    if len(filled) > 8:
-        lines.append(f"  …and {len(filled) - 8} more")
-    if skipped:
-        lines.append(f"\n⚠️ Left for you ({len(skipped)}): " + ", ".join(skipped[:6]))
-    lines.append("\nReply 'approve' to submit it, or 'cancel' to stop. "
-                 "Screenshot + full preview: /apply")
-    return "\n".join(lines)
-
-
-def fill_label(user_id: str, req: dict) -> str:
-    """"#12 (Backend Engineer @ Acme)" for a fill request, falling back to the
-    posting id when the posting has since been cleaned up."""
-    posting = jobstore.get_posting(user_id, req["posting_id"])
-    if posting is None:
-        return f"#{req['posting_id']}"
-    return f"#{posting['id']} ({_posting_label(posting)})"
-
-
-def _do_approve_fill(user_id: str, p: ParsedMessage) -> str:
-    """The human gate, answered from Slack: approve a filled application so the
-    worker may submit it, or cancel it outright.
-
-    This is the *only* thing that moves a request to `approved` — the worker
-    submits nothing until it sees that. Answering here rather than on the web page
-    is what lets the whole flow happen from a phone.
-    """
-    from . import fill_requests
-
-    action, _, pid = (p.message or "approve").partition(":")
-    if pid.isdigit():
-        req = fill_requests.for_posting(user_id, int(pid))
-        if req is None:
-            return (f"I don't have a fill request for #{pid}. Text 'in flight' to "
-                    "see what's actually waiting.")
-    else:
-        req = (fill_requests.latest_awaiting(user_id) if action == "approve"
-               else fill_requests.latest_active(user_id))
-        if req is None and action == "approve":
-            # Nothing at the gate. Fall back to the most recent request so we can
-            # say *why* — "still filling" / "already submitted" is far more useful
-            # than "nothing is waiting". A cancelled one explains nothing, so skip it.
-            req = fill_requests.latest_active(user_id) or fill_requests.latest(user_id)
-            if req is not None and req["status"] == fill_requests.FAILED:
-                req = None
-        if req is None:
-            return ("Nothing is waiting for your approval right now. Queue a match "
-                    "('queue 3'), then tap 🤖 Auto-fill & submit to start one.")
-
-    label = fill_label(user_id, req)
-    if action == "cancel":
-        if not fill_requests.cancel(user_id, req["id"]):
-            return f"{label} is already {req['status']} — nothing to cancel."
-        return f"🚫 Cancelled {label}. Nothing was submitted."
-
-    if req["status"] != fill_requests.PREVIEW:
-        if req["status"] in (fill_requests.SUBMITTED, fill_requests.SUBMITTING):
-            return f"{label} is already {req['status']} — no action needed."
-        return (f"{label} isn't ready for approval yet (it's {req['status']}). "
-                "I'll message you the moment the filled form is ready to check.")
-    if not fill_requests.approve(user_id, req["id"]):
-        return f"Couldn't approve {label} — check 'in flight' for its current state."
-    return (f"✅ Approved {label} — submitting now. I'll confirm when it's in, "
-            "and log it as Applied.")
-
-
-# How each fill state reads in the in-flight list.
-_FILL_STATE_LABELS = {
-    "pending": "⏳ queued for the worker",
-    "filling": "🤖 filling the form",
-    "preview": "👀 waiting on your approval",
-    "approved": "✅ approved — submitting",
-    "submitting": "📤 submitting",
-}
-
-
-def _do_apply_status(user_id: str) -> str:
-    """Everything in flight, in one glance — the phone-side answer to "where are
-    my applications right now?"."""
-    from . import apply_queue, fill_requests
-
-    active = fill_requests.list_active(user_id)
-    lines = []
-    for req in active:
-        state = _FILL_STATE_LABELS.get(req["status"], req["status"])
-        lines.append(f"• {fill_label(user_id, req)} — {state}")
-
-    staged = [it for it in apply_queue.list_queue(user_id)
-              if it.get("status") != "submitted"]
-    in_flight_ids = {r["posting_id"] for r in active}
-    waiting = [it for it in staged if it["posting_id"] not in in_flight_ids]
-
-    if not lines and not waiting:
-        return ("Nothing in flight. Text 'any new jobs' to see matches, then "
-                "'queue <#>' to prepare an application.")
-
-    out = []
-    if lines:
-        awaiting = sum(1 for r in active if r["status"] == "preview")
-        header = f"📋 In flight ({len(active)})"
-        out.append(header + ":")
-        out.extend(lines)
-        if awaiting:
-            out.append(f"\nReply 'approve' to send the {'one' if awaiting == 1 else 'first'} "
-                       "waiting on you, or 'cancel' to call it off.")
-    if waiting:
-        out.append(f"\n📥 Staged and ready to review at /apply: {len(waiting)}")
-    return "\n".join(out)
-
-
 # Words that hint at which kind of fact an un-categorised "remember …" is.
 _CATEGORY_HINTS = (
+    ("experience", re.compile(
+        r"\bintern(?:ship)?\b|\bteaching assistant\b|\bambassador\b|"
+        r"\bworked at\b|\bemployed\b|\bsoftware developer at\b|"
+        r"\b[A-Z][a-zA-Z .]+,\s*[A-Z]{2}\b",
+        re.I,
+    )),
     ("project", re.compile(r"\bi (?:built|made|created|wrote|shipped|designed)\b|"
                            r"\bproject\b|\bapp\b|\bsystem\b", re.I)),
     ("achievement", re.compile(r"\bi (?:led|won|grew|cut|reduced|improved|increased|"
@@ -1253,32 +1188,34 @@ def _do_remember(user_id: str, p: ParsedMessage) -> str:
 
 
 def _do_knowledge(user_id: str) -> str:
-    """What it knows, and what it still needs — the answer to "why are my drafted
-    answers generic?"."""
+    """What it knows, and what it still needs — spoken, not a dump."""
     from . import knowledge
 
     items = knowledge.list_all(user_id)
     report = knowledge.audit(user_id)
-    lines = [f"🧠 What I know about you — identity {int(report['score'] * 100)}% complete."]
-
+    score = int(report["score"] * 100)
+    parts = [f"Your form details are {score}% complete."]
     if items:
-        by_cat: dict[str, list[str]] = {}
-        for it in items:
-            label = f"“{it['label']}” → {it['text']}" if it["label"] else it["text"]
-            by_cat.setdefault(it["category"], []).append(label)
-        for category, texts in by_cat.items():
-            lines.append(f"\n{category.title()}s ({len(texts)}):")
-            lines += [f"  • {t[:110]}" for t in texts[:5]]
-            if len(texts) > 5:
-                lines.append(f"  …and {len(texts) - 5} more")
+        sample = items[0]["text"]
+        more = f", plus {len(items) - 1} more" if len(items) > 1 else ""
+        parts.append(f"I've stored “{sample[:90]}”{more} to use on forms.")
     else:
-        lines.append("\nNothing stored yet — that's why drafted answers read generic.")
+        parts.append("Nothing stored yet — that's why drafted answers read generic.")
+    missing = report.get("identity_missing") or []
+    if missing:
+        parts.append("Still missing " + ", ".join(missing[:6]) + ".")
+    tips = report.get("suggestions") or []
+    if tips:
+        parts.append(str(tips[0]).rstrip(".") + ".")
+    from . import agent
 
-    if report["identity_missing"]:
-        lines.append("\n📋 Missing details: " + ", ".join(report["identity_missing"][:8]))
-    for tip in report["suggestions"][:3]:
-        lines.append(f"  → {tip}")
-    return "\n".join(lines)
+    if missing:
+        dest = "you:identity"
+    elif not items:
+        dest = "you:add"
+    else:
+        dest = "you"
+    return agent.offer_tab_hop(user_id, dest, " ".join(parts))
 
 
 def _do_tune(user_id: str, p: ParsedMessage) -> str:
@@ -1625,6 +1562,116 @@ def _do_deadline(user_id: str, p: ParsedMessage, raw: str, memory: dict) -> str:
     return deadlines_mod.render_upcoming(user_id)
 
 
+def _do_help_app(user_id: str, p: ParsedMessage) -> str:
+    from . import agent
+
+    dest = agent.navigate_dest(p.message)
+    if dest and dest.startswith("job:"):
+        spec = dest.split(":", 1)[1]
+        posting = _resolve_posting(
+            user_id,
+            ParsedMessage(
+                intent=Intent.APPLY_JOB,
+                message=spec if spec.isdigit() else None,
+                company=None if spec.isdigit() else spec,
+            ),
+        )
+        if posting is None:
+            fake = ParsedMessage(
+                intent=Intent.APPLY_JOB,
+                message=spec if spec.isdigit() else None,
+                company=None if spec.isdigit() else spec,
+            )
+            return _posting_not_found(fake, "open")
+        label = _posting_label(posting)
+        return agent.offer_tab_hop(
+            user_id,
+            f"job:{posting['id']}",
+            f"{label} is on Apply. Autofill, then you tap Submit.",
+        )
+    reply = agent.help_reply(p.message)
+    hop = dest or agent.help_hop_dest(p.message)
+    if hop and hop != "chat":
+        return agent.offer_tab_hop(user_id, hop, reply)
+    return reply
+
+
+def _continue_go(user_id: str, slots: dict, awaiting: str | None, raw: str) -> str:
+    from . import agent
+
+    tab = slots.get("tab") or "apply"
+    name = agent.tab_label(tab)
+    if awaiting != "go":
+        return agent.offer_tab_hop(user_id, tab, agent.help_reply(f"tab:{tab}"))
+    if convo.is_hop_stay(raw):
+        slots["_declined_go"] = True
+        slots.pop("_confirmed_go", None)
+        convo.set_pending(
+            user_id, Pending(Intent.HELP_APP.value, slots, "go"),
+        )
+        return f"No problem — I'll stay here. Ask when you're ready to open {name}."
+    if convo.is_hop_go(raw):
+        slots["_confirmed_go"] = True
+        slots.pop("_declined_go", None)
+        convo.set_pending(
+            user_id, Pending(Intent.HELP_APP.value, slots, "go"),
+        )
+        return f"Okay — heading to {name}."
+    return f"Want me to take you to {name}, or stay here?"
+
+
+def _do_set_identity(user_id: str, p: ParsedMessage) -> str:
+    slots = {"field": p.role, "value": p.message}
+    return _finish_identity(user_id, slots)
+
+
+def _continue_identity(
+    user_id: str, slots: dict, awaiting: str | None, p: ParsedMessage, raw: str,
+) -> str:
+    from . import agent
+
+    if awaiting == "field":
+        field = agent.canonical_identity_field(p.role or raw)
+        if not field:
+            return ("Which detail should I change — phone, email, location, "
+                    "LinkedIn, or GitHub?")
+        slots["field"] = field
+        if p.message:
+            slots["value"] = p.message
+    elif awaiting == "value":
+        slots["value"] = (p.message or raw).strip()
+    return _finish_identity(user_id, slots)
+
+
+def _finish_identity(user_id: str, slots: dict) -> str:
+    from . import agent, applicant
+
+    field = agent.canonical_identity_field(slots.get("field"))
+    value = slots.get("value")
+    if isinstance(value, str):
+        value = value.strip()
+    if not field:
+        convo.set_pending(
+            user_id, Pending(Intent.SET_IDENTITY.value, slots, "field"),
+        )
+        return ("Which detail should I change — phone, email, location, "
+                "LinkedIn, or GitHub?")
+    slots["field"] = field
+    if value in (None, ""):
+        convo.set_pending(
+            user_id, Pending(Intent.SET_IDENTITY.value, slots, "value"),
+        )
+        label = field.replace("_", " ")
+        return f"What's the new {label}?"
+    saved = applicant.set_identity(user_id, {field: value})
+    convo.clear_pending(user_id)
+    shown = saved.get(field)
+    if isinstance(shown, bool):
+        shown = "yes" if shown else "no"
+    label = field.replace("_", " ")
+    return f"Updated {label} to {shown}. I'll use that on forms."
+
+
 def _do_unknown(p: ParsedMessage, memory: dict) -> str:
     if p.company:
         last = memory.get("last_company")
@@ -1634,7 +1681,7 @@ def _do_unknown(p: ParsedMessage, memory: dict) -> str:
             f"Did you mean to:\n1) apply  2) update status  3) add a note{anchor}"
         )
     return (
-        "I didn't fully understand that.\n"
-        "Did you mean:\n1) apply to a job\n2) update an application\n3) add a note\n"
-        "(or text 'help')"
+        "I didn't fully understand that. Try “show new jobs”, "
+        "“how do I autofill”, or “change my phone to …”. "
+        "Say “commands” if you want the full list."
     )

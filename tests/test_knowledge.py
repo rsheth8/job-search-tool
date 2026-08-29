@@ -20,8 +20,11 @@ from app.intents import Intent
 def test_add_and_list_by_category():
     knowledge.add("u1", "project", "Built a real-time pricing service in Go")
     knowledge.add("u1", "achievement", "Cut p99 latency 40%")
-    assert len(knowledge.list_all("u1")) == 2
+    knowledge.add("u1", "experience",
+                  "Software intern at Acme — Austin, TX (Summer 2025)")
+    assert len(knowledge.list_all("u1")) == 3
     assert len(knowledge.list_all("u1", category="project")) == 1
+    assert len(knowledge.list_all("u1", category="experience")) == 1
     assert knowledge.list_all("u2") == []          # scoped per user
 
 
@@ -86,6 +89,26 @@ def test_knowledge_block_groups_what_it_knows():
     assert "Why us?" in block
 
 
+def test_knowledge_block_ranks_projects_by_context():
+    knowledge.add("u1", "project", "Native SwiftUI iOS app with HealthKit and EventKit",
+                  label="LockIn")
+    knowledge.add("u1", "project", "PyTorch autoencoder on printer telemetry",
+                  label="Printpal")
+    block = knowledge.knowledge_block("u1", context="iOS SwiftUI HealthKit native iPhone")
+    assert block.index("SwiftUI") < block.index("PyTorch")
+
+
+def test_knowledge_block_ranks_experience_by_context():
+    knowledge.add("u1", "experience",
+                  "Software intern at Acme — Austin, TX. Shipped React Native.")
+    knowledge.add("u1", "experience",
+                  "ML intern at Beta — Chicago, IL. Trained a PyTorch autoencoder.")
+    block = knowledge.knowledge_block(
+        "u1", context="React Native mobile intern Austin")
+    assert "WORK EXPERIENCE" in block
+    assert block.index("React Native") < block.index("PyTorch")
+
+
 # --- audit ------------------------------------------------------------------
 
 def test_audit_on_an_empty_profile_says_what_to_do():
@@ -93,6 +116,7 @@ def test_audit_on_an_empty_profile_says_what_to_do():
     assert report["score"] == 0.0
     assert "email" in report["identity_missing"]
     assert any("project" in s.lower() for s in report["suggestions"])
+    assert any("job with a city" in s.lower() for s in report["suggestions"])
 
 
 def test_audit_credits_what_is_filled_in():
@@ -104,7 +128,7 @@ def test_audit_credits_what_is_filled_in():
     })
     knowledge.add("u1", "project", "Built a pricing service")
     report = knowledge.audit("u1")
-    assert report["score"] > 0.3
+    assert report["score"] == round(5 / len(knowledge._IMPORTANT_IDENTITY), 2)
     assert "email" in report["identity_have"]
     assert "email" not in report["identity_missing"]
     assert report["knowledge_counts"]["project"] == 1
@@ -160,6 +184,38 @@ def test_the_drafter_is_given_the_knowledge_block(monkeypatch):
     assert "pricing service" in seen.get("knowledge_block", "")
 
 
+def test_the_drafter_sees_knowledge_ranked_for_the_jd(monkeypatch):
+    from app import apply_queue, jobstore, outreach
+    from app.jobsources import JobPosting
+
+    posting = jobstore.save_posting("u1", JobPosting(
+        source="greenhouse", external_id="1", title="iOS Engineer",
+        url="https://x/apply", company="Acme", location="Remote",
+        description="Native SwiftUI iPhone app with HealthKit."),
+        relevance_score=0.8, status="queued")
+    apply_queue.stage("u1", posting["id"])
+    knowledge.add("u1", "project", "Native SwiftUI iOS app with HealthKit",
+                  label="LockIn")
+    knowledge.add("u1", "project", "PySpark pipeline on AWS S3",
+                  label="Storelytics")
+    knowledge.add("u1", "experience",
+                  "Software intern at Acme — Austin, TX. Shipped SwiftUI screens.")
+    knowledge.add("u1", "experience",
+                  "ML intern at Beta — Chicago, IL. Trained a PyTorch autoencoder.")
+
+    seen = {}
+
+    def fake(questions, *a, **kw):
+        seen.update(kw)
+        return ["drafted"] * len(questions)
+
+    monkeypatch.setattr(outreach, "draft_question_answers", fake)
+    apply_queue.get_questions("u1", posting["id"])
+    block = seen.get("knowledge_block", "")
+    assert block.index("SwiftUI") < block.index("PySpark")
+    assert block.index("Austin") < block.index("PyTorch")
+
+
 def test_drafting_still_works_with_no_knowledge_at_all(monkeypatch):
     """Fail-open: an empty store must not break packaging."""
     from app import apply_queue, jobstore
@@ -178,6 +234,7 @@ def test_drafting_still_works_with_no_knowledge_at_all(monkeypatch):
 # --- the Slack surface ------------------------------------------------------
 
 @pytest.mark.parametrize("text,category", [
+    ("remember experience: Intern at Acme, Austin, TX", "experience"),
     ("remember project: I built a pricing service", "project"),
     ("remember achievement: I cut latency 40%", "achievement"),
     ("remember strength: systems debugging", "strength"),
@@ -195,6 +252,13 @@ def test_remember_infers_a_category_when_unlabelled():
     assert len(items) == 1
     assert items[0]["category"] == "project"
     assert "pricing service" in items[0]["text"]
+
+
+def test_remember_infers_experience_from_a_job_with_a_city():
+    engine.handle_sms("u1", "remember Intern at Acme, Austin, TX")
+    items = knowledge.list_all("u1")
+    assert len(items) == 1
+    assert items[0]["category"] == "experience"
 
 
 def test_remember_keeps_the_users_capitalisation():

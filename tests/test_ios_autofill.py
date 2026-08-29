@@ -98,12 +98,12 @@ def lib():
     return _extract_lib()
 
 
-def run_autofill(browser, server, lib, fixture, *, serve_rules=True):
+def run_autofill(browser, server, lib, fixture, *, serve_rules=True, identity=None):
     """Load a fixture, inject the profile exactly as WebView.swift does, run the
     engine, and hand back the page plus its reported result."""
     page = browser.new_page()
     payload = {
-        "identity": IDENTITY,
+        "identity": identity or IDENTITY,
         "answers": ANSWERS,
         "rules": fieldmatch.rules_payload() if serve_rules else None,
     }
@@ -129,6 +129,63 @@ def test_fills_identity_and_native_select(browser, server, lib):
         assert page.input_value("#linkedin") == "https://linkedin.com/in/rahil"
         assert page.input_value("#country") == "United States"
         assert page.input_value("#favorite") == ""      # no fact for it — left alone
+    finally:
+        page.close()
+
+
+def test_clicks_the_matching_combobox_option(browser, server, lib):
+    """A div role=combobox only commits when an option is clicked, not typed."""
+    page = run_autofill(browser, server, lib, "custom_dropdown.html")
+    try:
+        assert page.get_attribute("#country-combo", "data-selected") == "United States"
+        assert page.get_attribute("#auth-combo", "data-selected") == "Yes"
+    finally:
+        page.close()
+
+
+def test_selects_the_closest_typeahead_option(browser, server, lib):
+    """School/location typeaheads and a degree <select>: identity text is not an
+    allowed value, so we search and click the nearest option. The hidden committed
+    fields (what the form actually saves) must match — not the typed identity."""
+    ident = {
+        **IDENTITY,
+        "school": "University of Minnesota Twin Cities",
+        "location": "Chicago, IL",
+        "degree": "B.S. Computer Science (May 2026); M.S. Data Science (in progress)",
+    }
+    page = run_autofill(browser, server, lib, "typeahead_select.html", identity=ident)
+    try:
+        assert page.input_value("#school_id") == "University of Minnesota-Twin Cities"
+        assert page.input_value("#location_id") == "Chicago, Illinois, United States"
+        assert page.input_value("#degree") == "Master's Degree"
+        assert page.input_value("#school") == "University of Minnesota-Twin Cities"
+        assert page.input_value("#location") == "Chicago, Illinois, United States"
+    finally:
+        page.close()
+
+
+def test_js_pick_best_matches_python_select_value(browser, lib):
+    """The engine's closest-option picker is the JS port of fieldmatch.select_value."""
+    page = browser.new_page()
+    try:
+        page.evaluate(lib)
+        cases = [
+            (["United States", "Canada"], "USA"),
+            (["University of Minnesota Crookston", "University of Minnesota-Twin Cities"],
+             "University of Minnesota Twin Cities"),
+            (["Chicago, Illinois, United States", "Vernon Hills, Illinois, United States"],
+             "Chicago, IL"),
+            (["High School", "Bachelor's Degree", "Master's Degree"], "B.S."),
+            (["High School", "Bachelor's Degree", "Master's Degree"],
+             "B.S. Computer Science; M.S. Data Science (in progress)"),
+            (["Yes", "No"], "no"),
+            (["Authorized to work", "Not authorized"], "Authorized"),
+            (["Select…", "United States"], "USA"),
+        ]
+        for options, value in cases:
+            js = page.evaluate("([o, v]) => window.__applyPickBest(o, v)", [options, value])
+            py = fieldmatch.select_value(options, value)
+            assert js == py, (options, value, js, py)
     finally:
         page.close()
 
@@ -169,7 +226,7 @@ def test_clicks_ashby_style_yes_no_buttons(browser, server, lib):
 def test_never_submits_the_form(browser, server, lib):
     """Autofill fills; the human submits. Same promise as the worker."""
     for fixture in ("greenhouse_basic.html", "custom_dropdown.html", "eeo_present.html",
-                    "ashby_yesno_buttons.html"):
+                    "ashby_yesno_buttons.html", "typeahead_select.html"):
         page = run_autofill(browser, server, lib, fixture)
         try:
             assert "SUBMITTED" not in page.content()
@@ -193,6 +250,16 @@ def test_fills_optional_eeo_when_identity_has_values(browser, server, lib):
         assert page.input_value("#orientation") == ""
         assert not page.is_checked("input[name='gender_identity'][value='Yes']")
         assert not page.is_checked("input[name='gender_identity'][value='No']")
+    finally:
+        page.close()
+
+
+def test_fills_hispanic_latino_when_identity_has_a_value(browser, server, lib):
+    ident = {**IDENTITY, "hispanic_latino": "No"}
+    page = run_autofill(browser, server, lib, "eeo_present.html", identity=ident)
+    try:
+        assert page.input_value("#hispanic") == "No"
+        assert page.input_value("#orientation") == ""
     finally:
         page.close()
 
@@ -249,6 +316,37 @@ def test_reports_which_rule_set_ran(browser, server, lib):
         sent = page.evaluate("window.__sent")
         assert sent["filled"] > 0
         assert sent["rules"] == fieldmatch.rules_payload()["version"]
+        skips = {s["label"]: s["reason"] for s in sent.get("skips") or []}
+        assert skips.get("favorite color") == "unmatched"
+    finally:
+        page.close()
+
+
+def test_pick_best_matches_python_select_value(browser, lib):
+    """JS pickBest must stay on the same option as fieldmatch.select_value."""
+    page = browser.new_page()
+    try:
+        page.evaluate(lib)
+        cases = [
+            (["Male", "Female", "Non-binary"], "Man", "Male"),
+            (["Hispanic or Latino", "Not Hispanic or Latino"], "No",
+             "Not Hispanic or Latino"),
+            (["I am authorized to work in the US",
+              "I am not authorized to work in the US"], "Yes",
+             "I am authorized to work in the US"),
+            (["$80,000 - $100,000", "$100,000 - $130,000"], "120000",
+             "$100,000 - $130,000"),
+            (["0-2", "3+", "5+"], "5", "5+"),
+            (["Fully remote", "Hybrid", "On-site"], "Remote", "Fully remote"),
+            (["United States+1", "Canada+1"], "United States", "United States+1"),
+            (["3.7 - 4.0", "3.1 - 3.6", "3.0 or under"], "3.5", "3.1 - 3.6"),
+        ]
+        for options, value, expected in cases:
+            py = fieldmatch.select_value(options, value)
+            js = page.evaluate("([o, v]) => window.__applyPickBest(o, v)",
+                               [options, value])
+            assert py == expected, (options, value, py)
+            assert js == py, (options, value, js, py)
     finally:
         page.close()
 
@@ -301,3 +399,395 @@ def test_the_bundled_fallback_matches_the_python_rules():
     assert m, "no FALLBACK_EEO in Autofill.swift"
     assert m.group(1) == payload["never_fill"], (
         "bundled EEO list has drifted from app/fieldmatch.py — regenerate it")
+
+
+def _load_engine(browser, server, lib, fixture, *, wait_until="domcontentloaded"):
+    """Inject the iOS engine without running Fill — for probe / hop / pause tests."""
+    page = browser.new_page()
+    payload = {
+        "identity": IDENTITY,
+        "answers": ANSWERS,
+        "rules": fieldmatch.rules_payload(),
+    }
+    page.add_init_script(f"window.__APPLY = {json.dumps(payload)};")
+    page.add_init_script("""
+        window.__sent = [];
+        window.webkit = { messageHandlers: { applyfill: {
+            postMessage: (m) => { window.__sent.push(m); } } } };
+    """)
+    page.goto(f"{server}/{fixture}", wait_until=wait_until)
+    page.evaluate(lib)
+    return page
+
+
+def test_fill_or_pause_fills_generic_html(browser, server, lib):
+    """Fill is not gated on Greenhouse — a plain company form is enough."""
+    page = _load_engine(browser, server, lib, "custom_html_apply.html")
+    try:
+        probe = page.evaluate("window.__applyFormProbe()")
+        assert probe["kind"] == "application"
+        filled = page.evaluate("window.__applyFillOrPause()")
+        assert filled > 0
+        assert page.input_value("#email") == "rahil@example.com"
+        assert page.input_value("#first_name") == "Rahil"
+        assert "SUBMITTED" not in page.content()
+    finally:
+        page.close()
+
+
+def test_fill_or_pause_does_not_type_into_a_login_wall(browser, server, lib):
+    page = _load_engine(browser, server, lib, "login_wall.html")
+    try:
+        probe = page.evaluate("window.__applyFormProbe()")
+        assert probe["kind"] == "login"
+        filled = page.evaluate("window.__applyFillOrPause()")
+        assert filled == 0
+        assert page.input_value("#email") == ""
+        sent = page.evaluate("window.__sent")
+        assert sent and sent[-1]["status"] == "needsHuman"
+        assert sent[-1]["probe"]["kind"] == "login"
+    finally:
+        page.close()
+
+
+def test_fill_or_pause_does_not_type_through_a_captcha(browser, server, lib):
+    page = _load_engine(browser, server, lib, "captcha_wall.html")
+    try:
+        probe = page.evaluate("window.__applyFormProbe()")
+        assert probe["kind"] == "captcha"
+        filled = page.evaluate("window.__applyFillOrPause()")
+        assert filled == 0
+        assert page.input_value("#email") == ""
+        sent = page.evaluate("window.__sent")
+        assert sent and sent[-1]["status"] == "needsHuman"
+        assert sent[-1]["probe"]["kind"] == "captcha"
+    finally:
+        page.close()
+
+
+def test_find_apply_embed_hops_to_workable_not_captcha(browser, server, lib):
+    page = browser.new_page()
+    try:
+        page.route("**/*workable.com/**", lambda route: route.abort())
+        payload = {
+            "identity": IDENTITY,
+            "answers": ANSWERS,
+            "rules": fieldmatch.rules_payload(),
+        }
+        page.add_init_script(f"window.__APPLY = {json.dumps(payload)};")
+        page.goto(f"{server}/apply_embed.html", wait_until="domcontentloaded")
+        page.evaluate(lib)
+        url = page.evaluate("window.__applyFindApplyEmbed()")
+        assert url and "apply.workable.com" in url
+        assert "recaptcha" not in url
+    finally:
+        page.close()
+
+
+def test_watch_mode_clears_when_login_wall_drops(browser, server, lib):
+    page = _load_engine(browser, server, lib, "login_wall.html")
+    try:
+        page.evaluate("() => { void window.__applyDrive({ mode: 'watch' }); }")
+        page.wait_for_function(
+            "() => (window.__sent || []).some(m => m.status === 'needsHuman')",
+            timeout=3000,
+        )
+        page.evaluate("""() => {
+          document.body.innerHTML = `
+            <form>
+              <label for="email">Email</label>
+              <input type="email" id="email">
+              <label for="first_name">First name</label>
+              <input type="text" id="first_name">
+              <label for="last_name">Last name</label>
+              <input type="text" id="last_name">
+              <button type="submit">Submit application</button>
+            </form>`;
+        }""")
+        page.wait_for_function(
+            "() => (window.__sent || []).some(m => m.status === 'watchingClear')",
+            timeout=4000,
+        )
+        kinds = [m.get("probe", {}).get("kind") for m in page.evaluate("window.__sent")
+                 if m.get("status") == "watchingClear"]
+        assert kinds and kinds[-1] == "application"
+    finally:
+        page.close()
+
+
+# --- one fill, one report, one honest number --------------------------------
+#
+# The engine is injected with `forMainFrameOnly: false`, so it runs in every
+# frame on the page, and every frame posts into the SAME native handler. These
+# pin the three ways that used to go wrong.
+
+def _run_tree(browser, server, lib, fixture, *, wait=2500):
+    """Load a fixture, inject the engine into every frame, and funnel all frames'
+    native posts into one array — exactly how WKWebView's shared `applyfill`
+    handler sees them."""
+    page = browser.new_page()
+    payload = {"identity": IDENTITY, "answers": ANSWERS,
+               "rules": fieldmatch.rules_payload()}
+    page.add_init_script(f"window.__APPLY = {json.dumps(payload)};")
+    page.add_init_script("""
+      try { if (!window.top.__sent) window.top.__sent = []; } catch (e) {}
+      window.webkit = { messageHandlers: { applyfill: {
+        postMessage: (m) => { try { window.top.__sent.push(m); } catch (e) {} } } } };
+    """)
+    page.goto(f"{server}/{fixture}")
+    page.wait_for_timeout(700)
+    for frame in page.frames:
+        try:
+            frame.evaluate(lib)
+        except PlaywrightError:
+            pass                      # a frame that won't take script can't fill
+    page.evaluate("window.__applyAutofillAll()")
+    page.wait_for_timeout(wait)
+    return page, page.evaluate("window.__sent") or []
+
+
+def test_a_noise_frame_cannot_overwrite_the_real_fill_report(browser, server, lib):
+    """about:blank and a widget frame fill nothing. Their zero must not land on
+    top of the real result — that turned a filled form into "No fields matched"
+    and, worse, blanked the skips that grow the phrasing table."""
+    page, sent = _run_tree(browser, server, lib, "noise_frames.html")
+    try:
+        assert page.input_value("#first_name") == "Rahil"      # it really filled
+        assert len(sent) == 1, f"expected exactly one report, got {sent}"
+        assert sent[0]["filled"] == 4
+        # the skip survives, so filllearn still sees the unmatched label
+        labels = {s["label"] for s in sent[0].get("skips") or []}
+        assert "favorite color" in labels
+    finally:
+        page.close()
+
+
+def test_the_report_counts_fields_filled_inside_an_embedded_form(browser, server, lib):
+    """The whole point of the iframe hop: a careers page whose top frame has no
+    fields at all must still report what the embed filled."""
+    page, sent = _run_tree(browser, server, lib, "ashby_iframe.html")
+    try:
+        assert len(sent) == 1, f"expected exactly one report, got {sent}"
+        assert sent[0]["filled"] > 0, "embedded form filled, but the app was told 0"
+        assert sent[0]["url"].endswith("ashby_iframe.html")   # the page, not a frame
+    finally:
+        page.close()
+
+
+def test_a_second_fill_never_overwrites_an_answer_already_there(browser, server, lib):
+    """Autofill fills blanks. A value the person typed — or one an earlier pass
+    committed — survives tapping the button again."""
+    page = run_autofill(browser, server, lib, "greenhouse_basic.html")
+    try:
+        assert page.input_value("#phone") == "555-0100"
+        page.fill("#phone", "+1 (312) 555-9999")       # the human corrects it
+        page.evaluate("window.__applyAutofill()")
+        page.wait_for_timeout(300)
+        assert page.input_value("#phone") == "+1 (312) 555-9999"
+    finally:
+        page.close()
+
+
+def test_a_choice_field_is_left_empty_rather_than_filled_with_text_that_wont_save(
+        browser, server, lib):
+    """The quiet one. A declared combobox stores only what was *clicked*, so
+    typing into it paints text the person reads back as "done" while the field
+    the ATS submits stays empty. Better an empty box and a skip they can see."""
+    page = browser.new_page()
+    try:
+        payload = {"identity": IDENTITY, "answers": ANSWERS,
+                   "rules": fieldmatch.rules_payload()}
+        page.add_init_script(f"window.__APPLY = {json.dumps(payload)};")
+        page.goto(f"{server}/typeahead_select.html")
+        page.wait_for_timeout(600)
+        page.evaluate(lib)
+        page.evaluate("""() => {
+            window.__sent = [];
+            window.webkit = { messageHandlers: { applyfill: {
+                postMessage: (m) => window.__sent.push(m) } } };
+        }""")
+        page.evaluate("window.__applyAutofill()")
+        page.wait_for_timeout(1600)
+        # IDENTITY's school is not on this form's list.
+        assert page.input_value("#school_id") == "", "fixture assumption changed"
+        assert page.input_value("#school") == "", (
+            "typed text left in a combobox that never committed — the form looks "
+            "filled and submits empty")
+        # and the one that IS on the list still commits, both display and value
+        assert page.input_value("#location_id") == "Chicago, Illinois, United States"
+        reasons = {s["key"]: s["reason"] for s in page.evaluate("window.__sent")[0]["skips"]
+                   if s.get("key")}
+        assert reasons.get("school") == "no_option"
+    finally:
+        page.close()
+
+
+def test_autopilot_fills_both_steps_counts_once_and_stops_before_submit(
+        browser, server, lib):
+    """`__applyDrive({mode:'run'})` is what the ⚡ button actually calls, and it
+    had no coverage. It must fill step 1, click Next, fill step 2, report the
+    total once — and stop at the Submit button, never through it."""
+    page = browser.new_page()
+    try:
+        payload = {"identity": IDENTITY, "answers": ANSWERS,
+                   "rules": fieldmatch.rules_payload()}
+        page.add_init_script(f"window.__APPLY = {json.dumps(payload)};")
+        page.goto(f"{server}/two_step_next.html")
+        page.wait_for_timeout(300)
+        page.evaluate(lib)
+        page.evaluate("""() => {
+            window.__sent = [];
+            window.webkit = { messageHandlers: { applyfill: {
+                postMessage: (m) => window.__sent.push(m) } } };
+        }""")
+        page.evaluate("() => { void window.__applyDrive({ mode: 'run' }); }")
+        page.wait_for_function(
+            "() => (window.__sent || []).some(m => m.status === 'ready')",
+            timeout=12000)
+        assert page.input_value("#email") == "rahil@example.com"     # step 1
+        assert page.input_value("#phone") == "555-0100"              # step 2
+        assert page.input_value("#linkedin") == "https://linkedin.com/in/rahil"
+        sent = page.evaluate("window.__sent")
+        ready = [m for m in sent if m["status"] == "ready"][-1]
+        assert ready["filled"] == 5, f"total should count each field once: {sent}"
+        assert [m["status"] for m in sent].count("advancing") == 1
+        assert page.get_attribute("body", "data-submitted") is None
+    finally:
+        page.close()
+
+
+# --- pages that look blocked but aren't -------------------------------------
+#
+# Each of these was found by running the shipping engine against a live posting,
+# not against a fixture. The fixtures below reproduce the DOM those pages have.
+
+def test_an_invisible_recaptcha_is_not_a_wall(browser, server, lib):
+    """Greenhouse puts a score-based reCAPTCHA on every posting it serves. It
+    asks the person for nothing, so calling it a blocker meant the app refused to
+    fill the most common application form there is."""
+    page = _load_engine(browser, server, lib, "invisible_captcha_form.html")
+    try:
+        probe = page.evaluate("window.__applyFormProbe()")
+        assert probe["kind"] == "application", probe
+        assert probe["captcha"] is False
+        filled = page.evaluate("window.__applyFillOrPause()")
+        assert filled >= 4
+        assert page.input_value("#email") == "rahil@example.com"
+    finally:
+        page.close()
+
+
+def test_a_visible_checkbox_captcha_still_stops_the_fill(browser, server, lib):
+    """The other half of the same rule: a challenge someone has to tick is still
+    a blocker, and the engine still must not type behind it."""
+    page = _load_engine(browser, server, lib, "captcha_wall.html")
+    try:
+        assert page.evaluate("window.__applyFormProbe()")["kind"] == "captcha"
+        assert page.evaluate("window.__applyFillOrPause()") == 0
+        assert page.input_value("#email") == ""
+    finally:
+        page.close()
+
+
+def test_a_sign_in_link_in_the_site_nav_is_not_a_login_wall(browser, server, lib):
+    """Nearly every careers page has "Sign in" in its chrome. Counting it made
+    the app tell people to log in by hand with an Apply button right there."""
+    page = _load_engine(browser, server, lib, "nav_login_link.html")
+    try:
+        probe = page.evaluate("window.__applyFormProbe()")
+        assert probe["kind"] != "login", probe
+        assert probe["revealLabel"] == "Apply now"
+    finally:
+        page.close()
+
+
+def test_autopilot_fills_an_embedded_form_instead_of_clicking_apply_forever(
+        browser, server, lib):
+    """The top frame has no fields, so the loop used to click "Apply now" to the
+    step limit and report ready over an untouched form. It must fill the embed,
+    report what the embed filled, and not spin on reveal."""
+    page = browser.new_page()
+    try:
+        payload = {"identity": IDENTITY, "answers": ANSWERS,
+                   "rules": fieldmatch.rules_payload()}
+        page.add_init_script(f"window.__APPLY = {json.dumps(payload)};")
+        page.add_init_script(lib)          # as WKUserScript does, in every frame
+        page.add_init_script("""
+          try { if (!window.top.__sent) window.top.__sent = []; } catch (e) {}
+          window.webkit = { messageHandlers: { applyfill: {
+            postMessage: (m) => { try { window.top.__sent.push(m); } catch (e) {} } } } };
+        """)
+        page.goto(f"{server}/embedded_apply.html")
+        page.wait_for_timeout(600)
+        page.evaluate("() => { void window.__applyDrive({ mode: 'run' }); }")
+        page.wait_for_function(
+            "() => (window.top.__sent || []).some(m => m.status === 'ready')",
+            timeout=20000)
+        sent = page.evaluate("window.top.__sent")
+        ready = [m for m in sent if m["status"] == "ready"][-1]
+        assert ready["filled"] > 0, f"filled the embed but reported nothing: {sent}"
+        reveals = [m for m in sent if m.get("detail") == "reveal"]
+        assert len(reveals) <= 2, f"spun on the reveal button: {len(reveals)} clicks"
+        frame = page.frame(name=None, url=lambda u: u.endswith("greenhouse_basic.html"))
+        assert frame.input_value("#email") == "rahil@example.com"
+    finally:
+        page.close()
+
+
+def test_an_invisible_hcaptcha_beside_a_form_is_not_a_wall(browser, server, lib):
+    """Lever runs hCaptcha in invisible mode: the widget is declared, its script
+    has drawn it, and what it drew has no height. Calling that a challenge meant
+    refusing to fill every field on a Lever application."""
+    page = _load_engine(browser, server, lib, "invisible_hcaptcha_form.html")
+    try:
+        probe = page.evaluate("window.__applyFormProbe()")
+        assert probe["kind"] == "application", probe
+        assert page.evaluate("window.__applyFillOrPause()") >= 3
+        assert page.input_value("#email") == "rahil@example.com"
+    finally:
+        page.close()
+
+
+def test_im_interested_counts_as_the_button_that_opens_the_application(
+        browser, server, lib):
+    """SmartRecruiters' wording for Apply."""
+    page = _load_engine(browser, server, lib, "interested_reveal.html")
+    try:
+        assert page.evaluate("window.__applyFormProbe()")["revealLabel"] == "I'm interested"
+    finally:
+        page.close()
+
+
+def test_fields_sharing_a_block_do_not_inherit_each_others_labels(
+        browser, server, lib):
+    """The worst kind of miss: not a field left blank, but the *wrong value* typed
+    into a real application. On Workable, city/postcode/country all resolved to
+    "first name" and got the first name typed into all three."""
+    page = browser.new_page()
+    try:
+        identity = dict(IDENTITY, city="Chicago", zip="60601",
+                        country="United States")
+        payload = {"identity": identity, "answers": ANSWERS,
+                   "rules": fieldmatch.rules_payload()}
+        page.add_init_script(f"window.__APPLY = {json.dumps(payload)};")
+        page.goto(f"{server}/shared_ancestor_labels.html")
+        page.evaluate(lib)
+        keys = page.evaluate("""() => {
+            const out = {};
+            for (const el of document.querySelectorAll("input")) {
+                out[el.name] = window.__applyMatchKey(
+                    window.__applyFieldLabel(el), el.name, el.id,
+                    el.getAttribute("autocomplete"), el.type);
+            }
+            return out;
+        }""")
+        assert keys == {"firstname": "first_name", "city": "city",
+                        "postcode": "zip", "country": "country"}, keys
+        page.evaluate("window.__applyAutofill()")
+        page.wait_for_timeout(400)
+        assert page.input_value("#firstname") == "Rahil"
+        assert page.input_value("#city") == "Chicago"
+        assert page.input_value("#postcode") == "60601"
+        assert page.input_value("#country") == "United States"
+    finally:
+        page.close()

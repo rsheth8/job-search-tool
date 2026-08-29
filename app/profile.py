@@ -7,6 +7,7 @@ the rest.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 
@@ -40,15 +41,45 @@ def has_profile(user_id: str) -> bool:
 
 def public_fields(user_id: str) -> dict:
     """Search-profile fields the iOS setup wizard reads/writes."""
-    keys = ("roles", "keywords", "locations", "seniority")
+    keys = ("roles", "keywords", "locations", "seniority", "resume_summary")
     row = get_profile(user_id)
     if row is None:
         return {k: "" for k in keys}
     return {k: (row[k] or "") for k in keys}
 
 
+def get_prefs(user_id: str) -> dict:
+    """Decoded ``prefs_json`` (empty dict if missing or invalid)."""
+    row = get_profile(user_id)
+    if row is None:
+        return {}
+    try:
+        raw = row["prefs_json"]
+    except (IndexError, KeyError):
+        raw = None
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def update_prefs(user_id: str, **fields) -> dict:
+    """Merge keys into ``prefs_json``. ``None`` values delete a key."""
+    prefs = get_prefs(user_id)
+    for key, value in fields.items():
+        if value is None:
+            prefs.pop(key, None)
+        else:
+            prefs[key] = value
+    set_profile(user_id, prefs_json=json.dumps(prefs))
+    return prefs
+
+
 def all_profile_users() -> list[str]:
-    """Every user with a saved profile (drives aggregator-only discovery sweeps)."""
+    """Every user with a saved profile (drives wide-discovery sweeps)."""
     with connect() as conn:
         return [
             r[0]

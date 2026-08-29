@@ -1,21 +1,16 @@
-"""FastAPI app exposing the Twilio SMS webhook.
+"""FastAPI app for the iOS beta.
 
-Twilio POSTs application/x-www-form-urlencoded with `From` and `Body`.
-We reply with TwiML so the user gets an immediate SMS back — no outbound
-Twilio credentials required for Phase 1.
+Session-authenticated chat and apply JSON APIs are the product surface.
 """
 from __future__ import annotations
 
-import json
 from contextlib import asynccontextmanager
-from xml.sax.saxutils import escape
 
-from fastapi import BackgroundTasks, FastAPI, Form, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request, Response
 
 from .config import get_settings
 from .db import init_db
-from .engine import handle_sms
+from .errors import install as install_error_handlers
 
 
 @asynccontextmanager
@@ -49,12 +44,14 @@ def _init_sentry() -> None:
 
 
 app = FastAPI(
-    title="Job Search SMS Intelligence", version="0.1.0", lifespan=lifespan
+    title="Job Search Apply", version="0.1.0", lifespan=lifespan
 )
+install_error_handlers(app)
 
-# CORS for the application-autofill extension: its content script runs on ATS
-# origins (greenhouse.io, lever.co, …) and calls /apply/* cross-origin. Writes are
-# additionally gated by the X-Apply-Token header (see _require_apply_token).
+# CORS for local tooling / scripts that hit apply endpoints from a browser.
+# The iOS app uses session auth; CORS is not required for native requests.
+# Writes are additionally gated by the X-Apply-Token header (see
+# _require_apply_token).
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 _s = get_settings()
@@ -91,92 +88,10 @@ def _require_apply_token(request: Request) -> None:
 
 
 def _resolve_user(request: Request, user: str | None = None) -> str:
-    """Prefer the signed-in session user; never fall back to default_user()."""
+    """Prefer the signed-in session user; never invent a default."""
     from . import auth
 
     return auth.resolve_user(request, user)
-
-
-@app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, user: str | None = None) -> HTMLResponse:
-    """Read-only pipeline dashboard. Session user in prod; ``?user=`` locally."""
-    from . import auth
-    from . import dashboard as dash
-
-    return HTMLResponse(dash.render(auth.html_user(request, user)))
-
-
-@app.get("/train", response_class=HTMLResponse)
-def train_page(request: Request, user: str | None = None) -> HTMLResponse:
-    """Tinder-style swipe trainer to bootstrap the re-ranker on real postings."""
-    from . import auth
-    from . import trainer
-
-    return HTMLResponse(trainer.render_page(auth.html_user(request, user)))
-
-
-@app.get("/train/deck")
-def train_deck(
-    request: Request,
-    user: str | None = None, n: int = 15, diverse: bool = False,
-    mode: str | None = None,
-) -> dict:
-    """Return scored cards FAST (no summaries) so the deck shows instantly; the
-    client fetches summaries lazily via /train/summaries.
-
-    ``mode`` picks the deck strategy: 'best' (top matches), 'mix' (spread for
-    balanced training), or 'learn' (active learning — most-uncertain first).
-    ``diverse`` is kept for back-compat (== mode 'mix')."""
-    from . import trainer
-
-    uid = _resolve_user(request, user)
-    cards = trainer.build_deck(
-        uid, limit=n,
-        diverse=diverse or mode == "mix",
-        uncertain=mode == "learn",
-    )
-    return {"user": uid, "cards": cards, "stats": trainer.stats(uid)}
-
-
-@app.post("/train/summaries")
-async def train_summaries(request: Request) -> dict:
-    """Generate (batched + cached) the plain-language summaries for the given
-    cards. Returns a map keyed by 'source:external_id' so the client fills them in
-    after the card is already on screen."""
-    from . import insights, profile as prof
-
-    body = await request.json()
-    uid = _resolve_user(request, body.get("user"))
-    items = body.get("items") or []
-    enriched = insights.enrich(items, prof.profile_text(prof.get_profile(uid)))
-    fields = ("about", "tldr", "level", "skills", "fit")
-    return {"summaries": {
-        f"{c.get('source')}:{c.get('external_id')}": {k: c.get(k) for k in fields if c.get(k)}
-        for c in enriched
-    }}
-
-
-@app.post("/train/label")
-async def train_label(request: Request) -> dict:
-    """Record one swipe, retrain the model if there's enough signal, return stats."""
-    from . import profile as prof
-    from . import reranker, trainer
-
-    body = await request.json()
-    uid = _resolve_user(request, body.get("user"))
-    item = body.get("item") or {}
-    label = body.get("label", "pass")
-    trainer.record_label(uid, item, label)
-    reranker.maybe_retrain(uid, prof.get_profile(uid))
-    return trainer.stats(uid)
-
-
-@app.get("/apply")
-def apply_page(request: Request, user: str | None = None) -> HTMLResponse:
-    """Semi-auto application queue: staged matches with pre-assembled packages."""
-    from . import apply_queue, auth
-
-    return HTMLResponse(apply_queue.render_page(auth.html_user(request, user)))
 
 
 @app.get("/apply/data")
@@ -187,11 +102,24 @@ def apply_data(request: Request, user: str | None = None) -> dict:
     so the mobile app can show reasons instead of a bare percentage that can't be
     argued with. Computed heuristically from the posting + profile, so it's free.
     """
-    from . import apply_queue, fit, jobstore
+    from datetime import datetime, timezone
+
+    from . import apply_queue, ats, discovery, fit, jobstore, shortlist
     from . import profile as profile_mod
+    from .config import get_settings
 
     uid = _resolve_user(request, user)
+    refresh = (request.query_params.get("refresh") or "").strip().lower()
+    if refresh in ("1", "true", "yes"):
+        discovery.kick(uid)
+    jobstore.wake_snoozed(uid, datetime.now(timezone.utc).isoformat())
+    settings = get_settings()
+    if settings.job_verify_apply_urls:
+        from .jobsources import alive
+
+        alive.close_dead_shortlist(uid, today_n=settings.job_digest_top_n)
     prof = profile_mod.get_profile(uid)
+    today_n = settings.job_digest_top_n
 
     def explain(posting_id: int, score=None) -> dict:
         posting = jobstore.get_posting(uid, posting_id)
@@ -202,38 +130,68 @@ def apply_data(request: Request, user: str | None = None) -> dict:
                 "concerns": detail["concerns"]}
 
     staged = {it["posting_id"] for it in apply_queue.list_queue(uid)}
-    from . import ats
-    queued = [
-        {"posting_id": r["id"], "company": r["company"], "title": r["title"],
-         "url": r["url"], "score": r["relevance_score"], "source": r["source"],
-         "auto_fillable": ats.is_fillable_form(r["url"]),
-         **explain(r["id"], r["relevance_score"])}
-        for r in jobstore.list_review_queue(uid) if r["id"] not in staged
-    ]
+    queued = []
+    for i, r in enumerate(
+        r for r in jobstore.list_review_queue(uid) if r["id"] not in staged
+    ):
+        queued.append({
+            "posting_id": r["id"], "company": r["company"], "title": r["title"],
+            "url": r["url"], "score": r["relevance_score"], "source": r["source"],
+            "auto_fillable": ats.is_fillable_form(r["url"]),
+            "apply_kind": ats.apply_kind(r["url"], r["source"]),
+            "apply_today": i < today_n,
+            "fresh": shortlist.is_fresh(r["posted_at"]),
+            **explain(r["id"], r["relevance_score"]),
+        })
     queue = [{**it, **explain(it["posting_id"], it.get("score"))}
              for it in apply_queue.list_queue(uid)]
-    return {"user": uid, "queued": queued, "queue": queue}
+    return {
+        "user": uid, "queued": queued, "queue": queue,
+        "discovery": discovery.search_status(uid),
+    }
 
 
-@app.get("/apply/inflight")
-def apply_inflight(request: Request, user: str | None = None) -> dict:
-    """Everything the submit worker is currently handling, for the mobile in-flight
-    view. Same rows the dashboard and the Slack reply are built from."""
-    from . import dashboard as dash
-    from . import fill_requests
+@app.post("/apply/discover")
+async def apply_discover(request: Request) -> dict:
+    """Start a discovery pass for the signed-in user (quiz / pull-to-refresh).
 
-    _require_apply_token(request)
+    Returns immediately. The Apply tab re-reads ``GET /apply/data`` until
+    ``discovery.searching`` is false. Rate-limited per user so a chatty
+    tester cannot stack ticks.
+    """
+    from . import discovery
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — empty body is a valid kick
+        body = {}
+    uid = _resolve_user(request, body.get("user") if isinstance(body, dict) else None)
+    force = bool(body.get("force")) if isinstance(body, dict) else False
+    return {"user": uid, **discovery.kick(uid, force=force)}
+
+
+@app.get("/apply/applications")
+def apply_applications(request: Request, user: str | None = None) -> dict:
+    """Applications already filed — the tracker half of the Apply tab."""
+    from . import store
+
     uid = _resolve_user(request, user)
-    rows = dash.in_flight_rows(uid)
-    # Attach the request id + preview so the phone can approve without a second call.
-    by_posting = {r["posting_id"]: r for r in fill_requests.list_active(uid)}
-    for row in rows:
-        req = by_posting.get(row["id"])
-        if req is not None:
-            row["request_id"] = req["id"]
-            row["status"] = req["status"]
-            row["preview"] = req.get("preview")
-    return {"user": uid, "inflight": rows}
+    rows = store.list_applications(uid, limit=50)
+    return {
+        "user": uid,
+        "applications": [
+            {
+                "id": r["id"],
+                "company": r["company"],
+                "role": r["role"],
+                "status": r["status"],
+                "applied_at": r["applied_at"],
+                "next_follow_up_at": r["next_follow_up_at"],
+            }
+            for r in rows
+        ],
+    }
 
 
 @app.get("/apply/knowledge")
@@ -249,8 +207,8 @@ def apply_knowledge(request: Request, user: str | None = None) -> dict:
 
 @app.post("/apply/knowledge")
 async def apply_knowledge_add(request: Request) -> dict:
-    """Store one durable fact (project / achievement / strength / preference /
-    answer). Returns the saved row, or ok=False for an unknown category."""
+    """Store one durable fact (experience / project / achievement / strength /
+    preference / answer). Returns the saved row, or ok=False for an unknown category."""
     from . import knowledge
 
     _require_apply_token(request)
@@ -287,8 +245,22 @@ async def apply_package(request: Request) -> dict:
 
     body = await request.json()
     uid = _resolve_user(request, body.get("user"))
-    pkg = apply_queue.get_package(uid, int(body["posting_id"]))
-    return pkg or {"error": "not found"}
+    from fastapi import HTTPException
+
+    try:
+        pid = int(body["posting_id"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="That application is missing. Go back and try Preflight again.",
+        ) from exc
+    pkg = apply_queue.get_package(uid, pid)
+    if pkg is None:
+        raise HTTPException(
+            status_code=404,
+            detail="That application isn't ready yet. Go back and tap Preflight again.",
+        )
+    return pkg
 
 
 @app.post("/apply/answer/save")
@@ -329,7 +301,7 @@ async def apply_mark(request: Request) -> dict:
 @app.post("/apply/applied")
 async def apply_applied(request: Request) -> dict:
     """Mobile app: the user finished and submitted an application in the in-app
-    browser. Log it (application record + posting + queue), like the worker does."""
+    browser. Log it (application record + posting + queue)."""
     from . import apply_queue, jobstore, store
 
     body = await request.json()
@@ -369,6 +341,55 @@ async def apply_pass(request: Request) -> dict:
     return {"ok": True}
 
 
+@app.post("/apply/snooze")
+async def apply_snooze(request: Request) -> dict:
+    """Hide a posting for a while (default 7 days). Unstages it if it was ready;
+    discovery and /apply/data wake it when the snooze expires."""
+    from datetime import datetime, timedelta, timezone
+    from . import apply_queue, jobstore
+
+    body = await request.json()
+    uid = _resolve_user(request, body.get("user"))
+    pid = int(body["posting_id"])
+    if jobstore.get_posting(uid, pid) is None:
+        return {"ok": False}
+    try:
+        days = int(body.get("days") or 7)
+    except (TypeError, ValueError):
+        days = 7
+    days = max(1, min(days, 90))
+    until = datetime.now(timezone.utc) + timedelta(days=days)
+    apply_queue.remove(uid, pid)
+    jobstore.snooze_posting(pid, until.isoformat())
+    return {"ok": True, "until": until.isoformat()}
+
+
+@app.post("/apply/promote")
+async def apply_promote(request: Request) -> dict:
+    """Make this the next ready item (front of the apply queue)."""
+    from . import apply_queue
+
+    body = await request.json()
+    uid = _resolve_user(request, body.get("user"))
+    return {"ok": apply_queue.promote(uid, int(body["posting_id"]))}
+
+
+@app.post("/apply/reorder")
+async def apply_reorder(request: Request) -> dict:
+    """Persist drag-to-reorder on the phone. ``queue`` is ready items; ``matches``
+    is the un-staged list. Either key may be omitted."""
+    from . import apply_queue, jobstore
+
+    body = await request.json()
+    uid = _resolve_user(request, body.get("user"))
+    ok = True
+    if "queue" in body and body["queue"] is not None:
+        ok = apply_queue.reorder(uid, [int(x) for x in body["queue"]]) and ok
+    if "matches" in body and body["matches"] is not None:
+        ok = jobstore.reorder_matches(uid, [int(x) for x in body["matches"]]) and ok
+    return {"ok": ok}
+
+
 @app.post("/apply/device")
 async def apply_register_device(request: Request) -> dict:
     """Register this phone for push notifications (new matches, approval ready)."""
@@ -378,7 +399,8 @@ async def apply_register_device(request: Request) -> dict:
     body = await request.json()
     uid = _resolve_user(request, body.get("user"))
     ok = push.register_device(uid, body.get("token") or "",
-                              body.get("platform") or "ios")
+                              body.get("platform") or "ios",
+                              timezone=body.get("timezone"))
     # `configured` tells the app whether pushes will actually arrive, so it can say
     # so in Settings instead of silently registering into a void.
     return {"ok": ok, "configured": push.configured()}
@@ -396,8 +418,7 @@ async def apply_forget_device(request: Request) -> dict:
 
 @app.get("/apply/rules")
 def apply_rules(request: Request) -> dict:
-    """The field-matching rules (+ formprobe patterns), so the extension and the
-    iOS browser stop carrying hand-ported copies that drift out of date."""
+    """The field-matching rules (+ formprobe patterns) for the iOS in-app browser."""
     from . import fieldmatch, formprobe
 
     _require_apply_token(request)
@@ -406,9 +427,42 @@ def apply_rules(request: Request) -> dict:
     return payload
 
 
+@app.post("/apply/fill-skips")
+async def apply_fill_skips(request: Request) -> dict:
+    """Record labels Fill skipped so unmatched ATS wording becomes a phrasing table."""
+    from . import filllearn
+
+    _require_apply_token(request)
+    body = await request.json()
+    uid = _resolve_user(request, body.get("user"))
+    pid = body.get("posting_id")
+    try:
+        posting_id = int(pid) if pid is not None and str(pid).strip() != "" else None
+    except (TypeError, ValueError):
+        posting_id = None
+    return {
+        "user": uid,
+        **filllearn.record_skips(
+            uid, body.get("skips") or [],
+            url=body.get("url") or "",
+            posting_id=posting_id,
+        ),
+    }
+
+
+@app.get("/apply/fill-skips")
+def apply_fill_skips_list(request: Request, user: str | None = None,
+                          limit: int = 50) -> dict:
+    from . import filllearn
+
+    _require_apply_token(request)
+    uid = _resolve_user(request, user)
+    return {"user": uid, "skips": filllearn.list_skips(uid, limit=limit)}
+
+
 @app.get("/apply/identity")
 def apply_identity(request: Request, user: str | None = None) -> dict:
-    """The applicant identity map the extension paints onto simple form fields."""
+    """The applicant identity map painted onto simple form fields."""
     from . import applicant
 
     _require_apply_token(request)
@@ -418,7 +472,7 @@ def apply_identity(request: Request, user: str | None = None) -> dict:
 
 @app.post("/apply/identity")
 async def apply_identity_set(request: Request) -> dict:
-    """Save/update applicant identity (used by the extension options page)."""
+    """Save/update applicant identity."""
     from . import applicant
 
     _require_apply_token(request)
@@ -431,11 +485,35 @@ async def apply_identity_set(request: Request) -> dict:
 
 @app.get("/apply/setup")
 def apply_setup(request: Request, user: str | None = None) -> dict:
-    """First-run wizard status (profile + identity coverage)."""
+    """First-run quiz status (profile + identity coverage)."""
     from . import onboarding
 
     uid = _resolve_user(request, user)
     return {"user": uid, **onboarding.status(uid)}
+
+
+@app.post("/apply/setup")
+async def apply_setup_set(request: Request) -> dict:
+    """Pin a new member in the quiz (start) or let them through (complete)."""
+    from fastapi import HTTPException
+
+    from . import onboarding
+
+    body = await request.json()
+    uid = _resolve_user(request, body.get("user"))
+    action = (body.get("action") or "").strip().lower()
+    if action == "start":
+        return {"user": uid, **onboarding.mark_started(uid)}
+    if action in ("complete", "done", "finish"):
+        from . import discovery
+
+        out = {"user": uid, **onboarding.mark_complete(uid)}
+        # First-run: don't wait for the 10-minute scheduler. Force a pass even
+        # if they saved roles (and kicked) a few seconds ago.
+        discovery.kick(uid, force=True)
+        out["discovery"] = discovery.search_status(uid)
+        return out
+    raise HTTPException(status_code=400, detail="action must be start or complete")
 
 
 @app.get("/apply/profile")
@@ -461,9 +539,105 @@ async def apply_profile_set(request: Request) -> dict:
         keywords=fields.get("keywords") or fields.get("roles"),
         locations=fields.get("locations"),
         seniority=fields.get("seniority"),
+        resume_summary=fields.get("resume_summary"),
     )
+    has = profile_mod.has_profile(uid)
+    if has:
+        from . import discovery
+
+        discovery.kick(uid)
     return {"user": uid, "fields": profile_mod.public_fields(uid),
-            "has_profile": profile_mod.has_profile(uid)}
+            "has_profile": has}
+
+
+async def _import_payload(request: Request) -> tuple[str, str, str, bytes | None]:
+    """JSON ``{text}`` or multipart ``file`` (+ optional ``text``)."""
+    ctype = (request.headers.get("content-type") or "").lower()
+    if "multipart/form-data" in ctype:
+        form = await request.form()
+        uid = _resolve_user(request, form.get("user"))
+        upload = form.get("file")
+        text = str(form.get("text") or "")
+        filename, data = "", None
+        if upload is not None and hasattr(upload, "read"):
+            filename = getattr(upload, "filename", "") or "upload"
+            data = await upload.read()
+        return uid, text, filename, data
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    uid = _resolve_user(request, body.get("user"))
+    return uid, (body.get("text") or ""), (body.get("filename") or ""), None
+
+
+@app.post("/apply/import/resume")
+async def apply_import_resume(request: Request) -> dict:
+    """Scan a resume PDF/text and fill empty profile fields."""
+    from fastapi import HTTPException
+
+    from . import profile_import as pi
+
+    _require_apply_token(request)
+    uid, text, filename, data = await _import_payload(request)
+    try:
+        return {"user": uid, **pi.import_resume(
+            uid, text=text, filename=filename, data=data)}
+    except pi.ProfileImportError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+
+
+@app.post("/apply/import/github")
+async def apply_import_github(request: Request) -> dict:
+    """Fill empty fields from a public GitHub profile + top repos."""
+    from fastapi import HTTPException
+
+    from . import profile_import as pi
+
+    _require_apply_token(request)
+    body = await request.json()
+    uid = _resolve_user(request, body.get("user"))
+    handle = body.get("username") or body.get("url") or body.get("handle") or ""
+    try:
+        return {"user": uid, **pi.import_github(uid, handle)}
+    except pi.ProfileImportError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+
+
+@app.post("/apply/import/linkedin")
+async def apply_import_linkedin(request: Request) -> dict:
+    """Save a LinkedIn URL and/or scan a LinkedIn PDF / pasted profile text."""
+    from fastapi import HTTPException
+
+    from . import profile_import as pi
+
+    _require_apply_token(request)
+    ctype = (request.headers.get("content-type") or "").lower()
+    if "multipart/form-data" in ctype:
+        form = await request.form()
+        uid = _resolve_user(request, form.get("user"))
+        url = str(form.get("url") or "")
+        text = str(form.get("text") or "")
+        upload = form.get("file")
+        filename, data = "", None
+        if upload is not None and hasattr(upload, "read"):
+            filename = getattr(upload, "filename", "") or "upload"
+            data = await upload.read()
+    else:
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        uid = _resolve_user(request, body.get("user"))
+        url = body.get("url") or ""
+        text = body.get("text") or ""
+        filename, data = body.get("filename") or "", None
+    try:
+        return {"user": uid, **pi.import_linkedin(
+            uid, url=url, text=text, filename=filename, data=data)}
+    except pi.ProfileImportError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
 
 
 @app.post("/feedback")
@@ -477,7 +651,7 @@ async def feedback_submit(request: Request) -> dict:
     text = (body.get("body") or body.get("text") or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="body required")
-    row = fb.add(uid, text)
+    row = fb.add(uid, text, context=body.get("context"))
     return {"ok": True, "id": row["id"]}
 
 
@@ -485,7 +659,7 @@ async def feedback_submit(request: Request) -> dict:
 async def apply_answer(request: Request) -> dict:
     """Draft an answer to one free-text application question. ``posting_id`` adds
     the JD/company as context; ``company``/``title``/``jd`` can be passed directly
-    when the extension only has the live page (no posting on file)."""
+    when the client only has the live page (no posting on file)."""
     from . import applicant, apply_queue, jobstore, outreach
     from . import profile as prof
 
@@ -513,166 +687,6 @@ async def apply_answer(request: Request) -> dict:
     return {"question": question, "answer": answer}
 
 
-@app.post("/apply/autosubmit")
-async def apply_autosubmit(request: Request) -> dict:
-    """User asks the worker to fill (and, after they approve, submit) an item."""
-    from fastapi import HTTPException
-
-    from . import apply_queue, fill_requests
-    from . import ats
-
-    if not get_settings().apply_autosubmit_enabled:
-        raise HTTPException(
-            status_code=403,
-            detail="auto-submit is off for testers — use in-app Autofill",
-        )
-
-    body = await request.json()
-    uid = _resolve_user(request, body.get("user"))
-    pid = int(body["posting_id"])
-    apply_queue.stage(uid, pid)  # ensure it's staged + its package is ready
-    pkg = apply_queue.get_package(uid, pid) or {}
-    url = pkg.get("url", "")
-    # Any http(s) apply URL may be attempted; formprobe decides after navigation.
-    # known_ats is a confidence label for the UI (Greenhouse/Lever/Ashby hosts).
-    if not ats.may_autosubmit(url):
-        return {"fillable": False, "url": url, "known_ats": False}
-    req = fill_requests.create(uid, pid)
-    return {
-        "request_id": req["id"], "status": req["status"], "fillable": True,
-        "known_ats": ats.is_fillable_form(url),
-    }
-
-
-@app.get("/apply/request")
-def apply_request_status(
-    request: Request, user: str | None = None, posting_id: int = 0,
-) -> dict:
-    """Current fill-request state for a posting (drives the review-page polling)."""
-    from . import fill_requests
-
-    uid = _resolve_user(request, user)
-    return {"request": fill_requests.for_posting(uid, posting_id)}
-
-
-@app.post("/apply/request/approve")
-async def apply_request_approve(request: Request) -> dict:
-    """User approves a filled preview — the worker may now submit it."""
-    from . import fill_requests
-
-    body = await request.json()
-    uid = _resolve_user(request, body.get("user"))
-    return {"ok": fill_requests.approve(uid, int(body["request_id"]))}
-
-
-@app.post("/apply/request/cancel")
-async def apply_request_cancel(request: Request) -> dict:
-    from . import fill_requests
-
-    body = await request.json()
-    uid = _resolve_user(request, body.get("user"))
-    return {"ok": fill_requests.cancel(uid, int(body["request_id"]))}
-
-
-# --- worker-facing API (token-gated) -------------------------------------
-
-@app.post("/worker/claim")
-async def worker_claim(request: Request) -> dict:
-    """Worker claims the next pending fill request and gets its prepared package
-    (url + identity + per-question answers + resume availability)."""
-    from . import apply_queue, fill_requests
-
-    _require_apply_token(request)
-    req = fill_requests.claim_next()
-    if req is None:
-        return {}
-    pkg = apply_queue.get_package(req["user_id"], req["posting_id"]) or {}
-    return {
-        "request_id": req["id"], "user": req["user_id"],
-        "posting_id": req["posting_id"], "url": pkg.get("url", ""),
-        "identity": pkg.get("identity", {}), "questions": pkg.get("questions", []),
-        "has_resume": bool(pkg.get("resume")),
-    }
-
-
-@app.post("/worker/claim_approved")
-async def worker_claim_approved(request: Request) -> dict:
-    """Worker claims the next approved request to submit it."""
-    from . import fill_requests
-
-    _require_apply_token(request)
-    req = fill_requests.claim_approved()
-    return {"request_id": req["id"], "user": req["user_id"],
-            "posting_id": req["posting_id"]} if req else {}
-
-
-@app.post("/worker/preview")
-async def worker_preview(request: Request) -> dict:
-    """Worker reports the filled form (screenshot + field summary) for approval."""
-    from . import fill_requests
-
-    _require_apply_token(request)
-    body = await request.json()
-    preview = body.get("preview") or {}
-    ok = fill_requests.set_preview(int(body["request_id"]), preview)
-    if ok:
-        _notify_preview_ready(int(body["request_id"]), preview)
-    return {"ok": ok}
-
-
-def _notify_preview_ready(request_id: int, preview: dict) -> None:
-    """Push the approval gate to the user's phone, so approving never requires
-    opening the web page.
-
-    Fail-open: a messaging problem must not strand the worker or lose the fill —
-    the /apply review page still shows the same preview.
-    """
-    import logging
-
-    try:
-        from . import engine, fill_requests, push, reminders
-
-        req = fill_requests.get(request_id)
-        if req is None:
-            return
-        uid = req["user_id"]
-        reminders.get_sender().send(uid, engine.fill_preview_message(uid, req, preview))
-        # …and a push, so the phone surfaces it without Slack being open.
-        push.notify_preview_ready(
-            uid, engine.fill_label(uid, req),
-            len(preview.get("filled") or []), len(preview.get("skipped") or []))
-    except Exception:  # noqa: BLE001
-        logging.getLogger("apply").exception(
-            "preview notification failed; the /apply page still has it")
-
-
-@app.post("/worker/result")
-async def worker_result(request: Request) -> dict:
-    """Worker reports the outcome of a submission (submitted | failed)."""
-    from . import fill_requests, store
-    from . import jobstore
-
-    _require_apply_token(request)
-    body = await request.json()
-    rid = int(body["request_id"])
-    if body.get("status") == "submitted":
-        fill_requests.mark_submitted(rid)
-        # Log it as applied + mark the posting + the queue item.
-        req = fill_requests.get(rid)
-        if req:
-            posting = jobstore.get_posting(req["user_id"], req["posting_id"])
-            if posting:
-                store.create_application(
-                    req["user_id"], posting["company"] or "Unknown",
-                    posting["title"] or "Role", source="discovery:autosubmit")
-                jobstore.mark_posting_status(posting["id"], "applied")
-                from . import apply_queue
-                apply_queue.mark(req["user_id"], req["posting_id"], "submitted")
-        return {"ok": True}
-    fill_requests.mark_failed(rid, body.get("error", "unknown error"))
-    return {"ok": True}
-
-
 @app.get("/apply/resume")
 def apply_resume(request: Request, user: str | None = None, id: int = 0) -> Response:
     """Download the staged item's tailored resume PDF (rebuilt from cache)."""
@@ -689,17 +703,38 @@ def apply_resume(request: Request, user: str | None = None, id: int = 0) -> Resp
     )
 
 
+@app.get("/apply/cover")
+def apply_cover(request: Request, user: str | None = None, id: int = 0) -> Response:
+    """Download a one-page cover letter PDF for this posting (on demand)."""
+    from . import apply_queue
+
+    uid = _resolve_user(request, user)
+    built = apply_queue.build_cover_bytes(uid, id)
+    if built is None:
+        return Response(status_code=404, content="no cover letter")
+    pdf, filename = built
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.get("/health")
 def health() -> dict:
     from .router import get_router
 
+    from .errors import ping_db
+
     s = get_settings()
     router = get_router()
+    db_ok = ping_db()
     info = {
-        "status": "ok",
+        "status": "ok" if db_ok else "degraded",
         "router": router.name,
+        "chat_router": "heuristic",
         "model": s.anthropic_model if s.use_llm_router else None,
         "db": s.database_path,
+        "db_ok": db_ok,
     }
     # Surface token usage so cost/efficiency is observable at a glance.
     if hasattr(router, "usage"):
@@ -707,18 +742,9 @@ def health() -> dict:
     from .scheduler import is_running
 
     info["reminder_scheduler"] = "running" if is_running() else "stopped"
-    if s.slack_enabled:
-        info["reminder_delivery"] = "slack"
-    elif s.outbound_sms_enabled:
-        info["reminder_delivery"] = "twilio"
-    else:
-        info["reminder_delivery"] = "log-only"
-    if s.apollo_enabled:
-        from . import apollo
+    info["reminder_delivery"] = "app"
 
-        info["apollo"] = apollo.usage()
-
-    from . import discovery, jobstore
+    from . import catalog, discovery, jobstore
 
     from .jobsources import directory as dir_src
 
@@ -727,15 +753,15 @@ def health() -> dict:
         "alert_mode": s.job_alert_mode_normalized,
         "wide_rss": s.job_wide_rss_enabled,
         "wide_directory": s.job_wide_directory_enabled,
-        "wide_aggregator": s.job_wide_aggregator_enabled,
         "wide_swelist": s.job_wide_swelist_enabled,
-        "serpapi": s.serpapi_enabled,
+        "wide_yc": s.job_wide_yc_enabled,
         "ghost_filter": s.ghost_filter_enabled,
         "eligibility_filter": s.eligibility_filter_enabled,
-        "eligibility_llm": s.eligibility_llm_enabled,
-        "deck_tldr": s.deck_tldr_enabled,
         "reranker": s.reranker_enabled,
+        "verify_apply_urls": s.job_verify_apply_urls,
+        "catalog_probe": s.job_catalog_probe_enabled,
         "directory_boards": dir_src.board_count(),
+        "catalog": catalog.stats(),
         "tracked_boards": jobstore.tracked_count(),
         "poll_seconds": s.job_poll_seconds,
         "relevance_threshold": s.job_relevance_threshold,
@@ -745,64 +771,19 @@ def health() -> dict:
     info["auth"] = {
         "fail_open": s.auth_fail_open,
         "allowlist": bool(s.allowed_emails),
-        "autosubmit": s.apply_autosubmit_enabled,
         "dev_login": s.auth_allow_dev_login,
         "sentry": bool(s.sentry_dsn.strip()),
         "llm_user_cap": s.llm_max_calls_per_user_per_day,
     }
-    if s.embedding_active:
-        info["embeddings"] = {
-            "model": s.embedding_model,
-            "calls_today": jobstore.embedding_calls_today(),
-            "max_per_day": s.embedding_max_calls_per_day,
-        }
+    info["beta"] = {
+        "invite_ready": (
+            not s.auth_fail_open
+            and not s.auth_allow_dev_login
+            and bool(s.allowed_emails)
+            and info["reminder_delivery"] == "app"
+        ),
+    }
     return info
-
-
-def _twiml(message: str) -> Response:
-    body = (
-        '<?xml version="1.0" encoding="UTF-8"?>'
-        f"<Response><Message>{escape(message)}</Message></Response>"
-    )
-    return Response(content=body, media_type="application/xml")
-
-
-@app.post("/sms")
-async def sms_webhook(
-    request: Request,
-    From: str = Form(default=""),
-    Body: str = Form(default=""),
-) -> Response:
-    # Signature validation is optional in Phase 1; enable via env in production.
-    settings = get_settings()
-    if settings.twilio_validate_signature and settings.twilio_auth_token:
-        from twilio.request_validator import RequestValidator
-
-        validator = RequestValidator(settings.twilio_auth_token)
-        signature = request.headers.get("X-Twilio-Signature", "")
-        form = await request.form()
-        url = str(request.url)
-        if not validator.validate(url, dict(form), signature):
-            return Response(status_code=403, content="Invalid signature")
-
-    user_id = From or "local"
-    reply = handle_sms(user_id, Body)
-    return _twiml(reply)
-
-
-# JSON convenience endpoint for testing without Twilio form encoding.
-# Prefer POST /chat (session-authed) for the real product path.
-@app.post("/message")
-async def message(request: Request, payload: dict) -> dict:
-    from . import auth
-
-    if get_settings().auth_fail_open:
-        user_id = payload.get("from", "local")
-    else:
-        user_id = auth.require_user(request)
-    text = payload.get("body", "")
-    reply = handle_sms(user_id, text)
-    return {"reply": reply}
 
 
 # ---------------------------------------------------------------------------
@@ -866,14 +847,6 @@ def auth_logout(request: Request) -> dict:
     return {"ok": True}
 
 
-@app.get("/chat", response_class=HTMLResponse)
-def chat_page() -> HTMLResponse:
-    """Minimal web chat companion."""
-    from . import chat_page as page
-
-    return HTMLResponse(page.render_chat_page())
-
-
 @app.get("/chat/history")
 def chat_history(
     request: Request, limit: int = 100, before_id: int | None = None,
@@ -886,7 +859,7 @@ def chat_history(
 
 @app.post("/chat")
 async def chat_send(request: Request) -> dict:
-    """Send a message to the assistant (session required)."""
+    """Send a message to the assistant (session required). Heuristic NLU."""
     from . import auth, chat
 
     uid = auth.require_user(request)
@@ -897,42 +870,36 @@ async def chat_send(request: Request) -> dict:
 
         raise HTTPException(status_code=400, detail="text required")
     result = chat.send(uid, text)
-    return {
-        "user": uid,
-        "reply": result["reply"],
-        "user_message": result["user_message"],
-        "assistant_message": result["assistant_message"],
-    }
+    return {"user": uid, **result}
 
 
-@app.post("/slack/events")
-async def slack_events(request: Request, background_tasks: BackgroundTasks):
-    """Legacy Slack Events API webhook.
+@app.post("/agent")
+async def agent_send(request: Request) -> dict:
+    """Execute a structured on-device action (session required).
 
-    Disabled unless ``SLACK_TRANSPORT_ENABLED=true``. In-app chat is the product
-    channel now; this stays for emergency rollback only.
+    Body: ``{action, slots, raw_text}``. UNKNOWN / low confidence falls back
+    to heuristic parse of ``raw_text``. Same transcript as POST /chat.
     """
-    settings = get_settings()
-    if not settings.slack_enabled:
-        return Response(status_code=404, content="slack transport disabled")
+    from fastapi import HTTPException
 
-    from . import slack
+    from . import auth, chat
 
-    raw = await request.body()
+    uid = auth.require_user(request)
+    body = await request.json()
+    raw = (body.get("raw_text") or body.get("text") or body.get("body") or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="raw_text required")
+    action = (body.get("action") or body.get("intent") or "UNKNOWN")
+    slots = body.get("slots") if isinstance(body.get("slots"), dict) else {}
+    result = chat.send_action(uid, str(action), slots, raw)
+    return {"user": uid, **result}
 
-    if settings.slack_signing_secret:
-        ts = request.headers.get("X-Slack-Request-Timestamp", "")
-        sig = request.headers.get("X-Slack-Signature", "")
-        if not slack.verify_signature(settings.slack_signing_secret, ts, raw, sig):
-            return Response(status_code=403, content="invalid signature")
 
-    try:
-        payload = json.loads(raw or b"{}")
-    except json.JSONDecodeError:
-        return Response(status_code=400, content="bad payload")
+@app.post("/chat/clear")
+def chat_clear(request: Request) -> dict:
+    """Wipe this user's chat transcript and any in-flight command."""
+    from . import auth, chat
 
-    if payload.get("type") == "url_verification":
-        return {"challenge": payload.get("challenge", "")}
-
-    background_tasks.add_task(slack.handle_event, payload)
-    return Response(status_code=200)
+    uid = auth.require_user(request)
+    deleted = chat.clear(uid)
+    return {"user": uid, "deleted": deleted, "ok": True}

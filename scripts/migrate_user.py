@@ -1,8 +1,7 @@
 """Merge all data from one user id into another (consolidate split accounts).
 
-Common case: your trained matcher + profile + swipe labels live under ``local``
-(the web/trainer default), but Slack chat keys on your Slack user id. This moves
-everything onto one id.
+Common case: trained matcher + profile + swipe labels under ``local`` should
+fold into an Apple ``usr_…`` after Sign in with Apple.
 
 Usage:
     python -m scripts.migrate_user <src> <dst>            # do the merge
@@ -10,7 +9,7 @@ Usage:
 
 On Fly:
     flyctl ssh console -a job-search-tool \\
-        -C "python -m scripts.migrate_user local U08XXXXX"
+        -C "python -m scripts.migrate_user local usr_abc123"
 """
 from __future__ import annotations
 

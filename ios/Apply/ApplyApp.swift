@@ -29,7 +29,11 @@ struct ApplyApp: App {
             .environmentObject(setup)
             .tint(Theme.accent)
             .preferredColorScheme(.light)
+            .background { AmbientBackground() }
             .task {
+                #if DEBUG
+                Self.applyDebugLaunchArgs()
+                #endif
                 CrashReporting.start()
                 await auth.refresh()
                 await setup.refresh(config: config)
@@ -44,47 +48,85 @@ struct ApplyApp: App {
                     }
                 }
             }
+            .onChange(of: push.hop) { _, hop in
+                if hop == .setup {
+                    push.hop = nil
+                    setup.reopen()
+                }
+            }
         }
     }
+
+    #if DEBUG
+    /// Simulator walk-through: `simctl launch … com.rahil.apply -JobPilotTab 1`
+    private static func applyDebugLaunchArgs() {
+        let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "-JobPilotTab"),
+           i + 1 < args.count,
+           let n = Int(args[i + 1]),
+           (0...3).contains(n) {
+            PushManager.shared.selectedTab = n
+        }
+        if args.contains("-JobPilotQuiz") {
+            PushManager.shared.selectedTab = 3
+            PushManager.shared.hop = .settingsQuiz
+        }
+    }
+    #endif
 }
 
 /// Custom floating dock instead of stock TabView chrome.
-/// Tabs: Apply · In flight · About · Chat · Settings (Chat is secondary).
+/// Tabs: Apply · You · Ask · Settings.
 struct RootView: View {
     @EnvironmentObject var push: PushManager
     @EnvironmentObject var chrome: AppChrome
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack(alignment: .bottom) {
+            AmbientBackground()
+
             Group {
                 switch push.selectedTab {
                 case 0: QueueView()
-                case 1: InFlightView()
-                case 2: KnowledgeView()
-                case 3: ChatView()
+                case 1: KnowledgeView()
+                case 2: ChatView()
                 default: SettingsView()
                 }
             }
+            .id(push.selectedTab)
+            .transition(tabTransition)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
 
             if !chrome.dockHidden {
                 FloatingTabBar(
-                    selection: $push.selectedTab,
-                    readyBadge: chrome.readyCount,
-                    awaitingBadge: chrome.awaitingCount
+                    selection: push.tabSelection,
+                    readyBadge: chrome.readyCount
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
-                // Keep the dock above the apply Autofill inset so a failed hide
-                // can't paint both on top of each other as a green blur.
                 .zIndex(1)
             }
         }
-        .animation(Theme.springSoft, value: chrome.dockHidden)
+        .animation(reduceMotion ? nil : Theme.springSoft, value: chrome.dockHidden)
+        .animation(reduceMotion ? nil : tabMotion, value: push.selectedTab)
         .ignoresSafeArea(.keyboard)
         .onChange(of: push.selectedTab) { _, _ in
-            // Leaving Apply detail via tab switch should always restore the dock;
-            // QueueView.onAppear re-hides it if a detail is still pushed.
             chrome.dockHidden = false
         }
+    }
+
+    private var tabMotion: Animation {
+        push.tabFromHorizon ? Theme.springHorizon : Theme.springSoft
+    }
+
+    private var tabTransition: AnyTransition {
+        if reduceMotion { return .opacity }
+        let incoming: Edge = push.tabForward ? .trailing : .leading
+        let outgoing: Edge = push.tabForward ? .leading : .trailing
+        return .asymmetric(
+            insertion: .move(edge: incoming).combined(with: .opacity),
+            removal: .move(edge: outgoing).combined(with: .opacity)
+        )
     }
 }

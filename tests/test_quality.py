@@ -12,7 +12,7 @@ def _p(source, title="Software Engineer", company="Acme", url="https://x/1"):
 
 def test_first_party_sources_always_kept():
     # Even a thin posting from a real ATS is trusted (first-party career system).
-    for src in ("greenhouse", "lever", "ashby"):
+    for src in ("greenhouse", "lever", "ashby", "workable", "smartrecruiters"):
         assert quality.is_reputable(_p(src, company="", url=""))
 
 

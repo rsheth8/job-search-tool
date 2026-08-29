@@ -1,0 +1,19 @@
+<!doctype html>
+<!-- A real form plus the frames every careers page carries: an about:blank
+     placeholder and a third-party widget with nothing fillable in it. The engine
+     is injected into all of them (forMainFrameOnly: false) and they all post to
+     the same native handler, so a noise frame's "filled: 0" must never be able to
+     land on top of the real result. -->
+<html>
+<head><meta charset="utf-8"><title>Careers — Northwind</title></head>
+<body>
+  <h1>Backend Engineer</h1>
+  <label>First Name <input id="first_name" name="first_name"></label>
+  <label>Last Name <input id="last_name" name="last_name"></label>
+  <label>Email <input id="email" name="email" type="email"></label>
+  <label>Phone <input id="phone" name="phone"></label>
+  <label>Favorite color <input id="favorite" name="favorite"></label>
+  <iframe id="blankframe" src="about:blank" title="placeholder"></iframe>
+  <iframe id="widget" src="empty_widget.html" title="chat widget"></iframe>
+</body>
+</html>

@@ -6,34 +6,25 @@ at all?"** It exists because discovery surfaces roles an entry-level CS/DS
 student plainly can't land (Senior/Staff/Manager titles, "8+ years required",
 licensed professions), which waste attention and application effort.
 
-Two tiers, cheapest first (the house cost-control rule):
-
-  1. **Rule tier (free, on by default).** Profile-driven. Disqualifies on a clear
-     *seniority gap* (role much more senior than the candidate), a big *years-of-
-     experience* requirement, or a *hard credential* the candidate lacks
-     (nursing/CPA/clearance/required doctorate). Deliberately conservative — it
-     only drops on clear over-requirement, never on a borderline call.
-  2. **LLM tier (off by default; batched Haiku).** A nuanced "is this candidate
-     plausibly qualified to apply?" judgement, customized by the profile. Gated +
-     daily-capped, and **fail-open**: any error keeps the posting (we never bury
-     roles because the model hiccuped).
+**Rule tier only (free, on by default).** Profile-driven. Disqualifies on a clear
+*seniority gap* (role much more senior than the candidate), a big *years-of-
+experience* requirement, or a *hard credential* the candidate lacks
+(nursing/CPA/clearance/required doctorate). The field gate and license check
+apply when the profile looks technical (or is empty — the product default is
+entry CS); marketing/HR/nursing profiles skip those so the right jobs survive.
+Deliberately conservative — it only drops on clear over-requirement, never on
+a borderline call.
 
 "Candidate level" is read from the profile's seniority/background, falling back
 to ``eligibility_candidate_level`` so it works before a profile is filled in.
 """
 from __future__ import annotations
 
-import json
-import logging
 import re
 import sqlite3
 
 from .config import get_settings
 from .jobsources import JobPosting
-from .profile import profile_text
-from .ratelimit import TokenBucket
-
-logger = logging.getLogger("eligibility")
 
 # Seniority ladder. Higher = more senior. Used for both candidate and role.
 #   1 entry/new-grad/intern/junior   2 mid (II/III)   3 senior/lead/manager
@@ -64,10 +55,10 @@ _ROLE_DEFAULT_RANK = 2
 
 _YEARS_RE = re.compile(r"(\d{1,2})\s*\+?\s*(?:years?|yrs?|yoe)\b", re.I)
 
-# Field gate (for a technical candidate). A title in a clearly NON-technical
-# field is dropped — UNLESS it also carries a technical signal (e.g. "Sales
-# Engineer", "Marketing Analyst", "Data ..."), which keeps technical-adjacent
-# roles. High-precision lists; conservative by design.
+# Field gate (for a technical candidate). Applied only when the *profile*
+# looks technical (or is empty — this app's default is entry CS). A title in
+# a clearly NON-technical field is dropped — UNLESS it also carries a technical
+# signal (e.g. "Sales Engineer", "Marketing Analyst"), which keeps adjacent roles.
 _TECH_TITLE_RE = re.compile(
     r"\b(engineer|engineering|developer|programmer|software|swe|sde|sdet|"
     r"scientist|data|analyst|analytics|machine learning|\bml\b|\bai\b|"
@@ -118,6 +109,36 @@ def _rank_from_text(text: str) -> int | None:
     return best
 
 
+def _profile_blob(profile: sqlite3.Row | None) -> str:
+    if profile is None:
+        return ""
+    parts: list[str] = []
+    for field in ("roles", "keywords", "seniority", "resume_summary"):
+        try:
+            parts.append(profile[field] or "")
+        except (IndexError, KeyError):
+            pass
+    return " ".join(parts)
+
+
+def profile_looks_technical(profile: sqlite3.Row | None) -> bool:
+    """True when the field/credential gate should treat this as a tech search.
+
+    Empty / missing profile → technical (the product default is entry CS).
+    A tech signal in roles/keywords wins. A non-tech signal with no tech
+    signal means skip the field gate so marketing/HR/nursing searches work.
+    Ambiguous (e.g. product manager) stays technical.
+    """
+    blob = _profile_blob(profile)
+    if not blob.strip():
+        return True
+    if _TECH_TITLE_RE.search(blob):
+        return True
+    if _NONTECH_TITLE_RE.search(blob):
+        return False
+    return True
+
+
 def candidate_rank(profile: sqlite3.Row | None) -> int:
     """The candidate's seniority level from their profile, else the configured
     fallback (default 'entry' -> 1)."""
@@ -161,7 +182,11 @@ def rule_reasons(posting: JobPosting, profile: sqlite3.Row | None) -> list[str]:
         reasons.append(f"requires {yrs}+ years (cap {years_cap})")
 
     desc = posting.description or ""
-    if _CREDENTIAL_RE.search(desc) or _CREDENTIAL_RE.search(posting.title or ""):
+    technical = profile_looks_technical(profile)
+    # RN/CPA/clearance/etc. only gate technical (or default) candidates.
+    if technical and (
+        _CREDENTIAL_RE.search(desc) or _CREDENTIAL_RE.search(posting.title or "")
+    ):
         reasons.append("requires a hard credential/license")
     if _DEGREE_REQ_RE.search(desc):
         reasons.append("requires an advanced degree")
@@ -170,6 +195,7 @@ def rule_reasons(posting: JobPosting, profile: sqlite3.Row | None) -> list[str]:
     # technical signal in the title (so "Sales Engineer"/"Data Analyst" survive).
     title = posting.title or ""
     if (get_settings().eligibility_field_filter
+            and technical
             and _NONTECH_TITLE_RE.search(title)
             and not _TECH_TITLE_RE.search(title)):
         reasons.append("role is outside the candidate's (technical) field")
@@ -185,121 +211,4 @@ def filter_eligible(
 ) -> tuple[list[JobPosting], int]:
     """Rule tier: return (kept, dropped_count)."""
     kept = [p for p in postings if is_eligible(p, profile)]
-    return kept, len(postings) - len(kept)
-
-
-# ---------------------------------------------------------------------------
-# LLM tier (optional)
-# ---------------------------------------------------------------------------
-
-_llm_client = None
-_llm_limiter: TokenBucket | None = None
-
-_ELIG_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "assessments": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "string"},
-                    "qualified": {"type": "boolean"},
-                },
-                "required": ["id", "qualified"],
-                "additionalProperties": False,
-            },
-        }
-    },
-    "required": ["assessments"],
-    "additionalProperties": False,
-}
-
-
-def reset_for_tests() -> None:
-    global _llm_client, _llm_limiter
-    _llm_client = None
-    _llm_limiter = None
-
-
-def _get_llm():
-    global _llm_client, _llm_limiter
-    if _llm_client is None:
-        import anthropic
-
-        s = get_settings()
-        _llm_client = anthropic.Anthropic(api_key=s.anthropic_api_key)
-        _llm_limiter = TokenBucket(s.llm_rate_limit_per_min)
-    return _llm_client, _llm_limiter
-
-
-def assess_batch(postings: list[JobPosting], profile_block: str) -> dict[int, bool]:
-    """Ask Haiku, in one call, whether the candidate is plausibly qualified for
-    each posting. Returns {index: qualified}. Raises on failure (caller fails open)."""
-    client, limiter = _get_llm()
-    if not limiter.allow():
-        raise RuntimeError("llm rate limited")
-    from . import llm_budget
-    if not llm_budget.consume():
-        raise RuntimeError("llm user daily cap")
-    listing = "\n".join(
-        f"[{i}] {p.title} — {(p.description or '')[:300]}"
-        for i, p in enumerate(postings)
-    )
-    system = (
-        "You judge whether a candidate could realistically APPLY to and be "
-        "considered for each job — NOT whether it's a perfect fit. Mark "
-        "qualified=true for roles whose hard requirements (years of experience, "
-        "degree, license, domain) this candidate plausibly meets or could be "
-        "considered for, including adjacent roles they could do. Mark "
-        "qualified=false only when the role clearly demands seniority, credentials, "
-        "or experience the candidate lacks. Be inclusive; reserve false for clear "
-        "over-requirement."
-    )
-    user = f"CANDIDATE:\n{profile_block}\n\nJOBS:\n{listing}"
-    resp = client.messages.create(
-        model=get_settings().anthropic_model,
-        max_tokens=min(1024, 40 + 10 * len(postings)),
-        system=system,
-        messages=[{"role": "user", "content": user}],
-        output_config={"format": {"type": "json_schema", "schema": _ELIG_SCHEMA}},
-    )
-    payload = next(b.text for b in resp.content if b.type == "text")
-    out: dict[int, bool] = {}
-    for item in json.loads(payload).get("assessments", []):
-        try:
-            out[int(item["id"])] = bool(item["qualified"])
-        except (KeyError, TypeError, ValueError):
-            continue
-    return out
-
-
-def filter_eligible_llm(
-    postings: list[JobPosting], profile: sqlite3.Row | None, *, assess=None
-) -> tuple[list[JobPosting], int]:
-    """LLM tier: drop postings the model deems clearly unqualified. Fail-open —
-    on no-key/disabled/cap/rate-limit/error it keeps everything. ``assess`` injects
-    the judge in tests."""
-    s = get_settings()
-    active = assess is not None or (s.eligibility_llm_enabled and s.use_llm_router)
-    if not active or not postings:
-        return postings, 0
-    if assess is None:
-        from . import jobstore
-
-        if not jobstore.allow_eligibility_call():
-            logger.info("eligibility daily cap reached — keeping all")
-            return postings, 0
-    try:
-        judge = assess or assess_batch
-        verdicts = judge(postings, profile_text(profile))
-    except Exception:  # noqa: BLE001 — never drop roles because the LLM failed
-        logger.warning("eligibility LLM failed; keeping all", exc_info=True)
-        return postings, 0
-    if assess is None:
-        from . import jobstore
-
-        jobstore.record_eligibility_call()
-    # Unknown ids default to qualified (keep) — fail-open per posting too.
-    kept = [p for i, p in enumerate(postings) if verdicts.get(i, True)]
     return kept, len(postings) - len(kept)

@@ -15,6 +15,7 @@ def test_chat_requires_auth():
     c = _client()
     assert c.get("/chat/history").status_code == 401
     assert c.post("/chat", json={"text": "hi"}).status_code == 401
+    assert c.post("/chat/clear").status_code == 401
 
 
 def test_dev_login_and_chat_roundtrip(monkeypatch):
@@ -43,6 +44,11 @@ def test_dev_login_and_chat_roundtrip(monkeypatch):
     hist = c.get("/chat/history", headers=headers).json()
     assert len(hist["messages"]) >= 2
     assert hist["messages"][0]["role"] == "user"
+
+    wiped = c.post("/chat/clear", headers=headers)
+    assert wiped.status_code == 200
+    assert wiped.json()["ok"] is True
+    assert c.get("/chat/history", headers=headers).json()["messages"] == []
 
 
 def test_dev_login_disabled_by_default():
@@ -91,23 +97,6 @@ def test_app_sender_appends_chat(monkeypatch):
     assert len(msgs) == 1
     assert msgs[0]["role"] == "assistant"
     assert "Acme" in msgs[0]["body"]
-
-
-def test_slack_webhook_disabled_by_default():
-    c = _client()
-    res = c.post("/slack/events", json={"type": "url_verification", "challenge": "x"})
-    assert res.status_code == 404
-
-
-def test_slack_webhook_works_when_explicitly_enabled(monkeypatch):
-    monkeypatch.setenv("SLACK_TRANSPORT_ENABLED", "true")
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
-    monkeypatch.setenv("SLACK_SIGNING_SECRET", "")
-    config.get_settings.cache_clear()
-    c = _client()
-    res = c.post("/slack/events", json={"type": "url_verification", "challenge": "abc"})
-    assert res.status_code == 200
-    assert res.json()["challenge"] == "abc"
 
 
 def test_logout_revokes_session(monkeypatch):

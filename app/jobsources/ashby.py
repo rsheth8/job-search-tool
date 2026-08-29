@@ -8,7 +8,7 @@ defensive with sensible fallbacks.
 """
 from __future__ import annotations
 
-from .base import JobPosting, get_json, strip_html
+from .base import JobPosting, first_published, get_json, strip_html
 
 API = "https://api.ashbyhq.com/posting-api/job-board/{token}?includeCompensation=false"
 
@@ -25,6 +25,7 @@ def _parse(data, board_token: str) -> list[JobPosting]:
         if j.get("isRemote") and "remote" not in location.lower():
             location = (location + " (remote)").strip() if location else "Remote"
         desc = j.get("descriptionPlain") or strip_html(j.get("descriptionHtml"))
+        posted, bumped = first_published(j.get("publishedAt"), j.get("updatedAt"))
         out.append(
             JobPosting(
                 source="ashby",
@@ -34,7 +35,8 @@ def _parse(data, board_token: str) -> list[JobPosting]:
                 company=(j.get("organizationName") or board_token).strip(),
                 location=location.strip(),
                 description=strip_html(desc) if desc else "",
-                posted_at=(j.get("publishedAt") or j.get("updatedAt") or "") or "",
+                posted_at=posted,
+                updated_at=bumped,
             )
         )
     return out

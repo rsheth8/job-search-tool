@@ -40,9 +40,9 @@ def test_tick_digest_mode_strong_match_only(monkeypatch):
     assert len(sender.sent) == 1
     user, body = sender.sent[0]
     assert user == "u"
-    assert "1 new job match" in body
+    assert "One new match" in body
     assert "Software Engineer" in body and "100%" in body
-    assert "review jobs" in body
+    assert "go through" in body
 
     statuses = {r["external_id"]: r["status"] for r in jobstore.list_postings("u")}
     assert statuses["greenhouse:acme:1"] == "queued"
@@ -110,3 +110,42 @@ def test_build_alert_body_includes_id_and_link():
     assert "Acme" in body
     assert "https://jobs/x" in body
     assert "#7" in body and "83%" in body
+
+
+def test_tick_drops_when_ats_json_says_gone(monkeypatch):
+    """A Greenhouse req whose public JSON 404s must never be scored or queued."""
+    from app import config
+    from app.jobsources.alive import FetchResult
+
+    jobstore.add_tracked_company("u", "greenhouse", "acme", "Acme")
+    profile.set_profile("u", roles="software engineer", keywords="python, kubernetes")
+    live = JobPosting(
+        "greenhouse", "111", "Software Engineer",
+        "https://boards.greenhouse.io/acme/jobs/111",
+        location="Remote", description="python kubernetes",
+    )
+    dead = JobPosting(
+        "greenhouse", "222", "Software Engineer",
+        "https://boards.greenhouse.io/acme/jobs/222",
+        location="Remote", description="python kubernetes",
+    )
+    monkeypatch.setattr(
+        "app.discovery.fetch_source",
+        lambda source, token: [live, dead] if token == "acme" else [],
+    )
+    monkeypatch.setenv("JOB_VERIFY_APPLY_URLS", "true")
+    config.get_settings.cache_clear()
+
+    def get(url, timeout=None):  # noqa: ARG001
+        if url.endswith("/boards/acme/jobs/111"):
+            return FetchResult(200, '{"id":111,"title":"SWE","absolute_url":"x"}', url)
+        if url.endswith("/boards/acme/jobs/222"):
+            return FetchResult(404, "", url)
+        raise AssertionError(f"unexpected GET {url}")
+
+    monkeypatch.setattr("app.jobsources.alive.http_get", get)
+    sender = FakeSender()
+    discovery.tick("u", sender=sender)
+    statuses = {r["external_id"]: r["status"] for r in jobstore.list_postings("u")}
+    assert statuses["greenhouse:acme:111"] == "queued"
+    assert "greenhouse:acme:222" not in statuses

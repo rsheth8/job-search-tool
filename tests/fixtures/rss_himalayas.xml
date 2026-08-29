@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:himalayasJobs="https://himalayas.app/ns/jobs">
+  <channel>
+    <title>Remote jobs from Himalayas</title>
+    <item>
+      <title>Solutions Engineer</title>
+      <link>https://himalayas.app/companies/quantum-metric/jobs/solutions-engineer</link>
+      <guid>https://himalayas.app/companies/quantum-metric/jobs/solutions-engineer</guid>
+      <description>Build analytics for happy people.</description>
+      <pubDate>Mon, 02 Jun 2026 12:00:00 GMT</pubDate>
+      <himalayasJobs:companyName>Quantum Metric</himalayasJobs:companyName>
+      <himalayasJobs:locationRestriction>United Kingdom</himalayasJobs:locationRestriction>
+    </item>
+  </channel>
+</rss>

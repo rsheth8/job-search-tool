@@ -28,7 +28,66 @@ FEEDS: dict[str, dict[str, str]] = {
         "url": "https://weworkremotely.com/categories/remote-programming-jobs.rss",
         "label": "We Work Remotely (Programming)",
     },
+    "wwr-design": {
+        "url": "https://weworkremotely.com/categories/remote-design-jobs.rss",
+        "label": "We Work Remotely (Design)",
+    },
+    "wwr-product": {
+        "url": "https://weworkremotely.com/categories/remote-product-jobs.rss",
+        "label": "We Work Remotely (Product)",
+    },
+    "wwr-sales": {
+        "url": "https://weworkremotely.com/categories/remote-sales-and-marketing-jobs.rss",
+        "label": "We Work Remotely (Sales & Marketing)",
+    },
+    "wwr-support": {
+        "url": "https://weworkremotely.com/categories/remote-customer-support-jobs.rss",
+        "label": "We Work Remotely (Customer Support)",
+    },
+    "wwr-finance": {
+        "url": "https://weworkremotely.com/categories/remote-management-and-finance-jobs.rss",
+        "label": "We Work Remotely (Management & Finance)",
+    },
+    "wwr-devops": {
+        "url": "https://weworkremotely.com/categories/remote-devops-sysadmin-jobs.rss",
+        "label": "We Work Remotely (DevOps)",
+    },
+    "himalayas": {
+        "url": "https://himalayas.app/jobs/rss",
+        "label": "Himalayas (Remote)",
+    },
+    "remotive": {
+        "url": "https://remotive.com/remote-jobs/feed",
+        "label": "Remotive (Remote)",
+    },
 }
+
+# We Work Remotely category feeds — titles are usually "Company: Role".
+_WWR_FEEDS = frozenset({
+    "weworkremotely", "wwr-design", "wwr-product", "wwr-sales",
+    "wwr-support", "wwr-finance", "wwr-devops",
+})
+
+# Extra category feeds to pull when the profile mentions that kind of work.
+# Env-configured feeds always run; these are *added* on top.
+_PROFILE_FEEDS: list[tuple[re.Pattern, str]] = [
+    (re.compile(
+        r"\b(ui/ux|ux/ui|product design|graphic design|visual design|"
+        r"designer|design systems|ux|ui)\b",
+        re.I,
+    ), "wwr-design"),
+    (re.compile(r"\b(product manager|product management|product owner|\bpm\b)\b", re.I),
+     "wwr-product"),
+    (re.compile(r"\b(sales|marketing|brand|copywriter|content strategist|"
+                  r"social media|sdr|bdr|account executive)\b", re.I), "wwr-sales"),
+    (re.compile(r"\b(customer success|customer support|customer experience|"
+                  r"support specialist|help desk)\b", re.I), "wwr-support"),
+    (re.compile(r"\b(finance|financial|accountant|accounting|bookkeep|payroll|"
+                  r"controller|fp&a)\b", re.I), "wwr-finance"),
+    (re.compile(r"\b(devops|sre|sysadmin|site reliability)\b", re.I), "wwr-devops"),
+    (re.compile(r"\b(software|engineer|developer|programmer|swe|sde)\b", re.I),
+     "weworkremotely"),
+]
 
 _ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 _HN_COMPANY = re.compile(
@@ -39,6 +98,18 @@ _HN_COMPANY = re.compile(
 
 def list_feed_ids() -> list[str]:
     return list(FEEDS.keys())
+
+
+def feeds_for_profile_text(text: str) -> list[str]:
+    """WWR category feed ids that match free-text roles/keywords."""
+    blob = (text or "").strip()
+    if not blob:
+        return []
+    out: list[str] = []
+    for rx, feed_id in _PROFILE_FEEDS:
+        if feed_id in FEEDS and feed_id not in out and rx.search(blob):
+            out.append(feed_id)
+    return out
 
 
 def resolve_feed(token: str) -> dict | None:
@@ -77,6 +148,16 @@ def _text(el) -> str:
     ).strip()
 
 
+def _local_child(item, local_name: str) -> str:
+    """Text of a child element by local name, ignoring XML namespaces."""
+    for el in item:
+        tag = el.tag or ""
+        local = tag.rsplit("}", 1)[-1]
+        if local == local_name:
+            return _text(el)
+    return ""
+
+
 def _parse_rss_channel(channel, feed_id: str, label: str) -> list[JobPosting]:
     out: list[JobPosting] = []
     for item in channel.findall("item"):
@@ -87,7 +168,16 @@ def _parse_rss_channel(channel, feed_id: str, label: str) -> list[JobPosting]:
         pub = _text(item.find("pubDate"))
         if not link and not guid:
             continue
-        company = _company_from_item(title, desc, feed_id)
+        item_company = (
+            _local_child(item, "companyName")
+            or _local_child(item, "company")
+        )
+        item_location = (
+            _local_child(item, "locationRestriction")
+            or _local_child(item, "location")
+            or _local_child(item, "region")
+        )
+        company = _company_from_item(title, desc, feed_id, item_company=item_company)
         ext = hashlib.sha256((guid or link).encode()).hexdigest()[:32]
         out.append(
             JobPosting(
@@ -96,7 +186,7 @@ def _parse_rss_channel(channel, feed_id: str, label: str) -> list[JobPosting]:
                 title=title or "Role",
                 url=link,
                 company=company,
-                location=_location_hint(desc, feed_id),
+                location=_location_hint(desc, feed_id, item_location=item_location),
                 description=desc,
                 posted_at=pub,
             )
@@ -137,8 +227,12 @@ def _parse_atom(root, feed_id: str, label: str) -> list[JobPosting]:
     return out
 
 
-def _company_from_item(title: str, body: str, feed_id: str) -> str:
-    if feed_id in ("remoteok", "weworkremotely"):
+def _company_from_item(
+    title: str, body: str, feed_id: str, *, item_company: str = ""
+) -> str:
+    if item_company.strip():
+        return item_company.strip()
+    if feed_id in _WWR_FEEDS or feed_id == "remoteok":
         # Titles often "Company: Role" on these aggregators.
         if ":" in title:
             return title.split(":", 1)[0].strip()
@@ -155,8 +249,16 @@ def _company_from_item(title: str, body: str, feed_id: str) -> str:
     return FEEDS.get(feed_id, {}).get("label", "Unknown")
 
 
-def _location_hint(body: str, feed_id: str) -> str:
-    if feed_id == "remoteok" or feed_id == "weworkremotely" or re.search(r"\bremote\b", body, re.I):
+def _location_hint(body: str, feed_id: str, *, item_location: str = "") -> str:
+    if item_location.strip():
+        loc = item_location.strip()
+        if feed_id in ("himalayas", "remotive", "remoteok") or feed_id in _WWR_FEEDS:
+            if "remote" not in loc.lower():
+                return f"{loc} (Remote)" if loc else "Remote"
+        return loc
+    if feed_id in ("remoteok", "himalayas", "remotive") or feed_id in _WWR_FEEDS or re.search(
+        r"\bremote\b", body, re.I
+    ):
         return "Remote"
     m = re.search(r"\b(?:location|based in|office)[:\s]+([^\n|]{3,60})", body, re.I)
     return m.group(1).strip() if m else ""

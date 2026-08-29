@@ -67,12 +67,27 @@ def test_thin_description_alone_is_not_ghost():
     assert not ghost.is_ghost(_p(desc="Apply now."))
 
 
-def test_first_party_is_always_trusted():
-    # Even with blatant ghost text, a first-party ATS posting is never dropped.
-    p = _p(desc="Always accepting applications for our talent pool, email me@gmail.com",
+def test_first_party_evergreen_is_ghost():
+    p = _p(desc="Always accepting applications for our talent pool.",
+           source="greenhouse")
+    assert ghost.is_ghost(p)
+
+
+def test_first_party_open_req_is_kept():
+    p = _p(desc="We're hiring a backend engineer to build our payments platform.",
            source="greenhouse")
     assert ghost.ghost_signals(p) == []
     assert not ghost.is_ghost(p, repost_count=9)
+
+
+def test_first_party_bump_alone_is_not_ghost():
+    pub = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+    upd = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    p = _p(source="greenhouse", posted_at=pub)
+    p.updated_at = upd
+    assert ("bumped without a new publish date" in
+            [r for r, _ in ghost.ghost_signals(p)])
+    assert not ghost.is_ghost(p)
 
 
 def test_is_stale_parses_iso_and_human_strings():

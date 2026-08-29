@@ -6,7 +6,7 @@
     python cli.py import apps.csv            # bulk import (.csv → CSV, else brain-dump)
     python cli.py import -                    # brain-dump from stdin (paste, then Ctrl-D)
 
-Uses user_id="local" so it shares context/data with the /sms?From=local flow.
+Uses user_id="local" so it shares context/data with the in-app chat flow.
 """
 from __future__ import annotations
 

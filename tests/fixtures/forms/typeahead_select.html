@@ -1,0 +1,78 @@
+<!doctype html>
+<!-- Greenhouse/Ashby-shaped typeaheads: typing is not enough. The form only
+     persists a value after an option is clicked. A hyphenated school name and a
+     City, ST location are the usual mismatch with identity text. -->
+<html>
+<head><meta charset="utf-8"><title>Apply — typeaheads</title></head>
+<body>
+  <form id="app-form" action="/submitted" method="post">
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email">
+
+    <label for="school">School</label>
+    <input type="text" id="school" name="school_display" role="combobox"
+           aria-autocomplete="list" aria-controls="school-list"
+           autocomplete="off" placeholder="Start typing…">
+    <input type="hidden" id="school_id" name="school">
+    <ul id="school-list" role="listbox" hidden>
+      <li role="option">Stanford University</li>
+      <li role="option">University of Minnesota Crookston</li>
+      <li role="option">University of Minnesota-Twin Cities</li>
+    </ul>
+
+    <label for="location">Current location</label>
+    <input type="text" id="location" name="location_display" role="combobox"
+           aria-autocomplete="list" aria-controls="location-list"
+           autocomplete="off" placeholder="Start typing…">
+    <input type="hidden" id="location_id" name="location">
+    <ul id="location-list" role="listbox" hidden>
+      <li role="option">Chicago, Illinois, United States</li>
+      <li role="option">Vernon Hills, Illinois, United States</li>
+      <li role="option">Minneapolis, Minnesota, United States</li>
+    </ul>
+
+    <label for="degree">Highest level of education</label>
+    <select id="degree" name="degree">
+      <option value="">Select…</option>
+      <option>High School</option>
+      <option>Associate's Degree</option>
+      <option>Bachelor's Degree</option>
+      <option>Master's Degree</option>
+      <option>Doctorate</option>
+    </select>
+
+    <button type="submit" id="go">Submit Application</button>
+  </form>
+  <script>
+    function wire(inputId, listId, hiddenId) {
+      var input = document.getElementById(inputId);
+      var list = document.getElementById(listId);
+      var hid = document.getElementById(hiddenId);
+      var all = [].slice.call(list.querySelectorAll('[role=option]'));
+      function norm(s) { return (s || "").toLowerCase().replace(/-/g, " "); }
+      function filter() {
+        var q = norm(input.value);
+        var n = 0;
+        all.forEach(function (o) {
+          var show = !q || norm(o.textContent).indexOf(q) !== -1;
+          o.hidden = !show;
+          if (show) n++;
+        });
+        list.hidden = n === 0;
+      }
+      input.addEventListener("input", filter);
+      input.addEventListener("focus", filter);
+      all.forEach(function (opt) {
+        opt.addEventListener("mousedown", function (e) { e.preventDefault(); });
+        opt.addEventListener("click", function () {
+          input.value = opt.textContent;
+          hid.value = opt.textContent;
+          list.hidden = true;
+        });
+      });
+    }
+    wire("school", "school-list", "school_id");
+    wire("location", "location-list", "location_id");
+  </script>
+</body>
+</html>

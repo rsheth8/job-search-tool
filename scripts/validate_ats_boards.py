@@ -21,6 +21,8 @@ PROBES = {
     "greenhouse": "https://boards-api.greenhouse.io/v1/boards/{token}/jobs",
     "lever": "https://api.lever.co/v0/postings/{token}?mode=json",
     "ashby": "https://api.ashbyhq.com/posting-api/job-board/{token}?includeCompensation=false",
+    "workable": "https://apply.workable.com/api/v1/widget/accounts/{token}",
+    "smartrecruiters": "https://api.smartrecruiters.com/v1/companies/{token}/postings?limit=1",
 }
 
 
@@ -42,12 +44,25 @@ def _count(source: str, token: str) -> int | None:
     if source == "ashby":
         jobs = data.get("jobs") if isinstance(data, dict) else None
         return len(jobs) if jobs else 0
+    if source == "workable":
+        jobs = data.get("jobs") if isinstance(data, dict) else None
+        return len(jobs) if jobs else 0
+    if source == "smartrecruiters":
+        if not isinstance(data, dict):
+            return 0
+        total = data.get("totalFound")
+        if isinstance(total, int):
+            return total
+        jobs = data.get("content")
+        return len(jobs) if isinstance(jobs, list) else 0
     return 0
 
 
-def probe_slug(slug: str) -> list[tuple[str, int]]:
+def probe_slug(slug: str, sources: tuple[str, ...] | None = None) -> list[tuple[str, int]]:
     hits: list[tuple[str, int]] = []
-    for source in ("greenhouse", "lever", "ashby"):
+    for source in sources or (
+        "greenhouse", "lever", "ashby", "workable", "smartrecruiters"
+    ):
         n = _count(source, slug)
         if n is not None and n > 0:
             hits.append((source, n))
@@ -56,7 +71,8 @@ def probe_slug(slug: str) -> list[tuple[str, int]]:
 
 def validate_file(path: Path) -> dict[str, list[str]]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    out: dict[str, list[str]] = {k: [] for k in ("greenhouse", "lever", "ashby")}
+    keys = ("greenhouse", "lever", "ashby", "workable", "smartrecruiters")
+    out: dict[str, list[str]] = {k: [] for k in keys}
     for source in out:
         for token in data.get(source) or []:
             n = _count(source, token)

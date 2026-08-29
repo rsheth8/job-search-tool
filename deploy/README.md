@@ -37,18 +37,16 @@ fly secrets set \
   AUTH_ALLOWED_EMAILS=you@example.com
 ```
 
-Only `ANTHROPIC_API_KEY` and the two `SLACK_*` values are needed for the core
-experience; `APOLLO_API_KEY` is optional (recruiter discovery). `JOB_ALERT_USER`
-is your Slack user id — required for job-discovery digests (find it in Slack →
-profile → ⋯ → Copy member ID).
+`ANTHROPIC_API_KEY` powers the Claude router, discovery scoring, and drafts.
+`APOLLO_API_KEY` is optional (recruiter outreach).
+
+**Job-discovery digests** deliver via `AppSender` (in-app chat + optional APNs push).
+Set your match criteria once in chat, e.g. `"I'm looking for new grad SWE roles,
+remote or NYC"`. Optionally set `JOB_ALERT_USER` to your `usr_…` id (Apple account)
+so digests always target you; empty defaults to the busiest user.
 
 Wide discovery (RSS + ATS directory rotation) is configured in `fly.toml` `[env]`.
-Set your match criteria once in Slack, e.g. `"I'm looking for new grad SWE roles,
-remote or NYC"`. Optional paid broad search: add `SERPAPI_API_KEY`, set
-`JOB_WIDE_AGGREGATOR_ENABLED=true`, and append `aggregator` to `JOB_SOURCES_ENABLED`.
-
-Slack bot scopes: `chat:write`, `files:write` (for resume PDF attachments on
-`apply <#>`). After adding scopes, **Reinstall App** and update `SLACK_BOT_TOKEN`.
+Optional paid broad search: add `SERPAPI_API_KEY`, set
 
 ## Resume base files (one-time)
 
@@ -73,22 +71,11 @@ fly status                       # confirm one machine is running
 curl https://<app>.fly.dev/health   # router, scheduler, auth.fail_open: false
 ```
 
-## Repoint Slack (once)
-
-Slack app → **Event Subscriptions** → Request URL:
-
-```
-https://<app>.fly.dev/slack/events
-```
-
-Re-verify (the server validates the challenge), keep `message.im` (+
-`app_mention`) subscribed, and save. Because the URL is now stable, you never
-have to do this again.
-
 ## Smoke test
 
 1. TestFlight: Sign in with Apple → finish setup → matches appear.
-2. `GET /health` → `auth.fail_open` is false, `dev_login` is false.
+2. `GET /health` → `auth.fail_open` is false, `dev_login` is false,
+   `reminder_delivery` is `app`.
 3. Unauthenticated `GET /apply/data` → 401.
 
 ## Updating

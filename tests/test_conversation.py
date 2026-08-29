@@ -103,10 +103,11 @@ def test_query_interrupts_pending():
 
 def test_help():
     reply = handle_sms(U, "help")
-    assert "LOG & UPDATE" in reply and "follow up" in reply  # the menu
+    assert "Horizon" in reply
+    assert "LOG & UPDATE" not in reply
 
 
 def test_greeting():
     reply = handle_sms(U, "hey there")
-    assert "assistant" in reply.lower()
-    assert "LOG & UPDATE" in reply  # greeting now includes the menu
+    assert "horizon" in reply.lower()
+    assert "help" in reply.lower()

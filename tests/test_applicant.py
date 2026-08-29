@@ -50,6 +50,16 @@ def test_expanded_application_fields_round_trip():
     assert applicant.autofill_map("u1")["willing_to_relocate"] == "Yes"
 
 
+def test_grad_year_splits_into_month_and_year_for_dropdowns():
+    applicant.set_identity("u1", {"grad_year": "December 2027", "intern_season": "Summer",
+                                  "hispanic_latino": False})
+    m = applicant.autofill_map("u1")
+    assert m["grad_month"] == "December"
+    assert m["grad_year_num"] == "2027"
+    assert m["intern_season"] == "Summer"
+    assert m["hispanic_latino"] == "No"
+
+
 def test_identity_bools_and_unknown_keys():
     applicant.set_identity("u1", {"work_authorized": "yes", "needs_sponsorship": False,
                                   "favourite_color": "blue"})

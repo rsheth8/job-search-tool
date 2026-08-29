@@ -1,0 +1,25 @@
+{
+  "name": "Acme",
+  "description": "<p>We build tools.</p>",
+  "jobs": [
+    {
+      "title": "Software Engineer",
+      "shortcode": "ABCDEF",
+      "shortlink": "https://apply.workable.com/acme/j/ABCDEF",
+      "url": "https://apply.workable.com/acme/j/ABCDEF/",
+      "application_url": "https://apply.workable.com/acme/j/ABCDEF/apply",
+      "location": {
+        "city": "San Francisco",
+        "country": "United States",
+        "telecommuting": true
+      },
+      "department": "Engineering",
+      "published_on": "2026-01-15"
+    },
+    {
+      "title": "No Code Role",
+      "shortcode": "",
+      "url": ""
+    }
+  ]
+}

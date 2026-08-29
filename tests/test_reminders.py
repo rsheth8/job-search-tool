@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app import config, reminders, store
+from app import reminders, store
 from app.engine import handle_sms
 
 
@@ -100,27 +100,6 @@ def test_schedule_falls_back_when_time_unparseable():
 # --- sender selection -------------------------------------------------------
 
 def test_get_sender_defaults_to_app_sender():
-    # conftest leaves Twilio/Slack unset → in-app chat + push.
-    assert isinstance(reminders.get_sender(), reminders.AppSender)
-
-
-def test_get_sender_picks_twilio_when_configured(monkeypatch):
-    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "ACfake")
-    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "faketoken")
-    monkeypatch.setenv("TWILIO_FROM_NUMBER", "+14155550100")
-    config.get_settings.cache_clear()
-    reminders._sender_singleton = None
-    assert config.get_settings().outbound_sms_enabled is True
-    assert isinstance(reminders.get_sender(), reminders.TwilioSender)
-
-
-def test_partial_twilio_config_stays_on_app_sender(monkeypatch):
-    # SID + token but no from-number → not enough to send.
-    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "ACfake")
-    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "faketoken")
-    config.get_settings.cache_clear()
-    reminders._sender_singleton = None
-    assert config.get_settings().outbound_sms_enabled is False
     assert isinstance(reminders.get_sender(), reminders.AppSender)
 
 

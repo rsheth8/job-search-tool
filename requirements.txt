@@ -7,7 +7,6 @@ python-dotenv==1.0.1
 apscheduler==3.11.0   # background reminder delivery loop (Phase 2)
 # Optional real backends (stubs work without these installed)
 anthropic>=0.105.0   # needs output_config structured outputs (Haiku 4.5)
-twilio==9.4.1
 httpx==0.28.1
 pypdf>=5.1.0        # accurate page count for tectonic PDFs (flate-compressed)
 # Push notifications (APNs). Only needed when PUSH_ENABLED=true — app/push.py
@@ -18,3 +17,4 @@ h2>=4.1.0           # APNs is HTTP/2 only (httpx needs this for http2=True)
 sentry-sdk>=2.0.0
 # Dev/test
 pytest==8.3.4
+playwright>=1.40.0   # iOS autofill + rules-parity Chromium tests

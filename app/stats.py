@@ -96,25 +96,26 @@ _STAGE_LABELS = {
 def render(stats: dict) -> str:
     if stats["total"] == 0:
         return (
-            "No applications tracked yet. Add some with 'applied <company> <role>' "
-            "or bulk-import (see cli.py import)."
+            "No applications tracked yet. Mark Filed on Apply, or say "
+            "“applied Stripe SWE”."
         )
-    funnel = " · ".join(
-        f"{_STAGE_LABELS[s]} {stats['by_stage'][s]}"
+    funnel = ", ".join(
+        f"{stats['by_stage'][s]} {_STAGE_LABELS[s]}"
         for s in CANONICAL_STATUSES
         if stats["by_stage"].get(s)
     )
-    lines = [
-        f"📊 {stats['total']} apps ({stats['active']} active):",
-        funnel,
+    offer_word = "offer" if stats["offers"] == 1 else "offers"
+    parts = [
+        f"You've logged {stats['total']} apps, {stats['active']} still active "
+        f"({funnel}).",
         f"Response {stats['response_rate']}% · "
         f"Interview+ {stats['interview_rate']}% · "
-        f"Offers {stats['offers']}",
+        f"{stats['offers']} {offer_word}.",
     ]
-    tail = f"Last 7d: {stats['new_7']} new"
+    tail = f"{stats['new_7']} new in the last 7 days."
     if stats["stale"]:
-        tail += f" · {stats['stale']} going stale"
+        tail += f" {stats['stale']} going stale."
     if stats["ghost_rate"]:
-        tail += f" · Ghosted {stats['ghost_rate']}%"
-    lines.append(tail)
-    return "\n".join(lines)
+        tail += f" Ghosted {stats['ghost_rate']}%."
+    parts.append(tail)
+    return " ".join(parts)

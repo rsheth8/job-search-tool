@@ -1,10 +1,10 @@
 """Reputability filter for discovered postings.
 
-First-party ATS boards (Greenhouse / Lever / Ashby, and the directory which polls
-them) are inherently trustworthy — postings come straight from companies' own
-career systems. This filter mainly cleans up the **aggregator** (Google Jobs) and
-**RSS** feeds, which can surface placeholder / spam / staffing-churn listings
-("Top Company", "Confidential", "Earn $$$ from home").
+First-party ATS boards (Greenhouse / Lever / Ashby / Workable / SmartRecruiters,
+and the directory which polls them) are inherently trustworthy — postings come
+straight from companies' own career systems. This filter mainly cleans up the
+**aggregator** (Google Jobs) and **RSS** feeds, which can surface placeholder /
+spam / staffing-churn listings ("Top Company", "Confidential", "Earn $$$ from home").
 
 Deliberately conservative: it drops only clearly-junk postings (placeholder
 company, no apply link, obvious spam title) — never a real employer. Anything
@@ -18,8 +18,10 @@ import re
 from .base import JobPosting
 
 # Sources whose results are first-party (real company career systems) → trusted.
-# Directory postings carry the underlying ATS source (greenhouse/lever/ashby).
-FIRST_PARTY_SOURCES = frozenset({"greenhouse", "lever", "ashby"})
+# Directory postings carry the underlying ATS source (greenhouse/lever/ashby/…).
+FIRST_PARTY_SOURCES = frozenset({
+    "greenhouse", "lever", "ashby", "workable", "smartrecruiters",
+})
 # Prefer these over RSS/aggregator when the same job arrives twice. Swelist
 # listings.json already stores company ATS URLs (not the README Simplify buttons).
 PREFERRED_APPLY_SOURCES = FIRST_PARTY_SOURCES | {"swelist"}

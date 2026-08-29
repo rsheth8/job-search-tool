@@ -60,3 +60,12 @@ def test_payload_versioned():
     p = formprobe.payload()
     assert "version" in p
     assert "advance" in p
+
+
+def test_generic_html_form_is_an_application():
+    r = formprobe.probe_signals(
+        labels=["First name", "Last name", "Email", "Phone"],
+        button_texts=["Submit application"],
+    )
+    assert r["kind"] == "application"
+    assert r["blocker_reason"] is None

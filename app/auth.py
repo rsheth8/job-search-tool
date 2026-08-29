@@ -321,10 +321,10 @@ def require_apply_access(request: Request) -> None:
 
 
 def resolve_user(request: Request, claimed: str | None = None) -> str:
-    """Session always wins. Never fall back to dashboard.default_user().
+    """Session always wins. Never invent a default user.
 
     With a session, query/body ``user`` is ignored (testers cannot pick
-    another account). Extension/worker may send X-Apply-Token + claimed user.
+    another account). Scripts may send X-Apply-Token + claimed user.
     """
     from . import llm_budget
 
@@ -338,18 +338,6 @@ def resolve_user(request: Request, claimed: str | None = None) -> str:
         raise HTTPException(status_code=401, detail="sign in required")
     llm_budget.set_user(uid)
     return uid
-
-
-def html_user(request: Request, claimed: str | None = None) -> str:
-    """HTML dashboards: session user in prod; ``?user=`` only when fail-open."""
-    from . import dashboard as dash
-
-    session_uid = user_from_request(request)
-    if session_uid:
-        return session_uid
-    if get_settings().auth_fail_open:
-        return (claimed or "").strip() or dash.default_user()
-    raise HTTPException(status_code=401, detail="sign in required")
 
 
 def sign_in_with_apple(
@@ -367,7 +355,10 @@ def sign_in_with_apple(
     if not email_is_allowed(check_email):
         raise HTTPException(
             status_code=403,
-            detail="this beta is invite-only",
+            detail=(
+                "this beta is invite-only. If you hid your email with Apple, "
+                "send the privaterelay.appleid.com address to the host."
+            ),
         )
     user = upsert_apple_user(
         apple_sub=claims["sub"],

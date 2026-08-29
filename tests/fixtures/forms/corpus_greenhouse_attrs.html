@@ -1,0 +1,67 @@
+<!doctype html>
+<!-- Unbiased Greenhouse snapshot: real name= tokens, labels a company actually
+     rewrote. Gold is keyed by selector, not by FIELD_RULES. -->
+<html>
+<head><meta charset="utf-8"><title>Apply — Greenhouse (custom labels)</title></head>
+<body>
+  <form id="application_form" action="/submitted" method="post">
+    <label for="fn">Applicant</label>
+    <input type="text" id="fn" name="job_application[first_name]" autocomplete="given-name">
+
+    <label for="ln">Surname on passport</label>
+    <input type="text" id="ln" name="job_application[last_name]" autocomplete="family-name">
+
+    <label for="em">Reach us at</label>
+    <input type="email" id="em" name="job_application[email]" autocomplete="email">
+
+    <label for="ph">Daytime</label>
+    <input type="tel" id="ph" name="job_application[phone]" autocomplete="tel">
+
+    <label for="loc">Based out of</label>
+    <input type="text" id="loc" name="job_application[location]">
+
+    <label for="li">Professional profile</label>
+    <input type="text" id="li" name="job_application[urls][LinkedIn]">
+
+    <label for="gh">Code samples</label>
+    <input type="text" id="gh" name="job_application[urls][GitHub]">
+
+    <label for="web">Anything else (URL)</label>
+    <input type="url" id="web" name="job_application[urls][Portfolio]">
+
+    <label for="school">Institution</label>
+    <input type="text" id="school" name="job_application[educations][][school_name]">
+
+    <label for="deg">Programme</label>
+    <select id="deg" name="job_application[educations][][degree]">
+      <option value="">Select…</option>
+      <option>High School</option>
+      <option>Bachelor's Degree</option>
+      <option>Master's Degree</option>
+      <option>Doctorate</option>
+    </select>
+
+    <label for="disc">Subject</label>
+    <input type="text" id="disc" name="job_application[educations][][discipline]">
+
+    <label for="co">Where you've been</label>
+    <input type="text" id="co" name="job_application[employments][][company_name]">
+
+    <label for="ti">What you did there</label>
+    <input type="text" id="ti" name="job_application[employments][][title]">
+
+    <label for="hear">How'd you find this role?</label>
+    <select id="hear" name="job_application[how_heard]">
+      <option value="">Select…</option>
+      <option>LinkedIn</option>
+      <option>Indeed</option>
+      <option>Company website</option>
+    </select>
+
+    <label for="snack">Favorite ice cream</label>
+    <input type="text" id="snack" name="job_application[answers][snack]">
+
+    <button type="submit">Submit Application</button>
+  </form>
+</body>
+</html>

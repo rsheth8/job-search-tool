@@ -10,12 +10,15 @@ trained on your own labels:
 
 Features per posting (all free, no API — computed from the stored row + profile):
 
-    1. relevance      the matcher's own score (embedding or heuristic), 0..1
+    1. relevance      the matcher's own score (LLM or heuristic), 0..1
     2. kw_overlap     fraction of profile concepts present in the posting
     3. title_hit      a profile term lands in the *title* (strong intent signal)
     4. loc_match      a preferred location appears
     5. is_remote      the posting is remote
-    6. first_party    from a company ATS (vs aggregator/RSS)
+    6. first_party    from a company ATS (vs RSS/directory)
+    7. freshness      1.0 if posted in the last 48h, decaying to 0 by ~45 days
+    8. fillable       Greenhouse / Lever / Ashby apply URL the iOS engine can drive
+
 
 Design rules carried from the rest of the system:
 
@@ -39,9 +42,10 @@ import sqlite3
 from datetime import datetime, timezone
 
 from . import matcher
-from . import insights
 from . import posting_match
 from . import store
+from . import ats
+from . import shortlist
 from .config import get_settings
 from .db import connect
 from .jobsources import JobPosting
@@ -49,14 +53,11 @@ from .jobsources import quality
 
 logger = logging.getLogger("reranker")
 
-# Base (free) features + the hybrid LLM judgement features (insights.LLM_FEATURES:
-# fit_score, tech_overlap, stretch — the LLM's 0-1 reads, cached per posting). The
-# re-ranker learns how much to trust each from the user's history: LLM
-# comprehension weighted by personal behaviour.
-_BASE_FEATURES = ("relevance", "kw_overlap", "title_hit", "loc_match", "is_remote",
-                  "first_party")
-FEATURES = _BASE_FEATURES + insights.LLM_FEATURES
-_MODEL_VERSION = 3  # feature schema changed -> old models auto-invalidate + retrain
+# Free features only (no LLM judgement features). Feature schema bump invalidates
+# older persisted models so they retrain on the new vector.
+FEATURES = ("relevance", "kw_overlap", "title_hit", "loc_match", "is_remote",
+            "first_party", "freshness", "fillable")
+_MODEL_VERSION = 5  # freshness + fillable
 _SNOOZE_WEIGHT = 0.5  # snoozed = mild negative, counts half as much as a dismiss
 
 # Graded positive weights by the application's real outcome stage (the CRM
@@ -93,17 +94,10 @@ class Featurizer:
     in both layers. Profile-derived sets are computed once per instance.
     """
 
-    def __init__(
-        self, profile: sqlite3.Row | None,
-        llm_feats: dict[str, dict[str, float]] | None = None,
-    ) -> None:
+    def __init__(self, profile: sqlite3.Row | None) -> None:
         self.terms = matcher._terms(profile)
         self.match_terms = matcher._match_terms(profile)
         self.locations = matcher._locations(profile)
-        # cache_key ("{source}:{external_id}") -> {feature: value} for the LLM
-        # features. Missing -> neutral defaults (so they're harmless when summaries
-        # are off or a posting hasn't been assessed yet).
-        self.llm_feats = llm_feats or {}
 
     def features(
         self,
@@ -114,6 +108,8 @@ class Featurizer:
         source: str | None,
         relevance: float | None,
         external_id: str | None = None,
+        posted_at: str | None = None,
+        url: str | None = None,
     ) -> list[float]:
         title_l = (title or "").lower()
         haystack = f"{title or ''} {location or ''} {description or ''}".lower()
@@ -130,8 +126,6 @@ class Featurizer:
         )
         is_remote = 1.0 if "remote" in haystack else 0.0
         first_party = 1.0 if (source or "").lower() in quality.PREFERRED_APPLY_SOURCES else 0.0
-        feats = self.llm_feats.get(f"{source or ''}:{external_id or ''}", {})
-        llm_vals = [feats.get(f, insights.LLM_DEFAULTS[f]) for f in insights.LLM_FEATURES]
         return [
             float(relevance if relevance is not None else 0.5),
             kw_overlap,
@@ -139,7 +133,8 @@ class Featurizer:
             loc_match,
             is_remote,
             first_party,
-            *llm_vals,
+            shortlist.freshness_score(posted_at),
+            1.0 if ats.is_fillable_form(url) else 0.0,
         ]
 
 
@@ -214,7 +209,7 @@ def _outcome_grader(user_id: str):
 def _labeled_examples(user_id: str) -> list[tuple]:
     """Normalized (title, location, description, source, external_id, relevance,
     y, weight) training rows from BOTH real applications (job_postings status) and
-    the swipe trainer (training_labels) — so the model learns from whichever
+    the swipe trainer labels (training_labels) — so the model learns from whichever
     signal exists.
 
         applied / swipe-'like'  -> y=1
@@ -226,8 +221,8 @@ def _labeled_examples(user_id: str) -> list[tuple]:
     with connect() as conn:
         for r in conn.execute(
             "SELECT title, location, description, source, external_id, "
-            "relevance_score, company, status FROM job_postings WHERE user_id = ? "
-            "AND status IN ('applied', 'dismissed', 'snoozed')",
+            "relevance_score, company, status, posted_at, url FROM job_postings "
+            "WHERE user_id = ? AND status IN ('applied', 'dismissed', 'snoozed')",
             (user_id,),
         ):
             if r["status"] == "applied":
@@ -236,23 +231,18 @@ def _labeled_examples(user_id: str) -> list[tuple]:
                 y = 0.0
                 w = _SNOOZE_WEIGHT if r["status"] == "snoozed" else 1.0
             out.append((r["title"], r["location"], r["description"], r["source"],
-                        r["external_id"], r["relevance_score"], y, w))
+                        r["external_id"], r["relevance_score"], y, w,
+                        r["posted_at"], r["url"]))
         for r in conn.execute(
             "SELECT title, location, description, source, external_id, "
-            "relevance_score, label FROM training_labels WHERE user_id = ?",
+            "relevance_score, label, url FROM training_labels WHERE user_id = ?",
             (user_id,),
         ):
             y = 1.0 if r["label"] == "like" else 0.0
             out.append((r["title"], r["location"], r["description"], r["source"],
-                        r["external_id"], r["relevance_score"], y, 1.0))
+                        r["external_id"], r["relevance_score"], y, 1.0,
+                        "", r["url"]))
     return out
-
-
-def _llm_feats_for(examples: list[tuple]) -> dict[str, dict[str, float]]:
-    """Batch-load the LLM judgement features for these examples (keyed
-    source:external_id)."""
-    keys = [f"{e[3] or ''}:{e[4] or ''}" for e in examples]
-    return insights.cached_llm_features(keys)
 
 
 def _build_dataset(
@@ -263,10 +253,12 @@ def _build_dataset(
     y: list[float] = []
     w: list[float] = []
     n_pos = n_neg = 0
-    for title, location, description, source, external_id, relevance, label, weight in examples:
+    for (title, location, description, source, external_id, relevance, label,
+         weight, posted_at, url) in examples:
         X.append(feat.features(title=title, location=location,
                                description=description, source=source,
-                               relevance=relevance, external_id=external_id))
+                               relevance=relevance, external_id=external_id,
+                               posted_at=posted_at, url=url))
         y.append(label)
         w.append(weight)
         if label >= 0.5:
@@ -285,7 +277,7 @@ def _train_model(
     deciding to promote."""
     s = get_settings()
     examples = _labeled_examples(user_id)
-    feat = Featurizer(profile, _llm_feats_for(examples))
+    feat = Featurizer(profile)
     X, y, w, n_pos, n_neg = _build_dataset(examples, feat)
     if n_pos < s.reranker_min_positive or n_neg < s.reranker_min_negative:
         return None
@@ -427,8 +419,7 @@ def predict(
         return None
     try:
         weights, bias = model["weights"], model["bias"]
-        keys = [f"{p.source or ''}:{p.external_id or ''}" for p, _ in scored]
-        feat = Featurizer(profile, insights.cached_llm_features(keys))
+        feat = Featurizer(profile)
         return [
             (
                 posting,
@@ -438,6 +429,7 @@ def predict(
                         title=posting.title, location=posting.location,
                         description=posting.description, source=posting.source,
                         relevance=base, external_id=posting.external_id,
+                        posted_at=posting.posted_at, url=posting.url,
                     ),
                 ),
             )
@@ -462,14 +454,14 @@ def rerank(
         return scored
     try:
         weights, bias = model["weights"], model["bias"]
-        keys = [f"{p.source or ''}:{p.external_id or ''}" for p, _ in scored]
-        feat = Featurizer(profile, insights.cached_llm_features(keys))
+        feat = Featurizer(profile)
         out = []
         for posting, base in scored:
             x = feat.features(
                 title=posting.title, location=posting.location,
                 description=posting.description, source=posting.source,
                 relevance=base, external_id=posting.external_id,
+                posted_at=posting.posted_at, url=posting.url,
             )
             out.append((posting, round(_predict(weights, bias, x), 3)))
         out.sort(key=lambda t: t[1], reverse=True)

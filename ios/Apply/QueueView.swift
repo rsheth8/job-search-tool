@@ -1,17 +1,27 @@
 import SwiftUI
+import UIKit
 
-/// Editorial apply surface: one Up next, a Ready strip, then more matches.
+/// Apply home: one scored next as a gauge, a quiet tape of the rest, one Preflight.
 struct QueueView: View {
     @EnvironmentObject var config: Config
     @EnvironmentObject var chrome: AppChrome
     @EnvironmentObject var setup: SetupGate
+    @EnvironmentObject var push: PushManager
     @State private var queue: [QueueItem] = []
     @State private var matches: [QueueItem] = []
     @State private var loading = false
     @State private var staging: Set<Int> = []
     @State private var error: String?
     @State private var path = NavigationPath()
-    @State private var appeared = false
+    @State private var toast: String?
+    @State private var pendingPass: QueueItem?
+    @State private var pane = 0
+    @State private var filed: [FiledApplication] = []
+    @State private var showAll = false
+    @State private var tapeFocus: Int?
+    @State private var searching = false
+    @State private var pendingJobId: Int?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var api: APIClient { APIClient(config: config) }
 
@@ -21,198 +31,460 @@ struct QueueView: View {
         return queue.contains(where: { $0.posting_id == upNext.posting_id })
     }
     private var readyRest: [QueueItem] {
-        guard let upNext, upNextIsReady else { return queue }
-        return queue.filter { $0.posting_id != upNext.posting_id }
+        Array(queue.dropFirst())
     }
     private var matchRest: [QueueItem] {
-        guard let upNext, !upNextIsReady else { return matches }
-        return matches.filter { $0.posting_id != upNext.posting_id }
+        if upNextIsReady { return matches }
+        return Array(matches.dropFirst())
+    }
+    private var tapeItems: [QueueItem] {
+        Array((readyRest + matchRest).prefix(12))
+    }
+
+    private func isReady(_ item: QueueItem) -> Bool {
+        queue.contains(where: { $0.posting_id == item.posting_id })
     }
 
     var body: some View {
         NavigationStack(path: $path) {
             Group {
-                if loading && queue.isEmpty && matches.isEmpty && error == nil {
-                    PreparingView(message: "Gathering matches…")
-                } else if let error, queue.isEmpty && matches.isEmpty {
+                if loading && queue.isEmpty && matches.isEmpty && filed.isEmpty && error == nil {
+                    PreparingView(message: "Finding matches…")
+                } else if let error, queue.isEmpty && matches.isEmpty && filed.isEmpty {
                     EmptyStateView(
-                        title: "Couldn't load",
+                        title: "Couldn't load matches",
                         description: error,
-                        retryTitle: "Try again"
-                    ) { Task { await load() } }
-                } else if queue.isEmpty && matches.isEmpty {
-                    if setup.status?.has_profile == false {
-                        EmptyStateView(
-                            title: "Finish setup",
-                            description: "Tell Apply what roles you want so it can find matches.",
-                            retryTitle: "Set up profile"
-                        ) { setup.reopen() }
-                    } else {
-                        EmptyStateView(
-                            title: "Nothing waiting",
-                            description: "Discovery is looking. Pull to refresh — first matches can take a few minutes. Greenhouse, Lever, and Ashby forms autofill; Workday and LinkedIn Easy Apply do not."
-                        )
-                    }
+                        retryTitle: "Try again",
+                        retry: { Task { await load(refresh: true); await pollWhileSearching() } },
+                        secondaryTitle: "Send feedback",
+                        secondary: { push.openDeepLink("settings:feedback", fromHorizon: true) }
+                    )
+                    .instrumentEnter()
+                } else if searching && queue.isEmpty && matches.isEmpty && filed.isEmpty {
+                    PreparingView(message: "Finding matches…")
+                        .instrumentEnter()
+                } else if queue.isEmpty && matches.isEmpty && filed.isEmpty {
+                    emptyHome
+                        .instrumentEnter()
                 } else {
                     content
-                        .opacity(appeared ? 1 : 0)
-                        .offset(y: appeared ? 0 : 12)
-                        .onAppear {
-                            withAnimation(Theme.springSoft) { appeared = true }
-                        }
+                        .instrumentEnter()
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: QueueItem.self) { ApplyView(item: $0) }
-            .refreshable { await load() }
             .ambientScreen()
+            .appToast($toast, bottomPadding: Theme.toastClearance)
+            .confirmationDialog(
+                "Pass on \(pendingPass?.company ?? "this role")?",
+                isPresented: Binding(
+                    get: { pendingPass != nil },
+                    set: { if !$0 { pendingPass = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Pass", role: .destructive) {
+                    if let item = pendingPass {
+                        Task { await pass(item) }
+                    }
+                    pendingPass = nil
+                }
+                Button("Cancel", role: .cancel) { pendingPass = nil }
+            } message: {
+                Text("It won’t appear in matches again.")
+            }
             .onChange(of: path.count) { _, count in
                 chrome.dockHidden = count > 0
+                if count == 0 { Task { await load() } }
             }
-            .onAppear { chrome.dockHidden = !path.isEmpty }
-            // Do NOT reset dockHidden in onDisappear — NavigationStack fires that
-            // when a detail is pushed, which raced Autofill and left the floating
-            // dock painted over the apply controls.
+            .onAppear { chrome.dockHidden = !path.isEmpty; consumeHorizonHop() }
+            .onChange(of: push.hop) { _, _ in consumeHorizonHop() }
             .task {
+                #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("-JobPilotFiled") { pane = 1 }
+                #endif
                 let uid = config.user
                 if queue.isEmpty && matches.isEmpty, let cached = QueueCache.load(user: uid) {
                     queue = cached.queue
                     matches = cached.matches
                     chrome.readyCount = cached.queue.count
                 }
-                await load()
+                await load(refresh: queue.isEmpty && matches.isEmpty)
+                await pollWhileSearching()
             }
         }
     }
 
     private var content: some View {
         ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: Theme.spaceXL) {
+            VStack(alignment: .leading, spacing: Theme.spaceM) {
                 PageHeader(
-                    eyebrow: "Apply",
+                    eyebrow: "JobPilot",
                     title: greeting,
                     subtitle: subtitleLine
-                )
-
-                if let item = upNext {
-                    UpNextCard(
-                        item: item,
-                        actionTitle: upNextIsReady ? "Open application" : "Prepare application",
-                        busy: staging.contains(item.posting_id),
-                        showPassActions: upNextIsReady,
-                        onPass: { Task { await pass(item) } },
-                        onSkip: { Task { await skip(item) } }
-                    ) {
-                        if upNextIsReady {
-                            path.append(item)
-                        } else {
-                            Task { await stage(item) }
+                ) {
+                    InstrumentToggle(options: ["Matches", "Filed"], selection: $pane)
+                        .onChange(of: pane) { _, new in
+                            showAll = false
+                            if new == 1 { Task { await load() } }
                         }
-                    }
+                }
+
+                if pane == 0 {
+                    matchesPane
+                        .transition(paneTransition(leading: true))
+                } else {
+                    filedPane
+                        .transition(paneTransition(leading: false))
+                }
+
+                Color.clear.frame(height: Theme.dockClearance)
+            }
+            .padding(.top, 4)
+            .animation(reduceMotion ? nil : Theme.springSoft, value: pane)
+        }
+        .refreshable {
+            await load(refresh: true)
+            await pollWhileSearching()
+        }
+    }
+
+    private var emptyHome: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: Theme.spaceM) {
+                PageHeader(
+                    eyebrow: "JobPilot",
+                    title: greeting
+                )
+                if setup.status?.has_profile == false {
+                    EmptyStateView(
+                        title: "Finish setup",
+                        description: "Add the roles you want. Matches are based on this.",
+                        retryTitle: "Set up profile"
+                    ) { setup.reopen() }
+                    .padding(.horizontal, Theme.spaceL)
+                } else {
+                    EmptyStateView(
+                        title: "No matches yet",
+                        description: emptySearchCopy,
+                        retryTitle: "Search now"
+                    ) { Task { await load(refresh: true); await pollWhileSearching() } }
                     .padding(.horizontal, Theme.spaceL)
                 }
-
-                if !readyRest.isEmpty {
-                    VStack(alignment: .leading, spacing: Theme.spaceS) {
-                        sectionLabel("Also ready")
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 12) {
-                                ForEach(readyRest) { item in
-                                    Button { path.append(item) } label: {
-                                        ReadyChipCard(item: item)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .contextMenu {
-                                        Button { path.append(item) } label: {
-                                            Label("Open", systemImage: "arrow.up.right")
-                                        }
-                                        Button { Task { await skip(item) } } label: {
-                                            Label("Skip for now", systemImage: "clock")
-                                        }
-                                        Button(role: .destructive) {
-                                            Task { await pass(item) }
-                                        } label: {
-                                            Label("Pass", systemImage: "xmark")
-                                        }
-                                    }
-                                }
-                            }
-                            .padding(.horizontal, Theme.spaceL)
-                        }
-                    }
-                }
-
-                if !matchRest.isEmpty {
-                    VStack(alignment: .leading, spacing: Theme.spaceS) {
-                        sectionLabel("More matches")
-                        VStack(spacing: 0) {
-                            ForEach(Array(matchRest.enumerated()), id: \.element.id) { idx, item in
-                                HStack(alignment: .center, spacing: 12) {
-                                    QuietRow(
-                                        title: item.title ?? "Role",
-                                        subtitle: item.company,
-                                        score: item.score
-                                    )
-                                    Button {
-                                        Task { await stage(item) }
-                                    } label: {
-                                        Text(staging.contains(item.posting_id) ? "…" : "Prepare")
-                                            .font(.subheadline.weight(.semibold))
-                                            .foregroundStyle(Theme.accent)
-                                    }
-                                    .disabled(staging.contains(item.posting_id))
-                                }
-                                .padding(.horizontal, Theme.spaceL)
-                                .padding(.vertical, 10)
-                                .opacity(appeared ? 1 : 0)
-                                .animation(Theme.springSoft.delay(0.04 * Double(idx)),
-                                           value: appeared)
-
-                                if idx < matchRest.count - 1 {
-                                    Divider()
-                                        .background(Theme.accent.opacity(0.08))
-                                        .padding(.leading, Theme.spaceL)
-                                }
-                            }
-                        }
-                        .background(
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .fill(Color.white.opacity(0.65))
-                        )
-                        .padding(.horizontal, Theme.spaceL)
-                    }
-                }
-
-                Color.clear.frame(height: 88) // dock clearance
+                Color.clear.frame(height: Theme.dockClearance)
             }
-            .padding(.top, 8)
+            .padding(.top, 4)
         }
+        .refreshable {
+            await load(refresh: true)
+            await pollWhileSearching()
+        }
+    }
+
+    private func paneTransition(leading: Bool) -> AnyTransition {
+        if reduceMotion { return .opacity }
+        let insertX: CGFloat = leading ? -12 : 12
+        let removeX: CGFloat = leading ? 12 : -12
+        return .asymmetric(
+            insertion: .opacity.combined(with: .offset(x: insertX)),
+            removal: .opacity.combined(with: .offset(x: removeX))
+        )
+    }
+
+    @ViewBuilder
+    private var matchesPane: some View {
+        VStack(alignment: .leading, spacing: Theme.spaceM) {
+            if let item = upNext {
+                hero(item)
+                    .id(item.posting_id)
+                    .transition(reduceMotion
+                        ? .opacity
+                        : .asymmetric(
+                            insertion: .opacity.combined(with: .scale(scale: 0.96)),
+                            removal: .opacity
+                        ))
+                    .padding(.horizontal, Theme.spaceL)
+                    .staggerAppear(0)
+            } else if !loading {
+                EmptyStateView(
+                    title: "No open matches",
+                    description: "Pull to refresh to search again, or check Filed for what you’ve already sent.",
+                    compact: true
+                )
+                .padding(.horizontal, Theme.spaceL)
+            }
+
+            if !tapeItems.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Apply these today")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.soft)
+                            .textCase(.uppercase)
+                            .tracking(0.8)
+                        Spacer(minLength: 8)
+                        Button(showAll ? "Hide" : "See all") {
+                            withAnimation(reduceMotion ? nil : Theme.springSoft) { showAll.toggle() }
+                        }
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Theme.accent)
+                    }
+                    .padding(.horizontal, Theme.spaceL)
+                    matchTape
+                }
+            }
+
+            if showAll, !(readyRest + matchRest).isEmpty {
+                seeAllList
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .animation(reduceMotion ? nil : Theme.springSoft, value: upNext?.posting_id)
+        .animation(reduceMotion ? nil : Theme.springSoft, value: showAll)
+    }
+
+    private var matchTape: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(Array(tapeItems.enumerated()), id: \.element.id) { i, item in
+                    MatchTriageRow(
+                        onLater: { Task { await later(item) } },
+                        onPass: { pendingPass = item },
+                        compact: true
+                    ) {
+                        Button {
+                            Task { await makeNext(item) }
+                        } label: {
+                            MatchTapeChip(
+                                item: item,
+                                focused: tapeFocus == item.posting_id || (tapeFocus == nil && i == 0)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .id(item.posting_id)
+                    .modifier(TapePhaseEffect(freeze: reduceMotion))
+                    .contextMenu { rowMenu(item, ready: isReady(item)) }
+                    .staggerAppear(i + 1)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollTargetBehavior(.viewAligned)
+        .scrollPosition(id: $tapeFocus)
+        .safeAreaPadding(.horizontal, Theme.spaceL)
+        .onChange(of: tapeFocus) { old, new in
+            guard !reduceMotion, old != nil, new != nil, old != new else { return }
+            Theme.selection()
+        }
+    }
+
+    private var seeAllList: some View {
+        GroupedSurface {
+            ForEach(Array((readyRest + matchRest).enumerated()), id: \.element.id) { i, item in
+                if i > 0 { rowDivider }
+                MatchTriageRow(
+                    onLater: { Task { await later(item) } },
+                    onPass: { pendingPass = item }
+                ) {
+                    Button {
+                        Task { await makeNext(item) }
+                    } label: {
+                        quietMatchRow(item)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .contextMenu { rowMenu(item, ready: isReady(item)) }
+                .staggerAppear(i)
+            }
+        }
+        .padding(.horizontal, Theme.spaceL)
+    }
+
+    @ViewBuilder
+    private var filedPane: some View {
+        VStack(alignment: .leading, spacing: Theme.spaceL) {
+            if filed.isEmpty {
+                EmptyStateView(
+                    title: "Nothing filed yet",
+                    description: "Mark an application Filed after you submit. It will show up here.",
+                    compact: true
+                )
+                .padding(.horizontal, Theme.spaceL)
+            } else {
+                GroupedSurface {
+                    ForEach(Array(filed.enumerated()), id: \.element.id) { i, app in
+                        if i > 0 { rowDivider }
+                        filedRow(app)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                            .staggerAppear(min(i, 8))
+                    }
+                }
+                .padding(.horizontal, Theme.spaceL)
+            }
+        }
+    }
+
+    private var rowDivider: some View {
+        Rectangle()
+            .fill(Theme.cloud.opacity(0.45))
+            .frame(height: 1)
+            .padding(.leading, 16)
+    }
+
+    private func hero(_ item: QueueItem) -> some View {
+        UpNextCard(
+            item: item,
+            kicker: upNextIsReady ? "Ready" : "Apply today",
+            actionTitle: upNextIsReady ? "Open form" : "Preflight",
+            busy: staging.contains(item.posting_id),
+            showTriage: true,
+            onLater: { Task { await later(item) } },
+            onPass: { pendingPass = item }
+        ) {
+            if upNextIsReady {
+                path.append(item)
+            } else {
+                Task { await stage(item) }
+            }
+        }
+    }
+
+    private func quietMatchRow(_ item: QueueItem) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.company ?? "Company")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(item.title ?? "Role")
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.soft)
+                        .lineLimit(1)
+                    if let sc = item.score {
+                        Text("·")
+                            .foregroundStyle(Theme.soft)
+                        ScoreMark(score: sc, size: 13)
+                    }
+                }
+                Text(item.applyKindLabel)
+                    .font(.caption)
+                    .foregroundStyle(Theme.soft.opacity(0.85))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private func rowMenu(_ item: QueueItem, ready: Bool) -> some View {
+        if ready {
+            Button { path.append(item) } label: {
+                Label("Open form", systemImage: "arrow.up.right")
+            }
+            Button { Task { await promote(item) } } label: {
+                Label("Apply next", systemImage: "arrow.up")
+            }
+        } else {
+            Button { Task { await stage(item) } } label: {
+                Label("Preflight", systemImage: "square.and.pencil")
+            }
+            Button {
+                withAnimation(Theme.springSoft) {
+                    matches.removeAll { $0.posting_id == item.posting_id }
+                    matches.insert(item, at: 0)
+                }
+                persistMatches()
+            } label: {
+                Label("Make next", systemImage: "arrow.up")
+            }
+        }
+        Button { Task { await later(item) } } label: {
+            Label("Later", systemImage: "clock")
+        }
+        Button(role: .destructive) { pendingPass = item } label: {
+            Label("Pass", systemImage: "xmark")
+        }
+    }
+
+    private func filedRow(_ app: FiledApplication) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(app.company ?? "Company")
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(Theme.ink)
+                Spacer(minLength: 8)
+                Text(app.status ?? "Applied")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.horizon)
+            }
+            Text(app.role ?? "Role")
+                .font(.subheadline)
+                .foregroundStyle(Theme.soft)
+                .lineLimit(1)
+            if let when = filedDate(app.applied_at) {
+                Text(when)
+                    .font(.caption)
+                    .foregroundStyle(Theme.soft)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func filedDate(_ iso: String?) -> String? {
+        guard let iso, !iso.isEmpty else { return nil }
+        let withFrac = ISO8601DateFormatter()
+        withFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = withFrac.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
+        if let date {
+            return date.formatted(.dateTime.month(.abbreviated).day().year())
+        }
+        return iso.count >= 10 ? String(iso.prefix(10)) : nil
+    }
+
+    private func persistMatches() {
+        let ids = matches.map(\.posting_id)
+        Task {
+            try? await api.reorder(matches: ids)
+            QueueCache.save(queue: queue, matches: matches, user: config.user)
+        }
+    }
+
+    private var greetingName: String {
+        Voice.firstName(identity: setup.status?.identity, displayName: config.displayName)
     }
 
     private var greeting: String {
-        let hour = Calendar.current.component(.hour, from: Date())
-        if hour < 12 { return "Good morning" }
-        if hour < 17 { return "Good afternoon" }
-        return "Good evening"
+        Voice.timeGreeting(name: greetingName)
+    }
+
+    private var emptySearchCopy: String {
+        let lead = greetingName.isEmpty
+            ? "No matches yet."
+            : "No matches yet, \(greetingName)."
+        return "\(lead) Pull to refresh to search again. Open a match and tap Fill — public forms get Autofill; sign-in and CAPTCHAs pause for you."
     }
 
     private var subtitleLine: String? {
+        if pane == 1 {
+            let n = filed.count
+            return n == 0 ? "Filed after you submit." : (n == 1 ? "1 application" : "\(n) applications")
+        }
         if !queue.isEmpty {
-            return "\(queue.count) ready · one clear next step"
+            let n = queue.count
+            return n == 1 ? "1 ready to apply" : "\(n) ready to apply"
         }
         if !matches.isEmpty {
-            return "\(matches.count) matches worth a look"
+            let today = matches.filter { $0.apply_today == true }.count
+            let n = today > 0 ? today : min(5, matches.count)
+            return n == 1 ? "1 to apply today" : "\(n) to apply today"
         }
         return nil
-    }
-
-    private func sectionLabel(_ text: String) -> some View {
-        Text(text)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(Theme.soft)
-            .textCase(.uppercase)
-            .tracking(0.8)
-            .padding(.horizontal, Theme.spaceL)
     }
 
     private func stage(_ item: QueueItem) async {
@@ -232,25 +504,29 @@ struct QueueView: View {
             await load()
         } catch {
             Theme.notify(.error)
+            let msg = APIClient.userMessage(for: error)
+            if !msg.isEmpty { flashToast(msg) }
         }
     }
 
-    /// Unstage — may reappear under More matches later.
-    private func skip(_ item: QueueItem) async {
+    private func later(_ item: QueueItem) async {
         do {
-            try await api.skipQueueItem(postingId: item.posting_id)
+            try await api.snooze(postingId: item.posting_id)
             Theme.impact(.soft)
             withAnimation(Theme.springSoft) {
                 queue.removeAll { $0.posting_id == item.posting_id }
+                matches.removeAll { $0.posting_id == item.posting_id }
                 chrome.readyCount = queue.count
             }
+            flashToast("\(item.company ?? "This role") — back in a week")
             await load()
         } catch {
             Theme.notify(.error)
+            let msg = APIClient.userMessage(for: error)
+            if !msg.isEmpty { flashToast(msg) }
         }
     }
 
-    /// Pass for good — dismissed, won't surface again.
     private func pass(_ item: QueueItem) async {
         do {
             try await api.passPosting(postingId: item.posting_id)
@@ -260,30 +536,138 @@ struct QueueView: View {
                 matches.removeAll { $0.posting_id == item.posting_id }
                 chrome.readyCount = queue.count
             }
+            flashToast("Passed \(item.company ?? "this role")")
             await load()
         } catch {
             Theme.notify(.error)
+            let msg = APIClient.userMessage(for: error)
+            if !msg.isEmpty { flashToast(msg) }
         }
     }
 
-    private func load() async {
+    private func promote(_ item: QueueItem) async {
+        do {
+            try await api.promote(postingId: item.posting_id)
+            Theme.impact(.soft)
+            withAnimation(Theme.springSoft) {
+                queue.removeAll { $0.posting_id == item.posting_id }
+                queue.insert(item, at: 0)
+            }
+            flashToast("\(item.company ?? "This role") is next")
+            await load()
+        } catch {
+            Theme.notify(.error)
+            let msg = APIClient.userMessage(for: error)
+            if !msg.isEmpty { flashToast(msg) }
+        }
+    }
+
+    private func makeNext(_ item: QueueItem) async {
+        if isReady(item) {
+            await promote(item)
+            return
+        }
+        Theme.impact(.soft)
+        withAnimation(Theme.springSoft) {
+            matches.removeAll { $0.posting_id == item.posting_id }
+            matches.insert(item, at: 0)
+        }
+        persistMatches()
+        tapeFocus = nil
+        flashToast("\(item.company ?? "This role") is next")
+    }
+
+    private func consumeHorizonHop() {
+        guard let hop = push.hop else { return }
+        switch hop {
+        case .applyFiled:
+            push.hop = nil
+            pane = 1
+        case .applyJob(let id):
+            push.hop = nil
+            pane = 0
+            openJob(id)
+        default:
+            break
+        }
+    }
+
+    private func openJob(_ id: Int) {
+        Task { @MainActor in
+            if !reduceMotion {
+                try? await Task.sleep(nanoseconds: 280_000_000)
+            }
+            if let item = (queue + matches).first(where: { $0.posting_id == id }) {
+                pendingJobId = nil
+                path.append(item)
+                return
+            }
+            pendingJobId = id
+            await load()
+        }
+    }
+
+    private func tryOpenPendingJob() {
+        guard let id = pendingJobId else { return }
+        if let item = (queue + matches).first(where: { $0.posting_id == id }) {
+            pendingJobId = nil
+            path.append(item)
+        }
+    }
+
+    private func load(refresh: Bool = false) async {
         loading = true
         error = nil
         defer { loading = false }
         do {
-            let data = try await api.fetchData()
+            let data = try await api.fetchData(refresh: refresh)
+            let apps = (try? await api.fetchApplications()) ?? []
             withAnimation(Theme.springSoft) {
                 queue = data.queue
                 matches = data.matches
+                filed = apps
+                searching = data.searching
             }
             chrome.readyCount = data.queue.count
             QueueCache.save(queue: data.queue, matches: data.matches, user: config.user)
+            tryOpenPendingJob()
         } catch {
             if APIClient.isCancellation(error) { return }
+            let msg = APIClient.userMessage(for: error)
             if queue.isEmpty && matches.isEmpty {
-                let msg = APIClient.userMessage(for: error)
                 if !msg.isEmpty { self.error = msg }
+            } else if !msg.isEmpty {
+                flashToast(msg)
             }
+        }
+    }
+
+    private func pollWhileSearching() async {
+        var n = 0
+        while searching && queue.isEmpty && matches.isEmpty && n < 40 {
+            try? await Task.sleep(for: .seconds(2))
+            if Task.isCancelled { return }
+            await load(refresh: false)
+            n += 1
+        }
+    }
+
+    private func flashToast(_ text: String) {
+        withAnimation(Theme.springSoft) { toast = text }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) {
+            withAnimation(Theme.quick) { toast = nil }
+        }
+    }
+}
+
+private struct TapePhaseEffect: ViewModifier {
+    let freeze: Bool
+
+    func body(content: Content) -> some View {
+        content.scrollTransition { view, phase in
+            view
+                .scaleEffect(freeze || phase.isIdentity ? 1 : 0.92)
+                .opacity(freeze || phase.isIdentity ? 1 : 0.7)
         }
     }
 }

@@ -3,9 +3,11 @@
 Flow:
   1. Check the cache — reuse a stored one-page PDF when it fits.
   2. Pick SWE vs AI/ML base from the posting title/description.
-  3. Ask Claude for moderate, truthful edits to the LaTeX body.
-  4. Compile with Tectonic; trim and recompile until exactly one page.
-  5. Persist PDF + .tex on the volume for future applies.
+  3. Ask Claude for moderate, truthful edits to the LaTeX *body*.
+  4. Lock the reference preamble/section structure (never a new template).
+  5. Compile with Tectonic; trim whole bullets until exactly one page,
+     with no overflow off the bottom.
+  6. Persist PDF + .tex only when that one-page check passes.
 
 Base .tex files live on the Fly volume (``RESUME_TEX_DIR``), not in git.
 """
@@ -28,19 +30,26 @@ logger = logging.getLogger("resume_tailor")
 _VARIANTS = ("swe", "aiml")
 _MAX_TRIM_ROUNDS = 40
 
-# Whole ``\\item ...`` lines are the safest trim unit for this template.
-_ITEM_RE = re.compile(r"(\\item[^\n]*)", re.MULTILINE)
-
-# Project blocks: bold title line + following itemize environment.
-_PROJECT_RE = re.compile(
-    r"(\\textbf\{[^}]+\}[^\n]*\\hfill[^\n]*\n\\begin\{itemize\}.*?\n\\end\{itemize\})",
-    re.DOTALL,
+_BEGIN_DOC_RE = re.compile(r"\\begin\{document\}")
+_SECTION_RE = re.compile(r"\\section\*?\{([^}]+)\}")
+_ITEMIZE_RE = re.compile(r"\\begin\{itemize\}(.*?)\\end\{itemize\}", re.DOTALL)
+_ITEM_SPLIT_RE = re.compile(r"(?m)(?=^[ \t]*\\item\b)")
+_CLIPPED_RE = re.compile(r"Overfull \\vbox", re.I)
+_SQUEEZE_RE = re.compile(
+    r"\\(?:enlargethispage|newpage|pagebreak|newgeometry|"
+    r"vspace\*?\s*\{-\s*\d|vskip\s*-)",
+    re.I,
+)
+_LAYOUT_MARKERS = (
+    r"\documentclass",
+    r"\usepackage",
+    r"\geometry",
+    r"\setmainfont",
+    r"\setmathfont",
+    r"\pagestyle",
 )
 
-# Skills / education lines like ``\\textbf{Languages:} ...``
-_SKILLS_LINE_RE = re.compile(r"(\\textbf\{[^}]+\}:[^\n]*)", re.MULTILINE)
-
-# Optional sections trimmed only after bullets/projects/skills are exhausted.
+# Optional rows we may drop after extra bullets are gone — not core sections.
 _OPTIONAL_LINE_RES = (
     re.compile(r"(\\textbf\{Personal Interests\}:.*)", re.MULTILINE),
     re.compile(r"(\\textbf\{Interests\}:.*)", re.MULTILINE),
@@ -111,7 +120,8 @@ def tailor_for_posting(
     variant = pick_variant(title, description)
 
     cached = resume_store.find_cached(
-        user_id, company, title, variant, posting_id=posting_id
+        user_id, company, title, variant,
+        posting_id=posting_id, description=description,
     )
     if cached is not None:
         hit = _from_cache_row(cached)
@@ -119,35 +129,28 @@ def tailor_for_posting(
             return hit
 
     base_tex = (resume_dir() / f"{variant}.tex").read_text(encoding="utf-8")
-    edited = _edit_via_claude(base_tex, company, title, description)
-    final_tex = _fit_one_page(edited, company, title, description)
-    built = _compile_one_page(final_tex)
+    from . import projects as project_catalog
+
+    chosen = project_catalog.pick(title, description, variant)
+    if chosen:
+        base_tex = project_catalog.inject(base_tex, chosen)
+    edited = lock_style(base_tex, _edit_via_claude(base_tex, company, title, description))
+    fitted = _fit_one_page(edited, company, title, description)
+    if fitted is None:
+        fitted = _fit_one_page(base_tex, company, title, description)
+    built = _compile_one_page(fitted) if fitted is not None else None
     if built is None:
-        # Local/dev fallback: serve the precompiled base PDF when tectonic
-        # isn't available or the one-page fit failed.
-        base_pdf = resume_dir() / f"{variant}.pdf"
-        if base_pdf.is_file():
-            logger.warning(
-                "tailored compile failed for %s @ %s; using base %s.pdf",
-                title, company, variant,
-            )
-            return TailorResult(
-                pdf_bytes=base_pdf.read_bytes(),
-                filename=_filename(title, company),
-                variant=variant,
-                pages=_pdf_page_count(base_pdf) or 1,
-                from_cache=False,
-            )
-        logger.error(
-            "could not produce a one-page resume for %s @ %s", title, company
-        )
-        return None
+        return _reference_pdf(variant, title, company)
 
     pdf_path, pages, final_tex = built
     try:
         pdf_bytes = pdf_path.read_bytes()
     finally:
         pdf_path.unlink(missing_ok=True)
+
+    if pages != 1:
+        logger.error("refusing to save a %s-page resume for %s @ %s", pages, title, company)
+        return _reference_pdf(variant, title, company)
 
     resume_store.save(
         user_id,
@@ -158,13 +161,37 @@ def tailor_for_posting(
         tex=final_tex,
         pages=pages,
         posting_id=posting_id,
+        description=description,
     )
 
     return TailorResult(
         pdf_bytes=pdf_bytes,
         filename=_filename(title, company),
         variant=variant,
-        pages=pages,
+        pages=1,
+        from_cache=False,
+    )
+
+
+def _reference_pdf(variant: str, title: str, company: str) -> TailorResult | None:
+    """Last resort: the untouched one-page reference PDF, never a clipped page."""
+    base_pdf = resume_dir() / f"{variant}.pdf"
+    if not base_pdf.is_file():
+        logger.error("could not produce a one-page resume for %s @ %s", title, company)
+        return None
+    pages = _pdf_page_count(base_pdf)
+    if pages != 1:
+        logger.error("reference %s.pdf is %s pages; not serving it", variant, pages)
+        return None
+    logger.warning(
+        "tailored compile could not stay one page for %s @ %s; using base %s.pdf",
+        title, company, variant,
+    )
+    return TailorResult(
+        pdf_bytes=base_pdf.read_bytes(),
+        filename=_filename(title, company),
+        variant=variant,
+        pages=1,
         from_cache=False,
     )
 
@@ -195,6 +222,50 @@ def _slug(text: str) -> str:
     return cleaned[:40] or "resume"
 
 
+def section_order(tex: str) -> list[str]:
+    return _SECTION_RE.findall(tex or "")
+
+
+def lock_style(base: str, edited: str) -> str:
+    """Keep the reference preamble and section list. Only the body text may change."""
+    split_base = _split_tex(base)
+    split_edit = _split_tex(edited)
+    if split_base is None:
+        return base
+    if split_edit is None:
+        logger.info("resume edit was not a complete .tex; using reference")
+        return base
+    preamble, base_body = split_base
+    _, edit_body = split_edit
+    if section_order(base_body) != section_order(edit_body):
+        logger.info("resume edit changed section structure; using reference")
+        return base
+    if _introduces_layout_change(base_body, edit_body):
+        logger.info("resume edit changed layout commands; using reference")
+        return base
+    return preamble + edit_body + "\n\\end{document}\n"
+
+
+def _split_tex(tex: str) -> tuple[str, str] | None:
+    """(preamble including \\begin{document}, body before \\end{document})."""
+    m = _BEGIN_DOC_RE.search(tex or "")
+    if not m:
+        return None
+    end = (tex or "").rfind(r"\end{document}")
+    if end < 0 or end < m.end():
+        return None
+    return tex[: m.end()], tex[m.end(): end]
+
+
+def _introduces_layout_change(base_body: str, edit_body: str) -> bool:
+    for marker in _LAYOUT_MARKERS:
+        if marker in edit_body and marker not in base_body:
+            return True
+    if _SQUEEZE_RE.search(edit_body) and not _SQUEEZE_RE.search(base_body):
+        return True
+    return False
+
+
 def _edit_via_claude(
     base_tex: str, company: str, title: str, description: str | None
 ) -> str:
@@ -218,14 +289,20 @@ def _edit_via_claude(
             system=(
                 "You edit LaTeX resumes for job applications. Rules:\n"
                 "- Output ONLY the complete .tex file, no markdown fences.\n"
-                "- Keep the same document class, packages, layout, and section "
-                "structure — do NOT switch templates.\n"
+                "- Keep the SAME document class, packages, geometry, fonts, "
+                "lengths, and section headings — do NOT switch templates, add "
+                "packages, change margins, or squeeze with negative vspace, "
+                "\\enlargethispage, \\newpage, or \\tiny.\n"
+                "- Keep every \\section that is already there, in the same order.\n"
                 "- Make moderate, truthful edits: reorder bullets, emphasize "
                 "relevant experience/skills, tighten wording. Never invent "
                 "employers, degrees, metrics, or tools the candidate didn't list.\n"
                 "- Prefer rewording over adding bullets — the resume MUST stay "
-                "one page.\n"
-                "- Do not remove entire jobs or projects unless clearly irrelevant.\n"
+                "one page with nothing clipped off the bottom.\n"
+                "- KEY PROJECTS were already chosen for THIS posting. Keep those "
+                "two projects. Reorder or tighten bullets; do not swap in other "
+                "work or invent projects.\n"
+                "- Do not remove entire jobs or sections.\n"
                 "- Preserve LaTeX syntax exactly (\\\\item, \\\\textbf{}, etc.)."
             ),
             messages=[{
@@ -250,10 +327,13 @@ def _edit_via_claude(
 
 def _fit_one_page(
     tex: str, company: str, title: str, description: str | None
-) -> str:
-    """Compile and trim until the PDF is exactly one page."""
+) -> str | None:
+    """Trim whole bullets until the PDF is exactly one page with no overflow.
+
+    Returns None instead of a clipped or multi-page file.
+    """
     working = tex
-    phase = 0  # 0=bullets/projects/skills, 1=optional lines
+    phase = 0  # 0=extra bullets, 1=optional interest/honors lines
 
     for _ in range(_MAX_TRIM_ROUNDS):
         compiled = _compile_one_page(working)
@@ -269,27 +349,39 @@ def _fit_one_page(
             if phase == 0:
                 phase = 1
                 continue
-            logger.warning("resume still >1 page but no trim targets left")
-            return working
+            logger.warning("resume still >1 page; refusing to clip structure")
+            return None
+        if section_order(trimmed) != section_order(tex):
+            logger.warning("trim would drop a section; stopping")
+            return None
         working = trimmed
 
-    return working
+    logger.warning("resume still >1 page after %s trim rounds", _MAX_TRIM_ROUNDS)
+    return None
 
 
 def _compile_one_page(tex: str) -> tuple[Path, int, str] | None:
-    """Compile ``tex``; return (pdf_path, 1, tex) only when the PDF is one page."""
-    pdf = _compile_tex(tex)
-    if pdf is None:
+    """Compile ``tex``; return (pdf_path, 1, tex) only for a clean one-page PDF."""
+    if not tex:
         return None
+    ran = _run_tectonic(tex)
+    if ran is None:
+        return None
+    pdf, log = ran
     try:
         pages = _pdf_page_count(pdf)
-        if pages == 1:
-            return pdf, 1, tex
-        pdf.unlink(missing_ok=True)
-        return None
+        if pages != 1 or _content_clipped(log):
+            pdf.unlink(missing_ok=True)
+            return None
+        return pdf, 1, tex
     except Exception:
         pdf.unlink(missing_ok=True)
         raise
+
+
+def _content_clipped(log: str) -> bool:
+    """True when LaTeX overflowed the page (text would be cut off)."""
+    return bool(_CLIPPED_RE.search(log or ""))
 
 
 def _trim_least_relevant(
@@ -300,26 +392,12 @@ def _trim_least_relevant(
     *,
     allow_optional: bool = False,
 ) -> str:
-    """Remove one whole bullet, project block, skills line, or optional row."""
+    """Remove one whole extra bullet (never the last in a list) or an optional row."""
     context = f"{title} {company} {description or ''}".lower()
-    items = _ITEM_RE.findall(tex)
-    if items:
-        worst = min(items, key=lambda block: _relevance(block, context))
+    extras = _extra_items(tex)
+    if extras:
+        worst = min(extras, key=lambda block: _relevance(block, context))
         return _cleanup_empty_itemize(tex.replace(worst, "", 1))
-
-    projects = _PROJECT_RE.findall(tex)
-    if projects:
-        worst = min(projects, key=lambda block: _relevance(block, context))
-        return tex.replace(worst, "", 1)
-
-    skills_lines = _SKILLS_LINE_RE.findall(tex)
-    droppable = [
-        ln for ln in skills_lines
-        if not ln.lower().startswith("\\textbf{languages:")
-    ]
-    if droppable:
-        worst = min(droppable, key=lambda block: _relevance(block, context))
-        return tex.replace(worst, "", 1)
 
     if allow_optional:
         for pattern in _OPTIONAL_LINE_RES:
@@ -328,6 +406,25 @@ def _trim_least_relevant(
                 return tex.replace(match.group(1), "", 1)
 
     return tex
+
+
+def _extra_items(tex: str) -> list[str]:
+    """``\\item`` blocks from lists that still have more than one bullet.
+
+    Never returns the last remaining bullet in a job or project, so a header
+    is never left sitting over an empty list (that looks cut off).
+    """
+    extras: list[str] = []
+    for inner in _ITEMIZE_RE.findall(tex):
+        items = _items_in(inner)
+        if len(items) > 1:
+            extras.extend(items)
+    return extras
+
+
+def _items_in(inner: str) -> list[str]:
+    chunks = _ITEM_SPLIT_RE.split(inner)
+    return [c for c in chunks if re.match(r"[ \t]*\\item\b", c or "")]
 
 
 def _cleanup_empty_itemize(tex: str) -> str:
@@ -362,13 +459,10 @@ def resolve_tectonic() -> str | None:
     if configured and Path(configured).is_file():
         return str(Path(configured).resolve())
     if configured and configured != "tectonic":
-        # Non-default path that doesn't exist — don't silently fall through
-        # without logging; still try PATH/cache below.
         logger.warning("TECTONIC_BIN=%s not found; trying PATH/cache", configured)
     found = shutil.which(configured or "tectonic")
     if found:
         return found
-    # Same fallback the test suite uses (vendored binary under .cache/).
     cached = Path(__file__).resolve().parents[1] / ".cache" / "tectonic" / "tectonic"
     if cached.is_file():
         return str(cached.resolve())
@@ -376,6 +470,11 @@ def resolve_tectonic() -> str | None:
 
 
 def _compile_tex(tex: str) -> Path | None:
+    ran = _run_tectonic(tex)
+    return None if ran is None else ran[0]
+
+
+def _run_tectonic(tex: str) -> tuple[Path, str] | None:
     tectonic = resolve_tectonic()
     if not tectonic:
         logger.error(
@@ -390,14 +489,22 @@ def _compile_tex(tex: str) -> Path | None:
         out_dir = work / "out"
         out_dir.mkdir()
         try:
-            subprocess.run(
+            proc = subprocess.run(
                 [tectonic, "--outdir", str(out_dir), str(tex_path)],
-                check=True,
+                check=False,
                 capture_output=True,
                 timeout=120,
             )
-        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        except (FileNotFoundError, subprocess.TimeoutExpired):
             logger.exception("tectonic compile failed")
+            return None
+        log = (proc.stdout or b"") + (proc.stderr or b"")
+        log_text = (
+            log.decode("utf-8", "replace")
+            if isinstance(log, (bytes, bytearray)) else str(log)
+        )
+        if proc.returncode != 0:
+            logger.error("tectonic compile failed")
             return None
         built = out_dir / "resume.pdf"
         if not built.is_file():
@@ -406,7 +513,7 @@ def _compile_tex(tex: str) -> Path | None:
         os.close(fd)
         dest_path = Path(dest)
         shutil.copy(built, dest_path)
-        return dest_path
+        return dest_path, log_text
 
 
 def _pdf_page_count(path: Path) -> int:
@@ -417,5 +524,4 @@ def _pdf_page_count(path: Path) -> int:
     except Exception:
         logger.exception("pypdf page count failed; falling back to byte scan")
         data = path.read_bytes()
-        pages = re.findall(rb"/Type\s*/Page\b", data)
-        return len(pages) if pages else 1
+        return len(re.findall(rb"/Type\s*/Page\b", data))

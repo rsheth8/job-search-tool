@@ -4,11 +4,11 @@ A match score answers "how much?" but never "why?", so a 78% and a 79% look
 identical and a bad recommendation is impossible to argue with. This turns the
 signals the pipeline already computed into a short, honest line:
 
-    "87% · matches 'backend engineer' · Python, Go · remote · apply direct"
+    "87% · matches 'backend engineer' · Python, Go · remote · fill on site"
 
 Deliberately **heuristic and free**: every reason is derived from the profile and
 the posting, so it costs nothing, can't hallucinate a reason, and works with no
-API key. Where a cached LLM summary already exists (``insights``), its verdict is
+API key. Where a cached posting summary already exists, its verdict is
 folded in — but it's never fetched on purpose just to explain a card.
 
 The honesty rule: reasons must be checkable against the posting. We say "mentions
@@ -92,9 +92,21 @@ def explain(posting, profile=None, *, summary: dict | None = None,
         elif wanted and location:
             concerns.append(f"location is {location}")
 
-    # 4. Applying directly on the company's own ATS beats an aggregator redirect.
-    if (_get(posting, "source") or "").lower() in ("greenhouse", "lever", "ashby"):
-        reasons.append("apply direct")
+    # 4. Applying on a fillable company ATS beats an aggregator redirect.
+    from . import ats, shortlist
+
+    url = _get(posting, "url") or ""
+    kind = ats.apply_kind(url, _get(posting, "source"))
+    if kind == "autofill":
+        reasons.append("autofill")
+    elif kind == "direct":
+        reasons.append("fill on site")
+
+    posted_at = _get(posting, "posted_at") or ""
+    if shortlist.is_fresh(posted_at):
+        reasons.append("posted in the last 2 days")
+    elif (shortlist.age_days(posted_at) or 0) >= 45:
+        concerns.append("listing may be stale")
 
     # 5. A cached LLM read, if one already exists — never fetched just for this.
     if summary:

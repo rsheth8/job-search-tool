@@ -152,6 +152,28 @@ def is_help(text: str) -> bool:
     return bool(_HELP.search(text))
 
 
+def is_hop_go(text: str) -> bool:
+    """Accept a proposed tab hop (BofA-style)."""
+    return bool(_HOP_GO.match(text)) or is_affirmation(text)
+
+
+def is_hop_stay(text: str) -> bool:
+    """Decline a proposed tab hop."""
+    return bool(_HOP_STAY.search(text)) or is_negation(text) or is_cancel(text)
+
+
+_HOP_GO = re.compile(
+    r"^\s*(take me there|take me|let'?s go|go there|head(ing)? there|"
+    r"open it|yes please)\s*[!.]*\s*$",
+    re.I,
+)
+_HOP_STAY = re.compile(
+    r"^\s*(stay here|stay|not now|no thanks|maybe later|i'?ll stay|"
+    r"don'?t (take|open|go))\b",
+    re.I,
+)
+
+
 # --- smalltalk: thanks / acknowledgements / sign-off / compliments ----------
 # Handled only when there's no pending exchange and no actionable intent, so a
 # bare "ok"/"cool" reads as a friendly ack rather than the confused fallback.
@@ -174,16 +196,21 @@ _ACK = re.compile(
 )
 
 
-def smalltalk_reply(text: str) -> str | None:
+def smalltalk_reply(text: str, *, name: str = "") -> str | None:
     """A warm reply for conversational filler, or None if it's not smalltalk."""
+    who = (name or "").strip()
     if _COMPLIMENT.search(text):
+        if who:
+            return f"🙏 Happy to help, {who} — that's what I'm here for. What's next?"
         return "🙏 Happy to help — that's what I'm here for. What's next?"
     if _THANKS.search(text):
-        return "You got it! 🙌 Anything else I can log or check?"
+        return "You got it. Want to look at jobs, or change a detail?"
     if _BYE.search(text):
-        return "Catch you later — good luck out there! 👋"
+        if who:
+            return f"Catch you later, {who} — good luck out there."
+        return "Catch you later — good luck out there."
     if _ACK.match(text):
-        return "👍 Standing by — text me whenever."
+        return "Standing by — ask whenever."
     return None
 
 

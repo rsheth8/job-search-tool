@@ -6,19 +6,26 @@ from app.engine import MENU, handle_sms
 
 
 def test_help_returns_menu():
-    for phrase in ("help", "menu", "what can you do", "commands", "?", "get started"):
+    for phrase in ("menu", "commands"):
         reply = handle_sms("m", phrase)
         assert reply == MENU, phrase
 
 
+def test_help_is_horizon_overview():
+    for phrase in ("help", "what can you do", "get started", "?"):
+        reply = handle_sms("m", phrase)
+        assert "Horizon" in reply, phrase
+        assert "LOG & UPDATE" not in reply, phrase
+
+
 def test_greeting_includes_menu_and_welcome():
     reply = handle_sms("m", "hey")
-    assert "assistant" in reply.lower()
-    assert "LOG & UPDATE" in reply  # menu body is included
+    assert "horizon" in reply.lower()
+    assert "help" in reply.lower()
 
 
 def test_menu_covers_each_capability():
-    for marker in ("applied stripe", "oa received", "note ", "reach out",
+    for marker in ("applied stripe", "oa received", "note ",
                    "due friday", "remind me", "list", "follow up", "how am I doing",
                    "coming up"):
         assert marker in MENU, marker

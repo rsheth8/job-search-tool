@@ -2,10 +2,10 @@
 
 A reminder is just a row with a due time. A *sender* ships it when due:
 
-  - ``LogSender`` (default now): writes the reminder to the log. Lets the whole
-    pipeline run and be tested while outbound SMS is blocked on A2P 10DLC.
-  - ``TwilioSender`` (later): one drop-in class that calls the Twilio REST API.
-    ``deliver_due_reminders`` doesn't change — only which sender is passed in.
+  - ``AppSender`` (default): appends to the in-app chat transcript and sends a
+    best-effort APNs push — the primary channel for the iOS beta.
+  - ``LogSender``: writes the reminder to the log. Kept for tests and local
+    inspection when push isn't configured.
 
 Everything here is import-light and synchronous so it's trivially testable. The
 APScheduler loop in ``app/scheduler.py`` is a thin wrapper that calls
@@ -156,53 +156,33 @@ class Sender(Protocol):
 
 
 class LogSender:
-    """Fallback sender: records + logs instead of sending real SMS.
+    """Fallback sender: records + logs instead of delivering to the app.
 
-    Used until outbound Twilio is configured (A2P 10DLC). ``sent`` is kept so
-    tests (and a curious operator) can see what would have gone out.
+    Used in tests (and for local inspection) when AppSender isn't injected.
+    ``sent`` is kept so tests can see what would have gone out.
     """
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
 
-    def send(self, user_id: str, body: str) -> None:
+    def send(self, user_id: str, body: str, **_kw) -> None:
         self.sent.append((user_id, body))
         logger.info("[reminder→%s] %s", user_id, body)
-
-
-class TwilioSender:
-    """Live outbound SMS via the Twilio REST API.
-
-    Dormant until ``TWILIO_ACCOUNT_SID`` + ``TWILIO_AUTH_TOKEN`` +
-    ``TWILIO_FROM_NUMBER`` are set (gated on A2P 10DLC approval). The Client is
-    built once and reused. ``user_id`` is the recipient's phone number — it's
-    the inbound ``From`` we already store, so no mapping is needed.
-    """
-
-    def __init__(self, account_sid: str, auth_token: str, from_number: str) -> None:
-        from twilio.rest import Client  # lazy: only imported when actually sending
-
-        self._client = Client(account_sid, auth_token)
-        self._from = from_number
-
-    def send(self, user_id: str, body: str) -> None:
-        self._client.messages.create(to=user_id, from_=self._from, body=body)
-        logger.info("[reminder→%s via twilio] %s", user_id, body)
 
 
 class AppSender:
     """In-app delivery: append to the chat transcript + APNs push.
 
-    Primary channel now that Slack is retired. Push is best-effort (no-op when
-    APNs isn't configured); the transcript always lands so Chat shows it.
-    ``sent`` mirrors LogSender so tests (and operators) can inspect deliveries.
+    Primary channel for the iOS beta. Push is best-effort (no-op when APNs isn't
+    configured); the transcript always lands so Chat shows it. ``sent`` mirrors
+    LogSender so tests (and operators) can inspect deliveries.
     """
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
 
-    def send(self, user_id: str, body: str) -> None:
-        from . import chat, push
+    def send(self, user_id: str, body: str, *, push_alert: bool = True, **_kw) -> None:
+        from . import chat, push, voice
 
         text = (body or "").strip()
         if not text:
@@ -212,9 +192,10 @@ class AppSender:
             chat.append(user_id, "assistant", text)
         except Exception:  # noqa: BLE001
             logger.exception("failed to append chat for %s", user_id)
-        # Truncate for the banner; full text is in Chat.
-        title = "Apply"
-        preview = text if len(text) <= 160 else text[:157] + "…"
+        if not push_alert:
+            logger.info("[reminder→%s via app, chat only] %s", user_id, text[:160])
+            return
+        title, preview = voice.reminder_notification(user_id, text)
         try:
             push.send(user_id, title, preview, data={"kind": "chat"})
         except Exception:  # noqa: BLE001
@@ -226,34 +207,16 @@ _sender_singleton: Sender | None = None
 
 
 def get_sender() -> Sender:
-    """Pick the sender from config: App (chat+push), optional Slack, Twilio, else Log.
+    """Return the configured reminder sender (always AppSender in production).
 
-    In-app chat is the primary channel. Slack only if explicitly re-enabled.
-    Cached so the client isn't rebuilt every poll tick. Tests pass an explicit
-    sender, so they never touch this.
+    Cached so push/chat clients aren't rebuilt every poll tick. Tests pass an
+    explicit sender, so they never touch this.
     """
     global _sender_singleton
     if _sender_singleton is not None:
         return _sender_singleton
-    from .config import get_settings
-
-    s = get_settings()
-    # Prefer AppSender whenever we have any registered devices *or* simply as
-    # the default product channel — transcript write is always useful, push is
-    # best-effort. Only fall through when an operator explicitly wants Slack.
-    if s.slack_enabled:
-        from .slack import SlackSender
-
-        _sender_singleton = SlackSender(s.slack_bot_token)
-        logger.info("reminder delivery: Slack enabled (legacy)")
-    elif s.outbound_sms_enabled:
-        _sender_singleton = TwilioSender(
-            s.twilio_account_sid, s.twilio_auth_token, s.twilio_from_number
-        )
-        logger.info("reminder delivery: Twilio outbound enabled")
-    else:
-        _sender_singleton = AppSender()
-        logger.info("reminder delivery: AppSender (chat + push)")
+    _sender_singleton = AppSender()
+    logger.info("reminder delivery: AppSender (chat + push)")
     return _sender_singleton
 
 

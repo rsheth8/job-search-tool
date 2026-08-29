@@ -1,10 +1,8 @@
 """SMS -> structured intent router.
 
-Two interchangeable backends:
-  * HeuristicRouter  - zero-dependency, runs offline, used when no ANTHROPIC_API_KEY.
-  * AnthropicRouter  - Claude-backed structured extraction when a key is present.
-
-Both return a ParsedMessage. The engine layer is identical regardless of backend.
+Chat and the in-app agent always use HeuristicRouter (zero-dependency, offline).
+AnthropicRouter remains for tests and is not wired to get_router() — paid models
+are reserved for scoring / drafting, not for classifying assistant turns.
 """
 from __future__ import annotations
 
@@ -63,7 +61,6 @@ _UPDATE_RE = re.compile(r"\b(update|moved to|now at|status|got an?|received|reje
 _NOTE_RE = re.compile(r"\bnote\b", re.I)
 _LIST_RE = re.compile(r"^\s*(list|show|show me|what have i applied)\b", re.I)
 _REMIND_RE = re.compile(r"\b(remind|reminder|follow up in|ping me)\b", re.I)
-_OUTREACH_RE = re.compile(r"\b(reach out|outreach|recruiter|contact|message the)\b", re.I)
 _QUERY_RE = re.compile(r"\b(what should i|who should i|what do i|follow up on|what's overdue|whats overdue)\b", re.I)
 _STATS_RE = re.compile(r"\b(stats|statistics|how am i doing|how'?s it going|my numbers|funnel|progress|summary|overview)\b", re.I)
 _DEADLINE_RE = re.compile(r"\b(due|deadline|deadlines|upcoming|coming up|agenda|calendar)\b", re.I)
@@ -153,32 +150,6 @@ _QUEUE_BULK_RE = re.compile(
     r"\b(?:queue|stage)\s+(?:the\s+)?(?:top\s+(\d+)|(all))\b", re.I,
 )
 
-# APPROVE_FILL: the human gate on the submit pipeline, answered from Slack so the
-# whole phone flow (alert → fill → preview → approve) never needs the web page.
-# Anchored at the start of the message: "approve" mid-sentence is usually prose.
-_APPROVE_FILL_RE = re.compile(
-    r"^\s*(?:approve|submit it|send it|ship it|go ahead|looks good|lgtm)"
-    r"(?:\s+(?:the\s+)?(?:fill|application|app))?\s*#?(\d+)?\s*[.!]?\s*$",
-    re.I,
-)
-# Cancelling a *fill* specifically — "cancel" alone is ambiguous, so require the
-# object (or a bare "cancel"/"don't submit", which only makes sense here).
-_CANCEL_FILL_RE = re.compile(
-    r"^\s*(?:cancel|abort|stop|don'?t submit|do not submit|nope?)"
-    r"(?:\s+(?:the\s+)?(?:fill|application|app|submission|it))?\s*#?(\d+)?\s*[.!]?\s*$",
-    re.I,
-)
-# APPLY_STATUS: what's in flight. Deliberately phrase-based — a bare "status" is
-# claimed by UPDATE ("status: rejected"), so we never match that alone.
-_APPLY_STATUS_RE = re.compile(
-    r"\b(?:what'?s|whats|anything)?\s*(?:in[- ]flight|in flight)\b|"
-    r"\b(?:application|apply|submission)\s+status\b|"
-    r"\bstatus\s+of\s+(?:my\s+)?(?:application|applications|fills?|queue)\b|"
-    r"\bwhat'?s\s+(?:pending|waiting)\b|\bpending\s+(?:applications?|approvals?)\b|"
-    r"\bwaiting\s+(?:on|for)\s+(?:my\s+)?approval\b",
-    re.I,
-)
-
 # REMEMBER: teach it a durable fact about you. Two shapes — a reusable answer to a
 # named question, or a plain project/achievement/strength/preference.
 _REMEMBER_ANSWER_RE = re.compile(
@@ -188,7 +159,7 @@ _REMEMBER_ANSWER_RE = re.compile(
 )
 _REMEMBER_RE = re.compile(
     r"^\s*remember\s*[:\-]?\s*(?:(?:that|my|this)\s+)?"
-    r"(?:(project|achievement|strength|preference)s?\s*[:\-]\s*)?(.+)$",
+    r"(?:(experience|project|achievement|strength|preference)s?\s*[:\-]\s*)?(.+)$",
     re.I | re.S,
 )
 # KNOWLEDGE: what do you actually know about me, and what's still missing.
@@ -210,6 +181,140 @@ _PROFILE_SHOW_RE = re.compile(
     r"\b(show|what'?s?|see|view)\b[^.?!]*\bprofile\b|\bmy profile\b|^\s*profile\s*\??$",
     re.I,
 )
+
+# HELP_APP: how-to for the iOS app (not the SMS command menu).
+_HELP_APP_RE = re.compile(
+    r"\bhow (?:do i|do we|can i|does|to)\b[^.?!]{0,80}\b"
+    r"(autofill|auto[- ]fill|submit|attach|r[eé]sume|cover[- ]letter|"
+    r"queue|identity|"
+    r"this app|the app|apply tab|use (?:this|the app)|add a fact|"
+    r"notifications|import|looking for|form details)\b"
+    r"|\bhow (?:do|does) (?:this|the app|apply|autofill)\b"
+    r"|\bwhere (?:is|do i|can i)\b[^.?!]{0,60}\b"
+    r"(identity|settings|queue|autofill|you tab|apply tab|looking for|"
+    r"form details|filed|notifications|feedback)\b"
+    r"|\b(?:explain|what is|what'?s) autofill\b"
+    r"|^\s*autofill\s*\??$"
+    r"|\bhow do i apply\s*\??$",
+    re.I,
+)
+_HELP_OVERVIEW_RE = re.compile(
+    r"^\s*(help|what can you do|what do you do|"
+    r"how (?:do|does) (?:this|you|horizon) work|"
+    r"get started|what(?:'s| is) (?:this|horizon)|"
+    r"how do i use (?:this|the app))\s*[?.!]*\s*$"
+    r"|^\s*\?+\s*$",
+    re.I,
+)
+
+# SET_IDENTITY: patch applicant form fields. Compiled lazily (alias list lives
+# in agent.py). "update my profile" stays PROFILE; this requires a named field.
+_LIVE_IN_RE = re.compile(
+    r"\bi(?:'m| am)?\s+(?:live|living|based|located)\s+in\s+(.+)$",
+    re.I,
+)
+_SPONSOR_YES_RE = re.compile(
+    r"\b(?:i |I )?(?:need|require|will need)\s+(?:a |visa\s+)?sponsorship\b"
+    r"|\bneed a visa\b",
+    re.I,
+)
+_SPONSOR_NO_RE = re.compile(
+    r"\b(?:don'?t|do not|won'?t)\s+need\s+(?:a |visa\s+)?sponsorship\b"
+    r"|\bno sponsorship\b",
+    re.I,
+)
+_WORK_AUTH_RE = re.compile(
+    r"\b(?:i'?m |i am )?(?:authorized to work|work.?authorized)\b"
+    r"|\b(?:i'?m |i am )(?:a )?us citizen\b",
+    re.I,
+)
+
+_SET_IDENTITY_RE: re.Pattern | None = None
+
+
+def _set_identity_re() -> re.Pattern:
+    global _SET_IDENTITY_RE
+    if _SET_IDENTITY_RE is None:
+        from . import agent
+
+        fields = agent.identity_alias_pattern()
+        _SET_IDENTITY_RE = re.compile(
+            rf"\b(?:change|set|update|fix|correct)\s+my\s+({fields})\s*"
+            rf"(?:to|is|:)\s*(.+)$"
+            rf"|\bmy\s+({fields})\s+(?:is|to|:)\s+(.+)$",
+            re.I | re.DOTALL,
+        )
+    return _SET_IDENTITY_RE
+
+
+def _parse_set_identity(raw: str, low: str) -> ParsedMessage | None:
+    """Identity patch, or None if this isn't one."""
+    from . import agent
+
+    m = _set_identity_re().search(raw)
+    if m:
+        field_raw = m.group(1) or m.group(3)
+        value = (m.group(2) or m.group(4) or "").strip()
+        field = agent.canonical_identity_field(field_raw)
+        if field and value:
+            return ParsedMessage(
+                intent=Intent.SET_IDENTITY, role=field, message=value, confidence=0.9,
+            )
+        if field:
+            return ParsedMessage(
+                intent=Intent.SET_IDENTITY, role=field, message=None, confidence=0.75,
+            )
+    bare = re.search(
+        rf"\b(?:change|set|update|fix|correct)\s+my\s+({agent.identity_alias_pattern()})\s*$",
+        raw,
+        re.I,
+    )
+    if bare:
+        field = agent.canonical_identity_field(bare.group(1))
+        if field:
+            return ParsedMessage(
+                intent=Intent.SET_IDENTITY, role=field, message=None, confidence=0.8,
+            )
+    m = _LIVE_IN_RE.search(raw)
+    if m:
+        where = m.group(1).strip().rstrip(".!")
+        if where:
+            return ParsedMessage(
+                intent=Intent.SET_IDENTITY, role="location", message=where, confidence=0.85,
+            )
+    if _SPONSOR_NO_RE.search(low):
+        return ParsedMessage(
+            intent=Intent.SET_IDENTITY, role="needs_sponsorship", message="no",
+            confidence=0.85,
+        )
+    if _SPONSOR_YES_RE.search(low):
+        return ParsedMessage(
+            intent=Intent.SET_IDENTITY, role="needs_sponsorship", message="yes",
+            confidence=0.85,
+        )
+    if _WORK_AUTH_RE.search(low):
+        return ParsedMessage(
+            intent=Intent.SET_IDENTITY, role="work_authorized", message="yes",
+            confidence=0.8,
+        )
+    return None
+
+
+def _parse_help_app(raw: str, low: str) -> ParsedMessage | None:
+    from . import agent
+
+    dest = agent.parse_navigate(low)
+    if dest:
+        return ParsedMessage(
+            intent=Intent.HELP_APP, message=f"tab:{dest}", confidence=0.9,
+        )
+    if _HELP_OVERVIEW_RE.search(low):
+        return ParsedMessage(intent=Intent.HELP_APP, message="overview", confidence=0.9)
+    if _HELP_APP_RE.search(low):
+        topic = agent.help_topic_key(raw)
+        return ParsedMessage(intent=Intent.HELP_APP, message=topic, confidence=0.85)
+    return None
+
 
 
 # TUNE: adjust how picky the matcher is. Encodes the request in `message`:
@@ -534,26 +639,6 @@ class HeuristicRouter:
                 intent=Intent.LIST, time_reference=window, confidence=0.85
             )
 
-        # --- Submit pipeline (before everything: these are short, exact replies
-        # to a preview we just sent, and "submit it"/"approve" must not be read as
-        # an APPLY or an UPDATE) -------------------------------------------------
-        m = _APPROVE_FILL_RE.search(low)
-        if m:
-            pid = m.group(1)
-            return ParsedMessage(
-                intent=Intent.APPROVE_FILL,
-                message=f"approve:{int(pid)}" if pid else "approve", confidence=0.95)
-
-        m = _CANCEL_FILL_RE.search(low)
-        if m:
-            pid = m.group(1)
-            return ParsedMessage(
-                intent=Intent.APPROVE_FILL,
-                message=f"cancel:{int(pid)}" if pid else "cancel", confidence=0.9)
-
-        if _APPLY_STATUS_RE.search(low):
-            return ParsedMessage(intent=Intent.APPLY_STATUS, confidence=0.9)
-
         # --- personal knowledge (before NOTE, which also claims "note down") ---
         if _KNOWLEDGE_SHOW_RE.search(low):
             return ParsedMessage(intent=Intent.KNOWLEDGE, confidence=0.9)
@@ -573,6 +658,10 @@ class HeuristicRouter:
             return ParsedMessage(
                 intent=Intent.REMEMBER,
                 message=f"{category}|{m.group(2).strip()}", confidence=0.85)
+
+        helped = _parse_help_app(raw, low)
+        if helped is not None:
+            return helped
 
         # --- Job discovery (before APPLY/QUERY/LIST, which share keywords) ----
         # APPLY_JOB first: "apply 2" must beat the generic APPLY ("applied …").
@@ -651,6 +740,10 @@ class HeuristicRouter:
         if _PROFILE_SHOW_RE.search(low):
             return ParsedMessage(intent=Intent.PROFILE, message=None, confidence=0.8)
 
+        ident = _parse_set_identity(raw, low)
+        if ident is not None:
+            return ident
+
         if _JOBS_REVIEW_RE.search(low) and not _APPLY_RE.search(low):
             return ParsedMessage(intent=Intent.JOBS_REVIEW, confidence=0.9)
 
@@ -677,13 +770,6 @@ class HeuristicRouter:
             return ParsedMessage(
                 intent=Intent.REMIND, company=company, time_reference=time_ref,
                 confidence=0.75 if (company and time_ref) else 0.5,
-            )
-
-        if _OUTREACH_RE.search(low) and not _APPLY_RE.search(low):
-            company, _ = _extract_company_role(low)
-            return ParsedMessage(
-                intent=Intent.OUTREACH, company=company,
-                confidence=0.7 if company else 0.45,
             )
 
         if _DELETE_RE.search(low):
@@ -892,9 +978,6 @@ _FEWSHOTS = [
     ("ghost anything I haven't heard from in 30 days",
      [{"intent": "BULK", "company": None, "role": None, "status": "Ghosted",
        "message": None, "time_reference": "30 days", "confidence": 0.85}]),
-    ("reach out to a recruiter at stripe",
-     [{"intent": "OUTREACH", "company": "Stripe", "role": None, "status": None,
-       "message": None, "time_reference": None, "confidence": 0.9}]),
     ("applied",
      [{"intent": "APPLY", "company": None, "role": None, "status": None,
        "message": None, "time_reference": None, "confidence": 0.3}]),
@@ -983,7 +1066,6 @@ def _build_system_prompt() -> str:
         "`time_reference`=age filter (e.g. '30 days', 'last month').\n"
         "- UNDO: user wants to reverse their last action ('undo', 'undo that', "
         "'revert my last change', 'put it back'). No entities.\n"
-        "- OUTREACH: user wants recruiter contact / a drafted message.\n"
         "- TRACK: user wants to start/stop watching a company's job board for new "
         "openings, or see what they're tracking. Set `company`; for removal put "
         "'remove' in `message`; for 'what am I tracking' put 'list' in `message`.\n"
@@ -1010,16 +1092,6 @@ def _build_system_prompt() -> str:
         "matches' -> 'set:0.8'), 'loosen' (less picky / show more), 'tighten' (more "
         "picky / only the best), 'all' (show everything), or 'reset' (back to "
         "default).\n"
-        "- APPROVE_FILL: user is answering the approval gate on an application the "
-        "worker already filled ('approve', 'submit it', 'looks good, send it', "
-        "'cancel', \"don't submit\"). Put 'approve' or 'cancel' in `message`, "
-        "suffixed with ':<number>' if they named a posting ('approve #7' -> "
-        "'approve:7'). NOTE: this is about a form already filled and waiting — a "
-        "request to apply to a new posting is APPLY_JOB.\n"
-        "- APPLY_STATUS: user asks what applications are in flight right now "
-        "('what's in flight', 'anything waiting on me', 'application status'). No "
-        "entities. NOTE: asking about ONE company's stage is CHECK, and their "
-        "overall funnel numbers are STATS.\n"
         "- UNKNOWN: none of the above.\n\n"
         "Rules:\n"
         "- `confidence` is 0.0-1.0: your certainty about the intent + entities.\n"
@@ -1166,14 +1238,13 @@ _router_singleton = None
 
 
 def get_router():
+    """Intent parser for chat / agent / CSV import. Always heuristic.
+
+    A present ANTHROPIC_API_KEY does not change this — matcher, outreach, and
+    resume tailoring read that flag on their own.
+    """
     global _router_singleton
     if _router_singleton is not None:
         return _router_singleton
-    if get_settings().use_llm_router:
-        try:
-            _router_singleton = AnthropicRouter()
-        except Exception:  # missing package / bad key -> graceful offline fallback
-            _router_singleton = HeuristicRouter()
-    else:
-        _router_singleton = HeuristicRouter()
+    _router_singleton = HeuristicRouter()
     return _router_singleton

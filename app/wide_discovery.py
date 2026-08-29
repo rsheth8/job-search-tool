@@ -1,5 +1,4 @@
-"""Wide job discovery: RSS feeds, SerpApi search, ATS directory rotation,
-and the Pitt CSC / Simplify internship list.
+"""Wide job discovery: RSS feeds, ATS directory rotation, Simplify lists, YC.
 
 Runs for users with a job-search profile (even with zero tracked companies).
 Postings merge into the same ``discovery.tick`` pipeline as board tracking.
@@ -10,8 +9,8 @@ import logging
 import sqlite3
 
 from .config import get_settings
+from . import catalog, eligibility
 from .jobsources import JobPosting, fetch_source
-from .jobsources import aggregator as agg_src
 from .jobsources import directory as dir_src
 from .jobsources import rss as rss_src
 from .jobsources import swelist as swelist_src
@@ -19,21 +18,43 @@ from .jobsources import swelist as swelist_src
 logger = logging.getLogger("wide_discovery")
 
 # Wide sources skip heavy seeding (would baseline thousands of roles).
-_NO_SEED_SOURCES = frozenset({"rss", "aggregator", "directory", "swelist"})
+_NO_SEED_SOURCES = frozenset({"rss", "directory", "swelist", "yc"})
 
 
 def is_wide_source(source: str) -> bool:
     return (source or "").lower() in _NO_SEED_SOURCES
 
 
-def wide_rss_feed_ids() -> list[str]:
+def _profile_search_text(prof: sqlite3.Row | None) -> str:
+    if prof is None:
+        return ""
+    parts: list[str] = []
+    for field in ("roles", "keywords", "seniority", "resume_summary"):
+        try:
+            parts.append(prof[field] or "")
+        except (IndexError, KeyError):
+            pass
+    return " ".join(parts)
+
+
+def wide_rss_feed_ids(prof: sqlite3.Row | None = None) -> list[str]:
+    """Env-configured feed ids, plus We Work Remotely categories the profile matches."""
     s = get_settings()
     if not s.job_wide_rss_enabled or "rss" not in s.job_sources:
         return []
+    technical = eligibility.profile_looks_technical(prof)
     out: list[str] = []
     for raw in (s.job_wide_rss_feeds or "").split(","):
         fid = raw.strip().lower()
         if fid and fid not in out and fid in rss_src.FEEDS:
+            # Programming WWR is the env default for CS users; skip it when the
+            # profile is clearly non-technical so sales/design/etc. aren't
+            # flooded with SWE listings.
+            if fid == "weworkremotely" and not technical:
+                continue
+            out.append(fid)
+    for fid in rss_src.feeds_for_profile_text(_profile_search_text(prof)):
+        if fid not in out:
             out.append(fid)
     return out
 
@@ -44,59 +65,49 @@ def collect_fresh(
     *,
     existing_keys: set[tuple[str, str]] | None = None,
 ) -> list[JobPosting]:
-    """Pull new postings from RSS, SerpApi, the ATS directory, and swelist."""
+    """Pull new postings from RSS, the ATS directory, swelist, and YC."""
     if prof is None:
         return []
     settings = get_settings()
     sources = set(settings.job_sources)
     seen = existing_keys or set()
-    fresh: list[JobPosting] = []
+    incoming: list[JobPosting] = []
 
     if "rss" in sources and settings.job_wide_rss_enabled:
-        for feed_id in wide_rss_feed_ids():
-            for p in fetch_source("rss", feed_id):
-                key = (p.source, p.external_id)
-                if p.external_id and key not in seen:
-                    seen.add(key)
-                    fresh.append(p)
-
-    if "aggregator" in sources and settings.job_wide_aggregator_enabled:
-        if settings.serpapi_enabled:
-            query = agg_src.build_query_from_profile(
-                prof["roles"], prof["locations"], prof["seniority"]
-            )
-            for p in fetch_source("aggregator", query):
-                key = (p.source, p.external_id)
-                if p.external_id and key not in seen:
-                    seen.add(key)
-                    fresh.append(p)
-        else:
-            logger.debug("aggregator enabled but SERPAPI_API_KEY unset")
+        for feed_id in wide_rss_feed_ids(prof):
+            incoming.extend(fetch_source("rss", feed_id))
 
     if "directory" in sources and settings.job_wide_directory_enabled:
-        for p in dir_src.fetch_directory_batch():
-            key = (p.source, p.external_id)
-            if p.external_id and key not in seen:
-                seen.add(key)
-                fresh.append(p)
+        sectors = catalog.directory_sectors(prof)
+        incoming.extend(
+            dir_src.fetch_directory_batch(user_id=user_id, sectors=sectors)
+        )
 
     if "swelist" in sources and settings.job_wide_swelist_enabled:
-        token = (settings.job_swelist_list or swelist_src.DEFAULT_LIST).strip()
-        for p in fetch_source("swelist", token):
-            key = (p.source, p.external_id)
-            if p.external_id and key not in seen:
-                seen.add(key)
-                fresh.append(p)
+        for list_id in swelist_src.configured_list_ids():
+            incoming.extend(fetch_source("swelist", list_id))
+
+    if "yc" in sources and settings.job_wide_yc_enabled:
+        incoming.extend(fetch_source("yc", "jobs"))
+
+    dir_src.learn_from_postings(incoming)
+
+    fresh: list[JobPosting] = []
+    for p in incoming:
+        key = (p.source, p.external_id)
+        if p.external_id and key not in seen:
+            seen.add(key)
+            fresh.append(p)
 
     if fresh:
         logger.info("wide_discovery: %d fresh posting(s) for %s", len(fresh), user_id)
     return fresh
 
 
-def ensure_default_feeds_tracked(user_id: str) -> int:
+def ensure_default_feeds_tracked(user_id: str, prof: sqlite3.Row | None = None) -> int:
     """Auto-track default RSS feeds so users can list/untrack them. Returns added."""
     added = 0
-    for feed_id in wide_rss_feed_ids():
+    for feed_id in wide_rss_feed_ids(prof):
         meta = rss_src.resolve_feed(feed_id)
         if not meta:
             continue
@@ -111,30 +122,45 @@ def ensure_default_feeds_tracked(user_id: str) -> int:
         get_settings().job_wide_swelist_enabled
         and "swelist" in get_settings().job_sources
     ):
-        token = (get_settings().job_swelist_list or swelist_src.DEFAULT_LIST).strip()
-        meta = swelist_src.resolve_list(token)
-        if meta:
-            from . import jobstore
+        from . import jobstore
 
+        for list_id in swelist_src.configured_list_ids():
+            meta = swelist_src.resolve_list(list_id)
+            if not meta:
+                continue
             row = jobstore.add_tracked_company(
                 user_id, "swelist", meta["list_id"], meta["label"]
             )
             if row is not None:
                 added += 1
+    if get_settings().job_wide_yc_enabled and "yc" in get_settings().job_sources:
+        from . import jobstore
+
+        row = jobstore.add_tracked_company(
+            user_id, "yc", "jobs", "Y Combinator jobs"
+        )
+        if row is not None:
+            added += 1
     return added
 
 
-def describe_wide_status() -> str:
+def describe_wide_status(prof: sqlite3.Row | None = None) -> str:
     """One-line summary for profile confirmation."""
     s = get_settings()
     parts: list[str] = []
     if s.job_wide_rss_enabled and "rss" in s.job_sources:
-        feeds = ", ".join(wide_rss_feed_ids()) or "none"
+        feeds = ", ".join(wide_rss_feed_ids(prof)) or "none"
         parts.append(f"RSS ({feeds})")
     if s.job_wide_directory_enabled and "directory" in s.job_sources:
-        parts.append(f"ATS directory ({dir_src.board_count()} boards, rotating)")
-    if s.job_wide_aggregator_enabled and "aggregator" in s.job_sources:
-        parts.append("Google Jobs search" + (" ✓" if s.serpapi_enabled else " — needs SERPAPI_API_KEY"))
+        sectors = catalog.directory_sectors(prof)
+        n = dir_src.board_count(sectors)
+        refs = catalog.name_count()
+        label = ", ".join(sorted(sectors))
+        extra = f", {refs:,} company refs" if refs else ""
+        parts.append(f"ATS directory ({label}: {n} live boards{extra}, rotating)")
     if s.job_wide_swelist_enabled and "swelist" in s.job_sources:
-        parts.append("Pitt CSC / Simplify internship list")
+        lists = ", ".join(swelist_src.configured_list_ids())
+        parts.append(f"Pitt CSC / Simplify lists ({lists})")
+    if s.job_wide_yc_enabled and "yc" in s.job_sources:
+        parts.append("Y Combinator jobs")
     return "; ".join(parts) if parts else ""

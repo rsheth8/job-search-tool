@@ -25,11 +25,16 @@ from .db import connect
 
 # What kind of fact this is. 'answer' is special: it carries a question in
 # ``label`` and can be served verbatim when that question comes up again.
-CATEGORIES = ("project", "achievement", "strength", "preference", "answer")
+# ``experience`` is paid/internship/TA/ambassador work (always has an employer
+# location). ``project`` is personal/GitHub work (no employer city).
+CATEGORIES = (
+    "experience", "project", "achievement", "strength", "preference", "answer",
+)
 
 # How each category is introduced to the model.
 _HEADINGS = {
-    "project": "PROJECTS I CAN CITE",
+    "experience": "WORK EXPERIENCE (employer roles — include city/state)",
+    "project": "PROJECTS I CAN CITE (personal/GitHub — no employer location)",
     "achievement": "ACHIEVEMENTS",
     "strength": "STRENGTHS",
     "preference": "WHAT I WANT IN A ROLE",
@@ -91,18 +96,32 @@ def remove(user_id: str, item_id: int) -> bool:
         return cur.rowcount > 0
 
 
-def knowledge_block(user_id: str, *, limit_per_category: int = 6) -> str:
+def knowledge_block(
+    user_id: str,
+    *,
+    limit_per_category: int = 6,
+    context: str = "",
+) -> str:
     """The stored facts as a compact prompt block, or "" when there's nothing yet.
 
     Kept short on purpose: this rides along on every answer-drafting call, and a
-    focused handful of real specifics beats an exhaustive dump.
+    focused handful of real specifics beats an exhaustive dump. When ``context``
+    (a job title/description) is passed, projects and experience are ranked
+    against it so the drafter cites the work that actually matches.
     """
     items = list_all(user_id)
     if not items:
         return ""
     out: list[str] = []
     for category, heading in _HEADINGS.items():
-        picked = [i for i in items if i["category"] == category][:limit_per_category]
+        bucket = [i for i in items if i["category"] == category]
+        if category in ("project", "experience") and context:
+            bucket = sorted(
+                bucket,
+                key=lambda i: _overlap(i.get("text") or "", context),
+                reverse=True,
+            )
+        picked = bucket[:limit_per_category]
         if picked:
             out.append(heading + ":")
             out.extend(f"  - {i['text']}" for i in picked)
@@ -113,6 +132,13 @@ def knowledge_block(user_id: str, *, limit_per_category: int = 6) -> str:
             out.append(f"  Q: {i['label']}")
             out.append(f"  A: {i['text']}")
     return "\n".join(out)
+
+
+def _overlap(text: str, context: str) -> float:
+    a, b = _tokens(text), _tokens(context)
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a)
 
 
 def _tokens(text: str) -> set[str]:
@@ -150,14 +176,23 @@ def canned_answer(user_id: str, question: str, *, threshold: float = 0.6) -> str
 
 # --- coverage audit ---------------------------------------------------------
 
-# Identity fields worth nagging about: these are what actually block an autofill.
+# Identity fields that decide Autofill coverage. Filling all of these in the
+# first-run quiz is 100%. Optional extras (street address, GPA, salary, EEO)
+# still help forms but are not required for a complete score.
 _IMPORTANT_IDENTITY = (
     ("first_name", "first name"), ("last_name", "last name"), ("email", "email"),
     ("phone", "phone"), ("location", "location (city/state)"),
-    ("linkedin", "LinkedIn URL"), ("school", "school"), ("degree", "degree"),
-    ("grad_year", "graduation year"), ("years_experience", "years of experience"),
+    ("country", "country"), ("zip", "ZIP / postal code"),
+    ("linkedin", "LinkedIn URL"), ("github", "GitHub URL"),
+    ("school", "school"), ("degree", "degree"),
+    ("discipline", "major / field of study"), ("grad_year", "graduation year"),
+    ("years_experience", "years of experience"),
     ("work_authorized", "work authorization"),
     ("needs_sponsorship", "sponsorship requirement"),
+    ("over_18", "over 18"),
+    ("willing_to_relocate", "willing to relocate"),
+    ("work_arrangement", "remote / hybrid / on-site"),
+    ("start_date", "start date"),
 )
 
 
@@ -184,6 +219,9 @@ def audit(user_id: str) -> dict:
         suggestions.append(
             f"Add {len(missing)} missing detail{'s' if len(missing) != 1 else ''}: "
             + ", ".join(missing[:6]))
+    if not counts.get("experience"):
+        suggestions.append(
+            "Add a job with a city — 'remember experience: Intern at Acme, Austin, TX'")
     if not counts.get("project"):
         suggestions.append(
             "Tell me a project worth citing — 'remember project: I built …'")

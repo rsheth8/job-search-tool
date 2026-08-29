@@ -1,7 +1,7 @@
 """Push notifications to the iPhone app (APNs).
 
 The difference between a tool you remember to check and one that tells you: a match
-lands, or the worker finishes filling a form and needs your approval, and the phone
+lands when new matches arrive, and the phone
 says so. Everything else in the pipeline already knows when those happen; this is
 just the delivery.
 
@@ -45,18 +45,22 @@ def _now() -> str:
 
 # --- device registry --------------------------------------------------------
 
-def register_device(user_id: str, token: str, platform: str = "ios") -> bool:
+def register_device(user_id: str, token: str, platform: str = "ios",
+                    timezone: str | None = None) -> bool:
     """Record a device token. Idempotent — re-registering refreshes it rather than
     duplicating, since iOS hands the app the same token on every launch."""
     token = (token or "").strip()
     if not user_id or not token:
         return False
+    tz = (timezone or "").strip() or None
     with connect() as conn:
         conn.execute(
-            "INSERT INTO device_tokens (user_id, token, platform, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(user_id, token) DO UPDATE SET updated_at = excluded.updated_at",
-            (user_id, token, platform or "ios", _now(), _now()),
+            "INSERT INTO device_tokens (user_id, token, platform, timezone, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(user_id, token) DO UPDATE SET "
+            "updated_at = excluded.updated_at, "
+            "timezone = COALESCE(excluded.timezone, device_tokens.timezone)",
+            (user_id, token, platform or "ios", tz, _now(), _now()),
         )
     return True
 
@@ -182,32 +186,13 @@ def reset_for_tests() -> None:
     _token_cache = None
 
 
-# --- the two moments worth interrupting you for -----------------------------
-
-def notify_preview_ready(user_id: str, label: str, filled: int, skipped: int) -> int:
-    """The worker filled a form and is waiting on your approval."""
-    left = f" · {skipped} left for you" if skipped else ""
-    return send(
-        user_id, "Ready to approve",
-        f"{label} — filled {filled} field{'s' if filled != 1 else ''}{left}",
-        data={"kind": "preview", "label": label},
-    )
-
-
-def notify_needs_human(user_id: str, reason: str) -> int:
-    """Autopilot hit a captcha/login — solve it, then it can continue."""
-    body = (reason or "Something needs you on the form").strip()
-    return send(
-        user_id, "Autopilot needs you",
-        f"{body}. Clear it, then sit back — or finish manually.",
-        data={"kind": "needs_human", "reason": body},
-    )
-
+# --- push triggers ---------------------------------------------------------
 
 def notify_new_matches(user_id: str, count: int, top: str | None = None) -> int:
     """New job matches landed."""
     if count <= 0:
         return 0
-    body = top or "Open the app to review them."
-    return send(user_id, f"{count} new match{'es' if count != 1 else ''}", body,
-                data={"kind": "matches", "count": count})
+    from . import voice
+
+    title, body = voice.match_notification(user_id, count, top)
+    return send(user_id, title, body, data={"kind": "matches", "count": count})

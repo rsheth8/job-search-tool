@@ -86,9 +86,6 @@ def save_posting(
     status: str = "new",
 ) -> sqlite3.Row | None:
     """Insert a discovered posting. Returns the row, or None if it already existed."""
-    from . import embeddings
-
-    embedding_blob = embeddings.to_blob(getattr(posting, "embedding", None))
     with connect() as conn:
         cur = conn.execute(
             """
@@ -102,7 +99,7 @@ def save_posting(
                 user_id, posting.source, posting.external_id, posting.company,
                 posting.title, posting.location, posting.url, posting.description,
                 posting.posted_at, _now(), relevance_score, status,
-                embedding_blob,
+                None,
             ),
         )
         if cur.rowcount == 0:
@@ -133,8 +130,8 @@ def seen_similar_count(user_id: str, company: str | None, title: str | None) -> 
 
 
 def has_postings_from_source(user_id: str, source: str) -> bool:
-    """True if the user has any posting from ``source`` — used to baseline the
-    paid aggregator on its first run (so enabling it doesn't storm)."""
+    """True if the user has any posting from ``source`` (used to baseline a
+    new wide source on its first run so enabling it doesn't storm)."""
     with connect() as conn:
         return (
             conn.execute(
@@ -190,18 +187,46 @@ def mark_matching_postings_applied(
 
 
 def list_review_queue(user_id: str, *, limit: int = 50) -> list[sqlite3.Row]:
-    """Queued matches awaiting interactive review, best score first."""
+    """Queued matches awaiting interactive review.
+
+    User-pinned order wins when they reordered. Otherwise fillable + fresh
+    + fit, so the Apply tab leads with roles worth sending today.
+    """
+    from . import shortlist
+
     with connect() as conn:
         rows = conn.execute(
             """
             SELECT * FROM job_postings
             WHERE user_id = ? AND status = 'queued'
-            ORDER BY relevance_score DESC, first_seen_at ASC
-            LIMIT ?
             """,
-            (user_id, limit),
+            (user_id,),
         ).fetchall()
-    return _filter_already_applied(user_id, rows)[:limit]
+    ranked = shortlist.rank_rows(_filter_already_applied(user_id, rows))
+    return ranked[:limit]
+
+
+def reorder_matches(user_id: str, posting_ids: list[int]) -> bool:
+    """Persist a user-defined order for queued matches. Foreign ids are skipped."""
+    if not posting_ids:
+        return True
+    with connect() as conn:
+        owned = {
+            r["id"]
+            for r in conn.execute(
+                "SELECT id FROM job_postings WHERE user_id = ? AND status = 'queued'",
+                (user_id,),
+            )
+        }
+        ordered = [int(pid) for pid in posting_ids if int(pid) in owned]
+        if not ordered:
+            return False
+        for i, pid in enumerate(ordered):
+            conn.execute(
+                "UPDATE job_postings SET sort_order = ? WHERE id = ? AND user_id = ?",
+                (i, pid, user_id),
+            )
+        return True
 
 
 def count_queued(user_id: str) -> int:
@@ -344,22 +369,24 @@ def all_discovery_users() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Directory cursor + aggregator caps
+# Directory cursor
 # ---------------------------------------------------------------------------
 
 _DIRECTORY_CURSOR_KEY = "directory:global"
 
 
-def get_directory_cursor() -> int:
+def get_directory_cursor(key: str | None = None) -> int:
+    cursor_key = key or _DIRECTORY_CURSOR_KEY
     with connect() as conn:
         row = conn.execute(
             "SELECT position FROM discovery_cursors WHERE cursor_key = ?",
-            (_DIRECTORY_CURSOR_KEY,),
+            (cursor_key,),
         ).fetchone()
     return int(row["position"]) if row else 0
 
 
-def set_directory_cursor(position: int) -> None:
+def set_directory_cursor(position: int, key: str | None = None) -> None:
+    cursor_key = key or _DIRECTORY_CURSOR_KEY
     with connect() as conn:
         conn.execute(
             """
@@ -369,112 +396,35 @@ def set_directory_cursor(position: int) -> None:
                 position = excluded.position,
                 updated_at = excluded.updated_at
             """,
-            (_DIRECTORY_CURSOR_KEY, position, _now()),
+            (cursor_key, position, _now()),
         )
 
 
-def _utc_day_start() -> str:
-    from datetime import datetime, timezone
-
-    d = datetime.now(timezone.utc).date()
-    return datetime(d.year, d.month, d.day, tzinfo=timezone.utc).isoformat()
-
-
-def allow_aggregator_search() -> bool:
-    from .config import get_settings
-
-    cap = get_settings().job_aggregator_max_per_day
+def add_learned_board(source: str, board_token: str) -> bool:
+    """Remember an ATS board discovered from an apply URL. True if new."""
+    src = (source or "").strip().lower()
+    token = (board_token or "").strip()
+    if not src or not token:
+        return False
     with connect() as conn:
-        n = conn.execute(
-            "SELECT COUNT(*) FROM job_api_calls WHERE call_type = 'aggregator' "
-            "AND called_at >= ?",
-            (_utc_day_start(),),
-        ).fetchone()[0]
-    return n < cap
-
-
-def record_aggregator_call(user_id: str | None = None) -> None:
-    with connect() as conn:
-        conn.execute(
-            "INSERT INTO job_api_calls (call_type, user_id, called_at) VALUES (?, ?, ?)",
-            ("aggregator", user_id, _now()),
+        cur = conn.execute(
+            """
+            INSERT OR IGNORE INTO directory_learned_boards
+                (source, board_token, learned_at)
+            VALUES (?, ?, ?)
+            """,
+            (src, token, _now()),
         )
+        return cur.rowcount > 0
 
 
-def allow_embedding_call() -> bool:
-    """True while today's billable Voyage embedding requests are under the cap."""
-    from .config import get_settings
-
-    cap = get_settings().embedding_max_calls_per_day
+def list_learned_boards() -> list[tuple[str, str]]:
     with connect() as conn:
-        n = conn.execute(
-            "SELECT COUNT(*) FROM job_api_calls WHERE call_type = 'embedding' "
-            "AND called_at >= ?",
-            (_utc_day_start(),),
-        ).fetchone()[0]
-    return n < cap
-
-
-def record_embedding_call(user_id: str | None = None) -> None:
-    with connect() as conn:
-        conn.execute(
-            "INSERT INTO job_api_calls (call_type, user_id, called_at) VALUES (?, ?, ?)",
-            ("embedding", user_id, _now()),
-        )
-
-
-def embedding_calls_today() -> int:
-    """Billable embedding requests so far this UTC day (for /health)."""
-    with connect() as conn:
-        return conn.execute(
-            "SELECT COUNT(*) FROM job_api_calls WHERE call_type = 'embedding' "
-            "AND called_at >= ?",
-            (_utc_day_start(),),
-        ).fetchone()[0]
-
-
-def allow_eligibility_call() -> bool:
-    """True while today's batched LLM eligibility checks are under the cap."""
-    from .config import get_settings
-
-    cap = get_settings().eligibility_max_calls_per_day
-    with connect() as conn:
-        n = conn.execute(
-            "SELECT COUNT(*) FROM job_api_calls WHERE call_type = 'eligibility' "
-            "AND called_at >= ?",
-            (_utc_day_start(),),
-        ).fetchone()[0]
-    return n < cap
-
-
-def record_eligibility_call(user_id: str | None = None) -> None:
-    with connect() as conn:
-        conn.execute(
-            "INSERT INTO job_api_calls (call_type, user_id, called_at) VALUES (?, ?, ?)",
-            ("eligibility", user_id, _now()),
-        )
-
-
-def allow_summary_call() -> bool:
-    """True while today's batched deck-TLDR calls are under the cap."""
-    from .config import get_settings
-
-    cap = get_settings().deck_tldr_max_calls_per_day
-    with connect() as conn:
-        n = conn.execute(
-            "SELECT COUNT(*) FROM job_api_calls WHERE call_type = 'summary' "
-            "AND called_at >= ?",
-            (_utc_day_start(),),
-        ).fetchone()[0]
-    return n < cap
-
-
-def record_summary_call(user_id: str | None = None) -> None:
-    with connect() as conn:
-        conn.execute(
-            "INSERT INTO job_api_calls (call_type, user_id, called_at) VALUES (?, ?, ?)",
-            ("summary", user_id, _now()),
-        )
+        rows = conn.execute(
+            "SELECT source, board_token FROM directory_learned_boards "
+            "ORDER BY source, board_token"
+        ).fetchall()
+    return [(r["source"], r["board_token"]) for r in rows]
 
 
 def tracked_count() -> int:

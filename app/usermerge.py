@@ -1,9 +1,8 @@
 """Merge all data from one user id into another.
 
-Your data can end up split across two ids — e.g. ``local`` (the web pages + swipe
-trainer default) and your Slack user id (what chat keys on). This consolidates
-them: every user-scoped table is repointed from ``src`` to ``dst`` so a single id
-owns the whole search.
+Your data can end up split across two ids — e.g. ``local`` (CLI) and an Apple
+``usr_…`` (what the iOS app keys on). This consolidates them: every user-scoped
+table is repointed from ``src`` to ``dst`` so a single id owns the whole search.
 
 Safe by construction:
   * Auto-discovers every table with a ``user_id`` column (no hardcoded list to

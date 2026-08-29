@@ -1,8 +1,8 @@
 """Persist tailored resumes on disk + SQLite for reuse across applies.
 
-Each cached resume is keyed by user, variant (swe/aiml), company, and role title.
-Lookup also matches the same posting or a similar title at the same company so
-we don't re-run Claude + Tectonic when we already have a good fit on file.
+Reuse is narrow on purpose: the same posting, or the exact same company + title
++ job-description fingerprint. A nearby title at the same company is a new
+résumé — those reqs are not the same job.
 """
 from __future__ import annotations
 
@@ -15,8 +15,6 @@ from pathlib import Path
 from .config import get_settings
 from .db import connect
 
-_STOP_TITLE_WORDS = frozenset({"the", "a", "an", "at", "and", "or", "of", "for", "to"})
-
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -26,31 +24,31 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
-def make_cache_key(variant: str, company: str, title: str) -> str:
-    return f"{variant}|{_normalize(company)}|{_normalize(title)}"
+def jd_fingerprint(description: str | None) -> str:
+    """Stable hash of the JD. Whitespace-only changes match; any other edit does not."""
+    text = _normalize(description or "")
+    if not text:
+        return "nodesc"
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
-def _title_tokens(title: str) -> set[str]:
-    words = set(re.findall(r"[a-z0-9]+", (title or "").lower()))
-    words -= _STOP_TITLE_WORDS
-    if "ml" in words:
-        words.update(("machine", "learning"))
-    if "ai" in words:
-        words.update(("artificial", "intelligence"))
-    return words
+def make_cache_key(
+    variant: str,
+    company: str,
+    title: str,
+    description: str | None = None,
+) -> str:
+    return (
+        f"{variant}|{_normalize(company)}|{_normalize(title)}|"
+        f"{jd_fingerprint(description)}"
+    )
 
 
-def titles_similar(a: str, b: str, *, threshold: float = 0.5) -> bool:
-    """True when two role titles overlap enough to reuse the same resume."""
-    na, nb = _normalize(a), _normalize(b)
-    if na == nb or na in nb or nb in na:
-        return True
-    ta, tb = _title_tokens(a), _title_tokens(b)
-    if not ta or not tb:
-        return False
-    if ta <= tb or tb <= ta:
-        return True
-    return len(ta & tb) / len(ta | tb) >= threshold
+def _fingerprint_from_key(cache_key: str) -> str | None:
+    parts = (cache_key or "").split("|")
+    if len(parts) >= 4:
+        return parts[-1]
+    return None
 
 
 def _storage_root() -> Path:
@@ -69,23 +67,40 @@ def find_cached(
     variant: str,
     *,
     posting_id: int | None = None,
+    description: str | None = None,
 ) -> sqlite3.Row | None:
-    """Return a stored resume row if one fits this apply, else None."""
-    key = make_cache_key(variant, company, title)
+    """Return a stored résumé only when it is this same job, else None.
+
+    Same ``posting_id`` reuses (unless the stored JD hash disagrees with the
+    description we have now). Without a posting id, company + title + JD
+    fingerprint must match exactly. Similar titles at the same company do not.
+    """
+    want = jd_fingerprint(description)
 
     with connect() as conn:
         if posting_id is not None:
-            row = conn.execute(
+            rows = conn.execute(
                 """
                 SELECT * FROM tailored_resumes
-                WHERE user_id = ? AND posting_id = ?
-                ORDER BY created_at DESC LIMIT 1
+                WHERE user_id = ? AND posting_id = ? AND variant = ?
+                ORDER BY created_at DESC
                 """,
-                (user_id, posting_id),
-            ).fetchone()
-            if row and _row_usable(row):
-                return row
+                (user_id, posting_id, variant),
+            ).fetchall()
+            for row in rows:
+                if not _row_usable(row):
+                    continue
+                stored = _fingerprint_from_key(row["cache_key"])
+                # Legacy rows have no JD segment — only reuse if we also have no JD.
+                if stored is None:
+                    if want == "nodesc":
+                        return row
+                    continue
+                if stored == want:
+                    return row
+            return None
 
+        key = make_cache_key(variant, company, title, description)
         row = conn.execute(
             """
             SELECT * FROM tailored_resumes
@@ -96,19 +111,6 @@ def find_cached(
         ).fetchone()
         if row and _row_usable(row):
             return row
-
-        # Same company + variant, similar title (e.g. "Backend Engineer" vs "Software Engineer").
-        candidates = conn.execute(
-            """
-            SELECT * FROM tailored_resumes
-            WHERE user_id = ? AND variant = ? AND lower(company) = lower(?)
-            ORDER BY created_at DESC
-            """,
-            (user_id, variant, company),
-        ).fetchall()
-        for row in candidates:
-            if titles_similar(title, row["title"] or "") and _row_usable(row):
-                return row
 
     return None
 
@@ -137,9 +139,10 @@ def save(
     tex: str,
     pages: int,
     posting_id: int | None = None,
+    description: str | None = None,
 ) -> sqlite3.Row:
     """Write PDF + .tex to the volume and index in SQLite."""
-    cache_key = make_cache_key(variant, company, title)
+    cache_key = make_cache_key(variant, company, title, description)
     dest = _entry_dir(user_id, cache_key)
     dest.mkdir(parents=True, exist_ok=True)
 

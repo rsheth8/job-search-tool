@@ -112,6 +112,39 @@ def test_remove_drops_item():
     assert apply_queue.remove("u1", pid) is False
 
 
+def test_promote_moves_item_to_front():
+    first = _save(ext="1")
+    apply_queue.stage("u1", first)
+    second = _save(ext="2")
+    apply_queue.stage("u1", second)
+    ids = [i["posting_id"] for i in apply_queue.list_queue("u1")]
+    assert ids[0] == second
+    assert apply_queue.promote("u1", first) is True
+    ids = [i["posting_id"] for i in apply_queue.list_queue("u1")]
+    assert ids[0] == first
+
+
+def test_promote_stages_if_needed():
+    pid = _save()
+    assert apply_queue.promote("u1", pid) is True
+    assert apply_queue.list_queue("u1")[0]["posting_id"] == pid
+    assert apply_queue.promote("u1", 99999) is False
+    assert apply_queue.promote("other", pid) is False
+
+
+def test_reorder_ready_queue():
+    a = _save(ext="1")
+    apply_queue.stage("u1", a)
+    b = _save(ext="2")
+    apply_queue.stage("u1", b)
+    # Newest staged is first until the user ranks them.
+    assert [i["posting_id"] for i in apply_queue.list_queue("u1")][0] == b
+    assert apply_queue.reorder("u1", [a, b]) is True
+    assert [i["posting_id"] for i in apply_queue.list_queue("u1")] == [a, b]
+    assert apply_queue.reorder("u1", [99999]) is False
+    assert apply_queue.reorder("u1", []) is True
+
+
 # ---------------------------------------------------------------------------
 # Web endpoints
 # ---------------------------------------------------------------------------
@@ -176,5 +209,21 @@ def test_resume_endpoint_404_when_unavailable():
     assert _client().get(f"/apply/resume?user=u1&id={pid}").status_code == 404
 
 
-def test_apply_page_renders():
-    assert "Apply queue" in _client().get("/apply?user=u1").text
+def test_cover_endpoint_404_when_unavailable():
+    pid = _save()
+    apply_queue.stage("u1", pid)
+    assert _client().get(f"/apply/cover?user=u1&id={pid}").status_code == 404
+
+
+def test_cover_endpoint_serves_pdf(monkeypatch):
+    pid = _save()
+    apply_queue.stage("u1", pid)
+    monkeypatch.setattr(
+        apply_queue, "build_cover_bytes",
+        lambda uid, posting_id: (b"%PDF-cover", "Cover_Letter_Backend_Acme.pdf"),
+    )
+    r = _client().get(f"/apply/cover?user=u1&id={pid}")
+    assert r.status_code == 200
+    assert r.content == b"%PDF-cover"
+    assert r.headers["content-type"].startswith("application/pdf")
+    assert "Cover_Letter_Backend_Acme.pdf" in r.headers["content-disposition"]

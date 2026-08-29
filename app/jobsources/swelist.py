@@ -28,6 +28,16 @@ LISTS: dict[str, dict[str, str]] = {
         ),
         "label": "Pitt CSC / Simplify Summer 2027 internships",
         "repo": "https://github.com/SimplifyJobs/Summer2027-Internships",
+        "kind": "internship",
+    },
+    "newgrad": {
+        "url": (
+            "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/"
+            "dev/.github/scripts/listings.json"
+        ),
+        "label": "Pitt CSC / Simplify new-grad positions",
+        "repo": "https://github.com/SimplifyJobs/New-Grad-Positions",
+        "kind": "newgrad",
     },
 }
 
@@ -97,8 +107,29 @@ def _is_fresh(listing: dict, max_age_days: int, now: datetime) -> bool:
     return (now - posted).total_seconds() <= max_age_days * 86400
 
 
-def _description(listing: dict) -> str:
-    bits = ["Internship from the Pitt CSC / Simplify list."]
+def configured_list_ids() -> list[str]:
+    """List ids from ``JOB_SWELIST_LIST`` (comma-separated), known ids only."""
+    from ..config import get_settings
+
+    raw = (get_settings().job_swelist_list or DEFAULT_LIST).strip()
+    out: list[str] = []
+    for part in raw.split(","):
+        key = part.strip().lower()
+        if key in LISTS and key not in out:
+            out.append(key)
+    return out or [DEFAULT_LIST]
+
+
+def _kind(list_id: str) -> str:
+    return (LISTS.get(list_id) or {}).get("kind") or "internship"
+
+
+def _description(listing: dict, *, list_id: str = DEFAULT_LIST) -> str:
+    kind = _kind(list_id)
+    if kind == "newgrad":
+        bits = ["New-grad role from the Pitt CSC / Simplify list."]
+    else:
+        bits = ["Internship from the Pitt CSC / Simplify list."]
     cat = (listing.get("category") or "").strip()
     if cat:
         bits.append(f"Category: {cat}.")
@@ -151,7 +182,7 @@ def _parse(
                 url=url,
                 company=company,
                 location=location,
-                description=_description(raw),
+                description=_description(raw, list_id=list_id),
                 posted_at=_iso_from_unix(raw.get("date_posted") or raw.get("date_updated")),
             )
         )
@@ -183,14 +214,28 @@ def _unwrap_apply_url(url: str) -> str:
 
 
 def fetch(token: str) -> list[JobPosting]:
-    """Fetch active recent internships. ``token`` is a list id or raw JSON URL."""
+    """Fetch active recent listings. ``token`` is a list id, comma-separated
+    ids, or a raw JSON URL."""
     from ..config import get_settings
+
+    parts = [p.strip() for p in (token or "").split(",") if p.strip()]
+    if len(parts) > 1:
+        seen: set[str] = set()
+        merged: list[JobPosting] = []
+        for part in parts:
+            for p in fetch(part):
+                if p.external_id not in seen:
+                    seen.add(p.external_id)
+                    merged.append(p)
+        merged.sort(key=lambda p: p.posted_at or "", reverse=True)
+        return merged
 
     meta = resolve_list(token)
     if not meta:
         logger.warning("unknown swelist token %r", token)
         return []
-    data = get_json(meta["url"])
+    # New-grad listings.json is large; give the download a bit more time.
+    data = get_json(meta["url"], timeout=45.0)
     if data is None:
         return []
     settings = get_settings()

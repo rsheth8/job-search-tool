@@ -183,79 +183,13 @@ def test_the_auth_token_is_cached(monkeypatch, tmp_path):
     assert len(calls) == 1, "the APNs JWT should be signed once, then reused"
 
 
-# --- the two triggers -------------------------------------------------------
-
-def test_notify_preview_ready_wording(monkeypatch, tmp_path):
-    _configure(monkeypatch, tmp_path)
-    push.register_device("u1", "tok")
-    seen = {}
-    monkeypatch.setattr(push, "send",
-                        lambda uid, title, body, **kw: seen.update(
-                            uid=uid, title=title, body=body, kw=kw) or 1)
-    push.notify_preview_ready("u1", "#3 (Backend Engineer @ Acme)", 7, 2)
-    assert seen["title"] == "Ready to approve"
-    assert "filled 7 fields" in seen["body"]
-    assert "2 left for you" in seen["body"]
-    assert seen["kw"]["data"]["kind"] == "preview"
-
+# --- push triggers ----------------------------------------------------------
 
 def test_notify_new_matches_is_silent_for_zero(monkeypatch, tmp_path):
     _configure(monkeypatch, tmp_path)
     push.register_device("u1", "tok")
     monkeypatch.setattr(push, "send", lambda *a, **k: 1)
     assert push.notify_new_matches("u1", 0) == 0
-
-
-def test_preview_endpoint_pushes(monkeypatch):
-    """The worker reporting a preview should reach the phone, not just Slack."""
-    from fastapi.testclient import TestClient
-
-    from app import fill_requests, jobstore
-    from app.jobsources import JobPosting
-    from app.main import app
-
-    posting = jobstore.save_posting("u1", JobPosting(
-        source="greenhouse", external_id="1", title="Backend Engineer",
-        url="https://x/apply", company="Acme", location="Remote",
-        description="Build things."), relevance_score=0.8, status="queued")
-    req = fill_requests.create("u1", posting["id"])
-    fill_requests.claim_next()
-
-    pushed = []
-    monkeypatch.setattr(push, "notify_preview_ready",
-                        lambda *a, **k: pushed.append(a) or 1)
-
-    r = TestClient(app).post("/worker/preview", json={
-        "request_id": req["id"],
-        "preview": {"filled": [{"label": "Email", "value": "a@b.c"}],
-                    "skipped": ["Gender"]}})
-    assert r.json()["ok"] is True
-    assert pushed and pushed[0][0] == "u1"
-    assert pushed[0][2] == 1 and pushed[0][3] == 1      # 1 filled, 1 skipped
-
-
-def test_a_push_failure_never_breaks_the_preview(monkeypatch):
-    from fastapi.testclient import TestClient
-
-    from app import fill_requests, jobstore
-    from app.jobsources import JobPosting
-    from app.main import app
-
-    posting = jobstore.save_posting("u1", JobPosting(
-        source="greenhouse", external_id="1", title="Backend Engineer",
-        url="https://x/apply", company="Acme", location="Remote",
-        description="Build things."), relevance_score=0.8, status="queued")
-    req = fill_requests.create("u1", posting["id"])
-    fill_requests.claim_next()
-
-    def boom(*_a, **_k):
-        raise RuntimeError("APNs is down")
-
-    monkeypatch.setattr(push, "notify_preview_ready", boom)
-    r = TestClient(app).post("/worker/preview", json={
-        "request_id": req["id"], "preview": {"filled": [], "skipped": []}})
-    assert r.json()["ok"] is True
-    assert fill_requests.get(req["id"])["status"] == fill_requests.PREVIEW
 
 
 # --- the endpoints ----------------------------------------------------------
@@ -275,3 +209,16 @@ def test_device_registration_endpoints():
     assert client.post("/apply/device/remove",
                        json={"user": "u1", "token": "tok-a"}).json()["ok"] is True
     assert push.devices("u1") == []
+
+
+def test_device_registration_stores_timezone():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    client.post("/apply/device", json={
+        "user": "u1", "token": "tok-tz", "timezone": "America/New_York",
+    })
+    from app import voice
+    assert voice.timezone_for("u1") == "America/New_York"
