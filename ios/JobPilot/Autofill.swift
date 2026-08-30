@@ -339,6 +339,22 @@ enum Autofill {
         }
         return out.join(" ");
       }
+      // "IN" → "Indiana", but only when the list really is state names. A
+      // two-letter value that *is* a USPS code is unambiguous, unlike the same
+      // letters in running text, so AMBIG_ABBR must not apply here. Without it
+      // the state select took the wrong state — "IN" scored highest against
+      // "Maine", "LA" against "Alabama" — and "OR"/"MA"/"MD"/"ME" filled nothing.
+      // Mirrors _expand_bare_state in app/fieldmatch.py.
+      const STATE_NAMES = new Set(Object.values(STATE_ABBR).map((v) => canonical(v, false)));
+      const titleCase = (s) => s.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+      function expandBareState(raw, options) {
+        const code = String(raw || "").trim().toLowerCase();
+        if (!/^[a-z]{2}$/.test(code) || !STATE_ABBR[code]) return raw;
+        for (const o of options) {
+          if (STATE_NAMES.has(canonical(o, false))) return titleCase(STATE_ABBR[code]);
+        }
+        return raw;
+      }
       function levelsIn(c) {
         const found = [];
         const parts = new Set(c.split(" "));
@@ -424,6 +440,13 @@ enum Autofill {
         return scored[0][0];
       }
       const DECLINE_OPT = /decline|prefer not|do not wish|don't wish|choose not to|rather not/i;
+      // An option that *opens* with Yes or No has already declared its side.
+      // Reading the rest for shape flips the commonest work-auth phrasing there
+      // is: "Yes, I do not require sponsorship" hits \bnot\b and classifies as
+      // No, so both options come back "no", neither side has a candidate, and
+      // the question is left blank. Mirrors _LEAD_YES/_LEAD_NO in fieldmatch.py.
+      const LEAD_YES = /^\s*(?:yes|y)\b/i;
+      const LEAD_NO = /^\s*(?:no|n)\b/i;
       const NO_SHAPE = /\b(?:not|never|none)\b|(?:^|[\s,])no(?:[\s,]|$)|i am not|i do not|do not have|don't have|not hispanic|not latino/i;
       const YES_SHAPE = /(?:^|[\s,])yes(?:[\s,]|$)|^\s*y\s*$|\bi am\b|\bauthorized\b|\bwilling\b|\bable to\b|\bopen to\b|\bhispanic\b|\blatino\b|\bveteran\b|\bdisabilit/i;
       function asYesNo(raw) {
@@ -438,6 +461,8 @@ enum Autofill {
       function optionYesNo(text) {
         const t = String(text || "").trim();
         if (!t || DECLINE_OPT.test(t)) return null;
+        if (LEAD_YES.test(t)) return "yes";
+        if (LEAD_NO.test(t)) return "no";
         if (NO_SHAPE.test(t)) return "no";
         if (YES_SHAPE.test(t) || ["yes","y","true"].includes(t.toLowerCase())) return "yes";
         if (["no","n","false"].includes(t.toLowerCase())) return "no";
@@ -503,11 +528,17 @@ enum Autofill {
         return hits[0][0];
       }
       function pickBest(options, value) {
-        const raw = String(value || "").trim();
+        let raw = String(value || "").trim();
         if (!raw) return null;
         const cleaned = options.map((o) => String(o || "").replace(/\s+/g, " ").trim())
           .filter((t) => t && !PLACEHOLDER_OPT.test(t));
         if (!cleaned.length) return null;
+        // An option that *is* the value wins before any heuristic. Canonicalizing
+        // first can destroy a short value outright — "OR" and "IN" are stop
+        // words, so they normalized to "" and matched nothing.
+        const lower = raw.toLowerCase();
+        for (const o of cleaned) if (o.toLowerCase() === lower) return o;
+        raw = expandBareState(raw, cleaned);
         const expand = COMMA_ABBR.test(raw) || raw.length === 2 || cleaned.some((o) => COMMA_ABBR.test(o));
         const want = canonical(raw, expand);
         if (!want) return null;
@@ -775,18 +806,61 @@ enum Autofill {
         flash(el);
       }
 
-      function bestAnswer(label) {
-        const words = new Set(label.split(/\W+/).filter(Boolean));
-        let best = null, score = -1;
-        for (const q of ANS()) {
-          const qw = new Set((q.question||"").toLowerCase().split(/\W+/).filter(Boolean));
-          let n = 0; for (const w of words) if (qw.has(w)) n++;
-          if (n > score) { score = n; best = q; }
+      // A drafted answer is reused only when the form is really asking that
+      // question. The old version scored on raw shared words and accepted a
+      // score of 1, so a single filler word in common was enough: "If you could
+      // have dinner with anyone, who would it be?" shares "you" with "Why do you
+      // want to work here?" and got the why-us paragraph typed into it. Every
+      // free-text box on the form ended up holding an answer to a different
+      // question — worse than leaving it blank, because it reads as finished.
+      //
+      // Same tokenizer as app/knowledge.py (_STOPWORDS, words longer than two
+      // letters), then: at least two meaningful words in common, and a Dice
+      // score over both questions so neither a short label nor a long drafted
+      // question can carry a match on its own.
+      const ANSWER_STOP = new Set(["a","an","the","and","or","of","to","in","on","at","is","are","be","with","this","that","please","do","does","did","you","your","i","my","me","it","us","our","we"]);
+      function answerTokens(text) {
+        const out = new Set();
+        for (const w of String(text || "").toLowerCase().match(/[a-z0-9]+/g) || []) {
+          if (w.length > 2 && !ANSWER_STOP.has(w)) out.add(w);
         }
-        return (score > 0 && best) ? best.answer : null;
+        return out;
       }
+      function bestAnswer(label) {
+        const asked = answerTokens(label);
+        if (!asked.size) return null;
+        let best = null, bestScore = 0;
+        for (const q of ANS()) {
+          const saved = answerTokens(q.question);
+          if (!saved.size) continue;
+          let shared = 0;
+          for (const w of saved) if (asked.has(w)) shared++;
+          if (shared < 2) continue;
+          const score = (2 * shared) / (asked.size + saved.size);
+          if (score > bestScore) { best = q; bestScore = score; }
+        }
+        return (best && bestScore >= 0.5) ? best.answer : null;
+      }
+      window.__applyBestAnswer = bestAnswer;
 
-      function fillRadios() {
+      const radioOptionText = (r) => {
+        const l = String(radioLabel(r) || "").replace(/\s+/g, " ").trim();
+        return l || String(r.value || "").trim();
+      };
+      // A radio group is a choice field, so it goes through the same picker as
+      // <select> and the ARIA combobox — pickBest, i.e. fieldmatch.select_value.
+      //
+      // It used to substring-test each option against the wanted value, and
+      // `"yes, i know someone who works here".includes("no")` is true ("know").
+      // So a No answer selected Yes and the form submitted the opposite of what
+      // the person said, silently, on questions about sponsorship and referrals.
+      // The same test also never filled a group whose options aren't yes/no —
+      // "Woman" does not appear in "Female" — which pickBest maps correctly.
+      //
+      // A group the person has already answered is left alone (rule 2: fill
+      // blanks, never overwrite). Checking only the target let a second ⚡ tap
+      // move their answer.
+      function fillRadios(noteSkip) {
         const groups = {};
         for (const r of document.querySelectorAll('input[type="radio"]')) {
           if (!isVisible(r) || r.disabled || !r.name) continue;
@@ -795,18 +869,30 @@ enum Autofill {
         let n = 0;
         for (const name in groups) {
           const radios = groups[name];
+          if (radios.some((r) => r.checked)) continue;        // already answered
           const gl = groupLabel(radios);
           if (EEO.test(gl)) continue;                         // never touch demographics
           const key = matchKey(gl, radios[0]);
-          const raw = key && identityValue(key, gl);
-          if (raw == null || raw === "") continue;
+          if (!key) { if (noteSkip) noteSkip(gl, "unmatched"); continue; }
+          const raw = identityValue(key, gl);
+          if (raw == null || raw === "") { if (noteSkip) noteSkip(gl, "empty", key); continue; }
           const want = yesNoWant(gl, key, raw);
-          const t = radios.find((r) => { const s=(radioLabel(r)+" "+r.value).toLowerCase();
-            return s.includes(want) || (want==="yes" && /\byes\b/.test(s)) || (want==="no" && /\bno\b/.test(s)); });
-          if (t && !t.checked) { t.checked = true; t.dispatchEvent(new Event("click",{bubbles:true})); t.dispatchEvent(new Event("change",{bubbles:true})); flash(t.closest("label")||t); n++; }
+          const texts = radios.map(radioOptionText);
+          const best = pickBest(texts, want);
+          if (!best) { if (noteSkip) noteSkip(gl, "no_option", key); continue; }
+          const wantC = canonical(best, true);
+          const t = radios.find((r) => canonical(radioOptionText(r), true) === wantC)
+                 || radios[texts.indexOf(best)];
+          if (!t || t.checked) continue;
+          t.checked = true;
+          t.dispatchEvent(new Event("click", { bubbles: true }));
+          t.dispatchEvent(new Event("change", { bubbles: true }));
+          flash(t.closest("label") || t);
+          n++;
         }
         return n;
       }
+      window.__applyRadioPick = (optionTexts, want) => pickBest(optionTexts, want);
 
       // Ashby (and some Greenhouse) render Yes/No as two big <button>s, not radios.
       // Find sibling Yes/No controls under a shared parent, map the nearby question
@@ -842,7 +928,9 @@ enum Autofill {
         let node = el;
         for (let hops = 0; node && hops < 6; hops++, node = node.parentElement) {
           const raw = (node.innerText || "").replace(/\s+/g, " ").trim();
-          const q = raw.replace(/\bYes\b/g, "").replace(/\bNo\b/g, "").replace(/\s+/g, " ").trim();
+          // Case-insensitive: boards that render the buttons as YES / NO left
+          // both words glued onto the question text the rules then matched on.
+          const q = raw.replace(/\byes\b/gi, "").replace(/\bno\b/gi, "").replace(/\s+/g, " ").trim();
           if (q.length >= 12 && q.length <= 280) return q.toLowerCase();
         }
         return fieldLabel(el);
@@ -1000,7 +1088,7 @@ enum Autofill {
           }
           setText(el, val); filled++;
         }
-        filled += fillRadios();
+        filled += fillRadios(noteSkip);
         filled += fillYesNoButtons();
         const result = { filled, essays, skips };
         if (!(opts && opts.report === false)) reportFill(result);

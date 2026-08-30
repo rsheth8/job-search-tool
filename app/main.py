@@ -553,7 +553,12 @@ def apply_profile_get(request: Request, user: str | None = None) -> dict:
 
 @app.post("/apply/profile")
 async def apply_profile_set(request: Request) -> dict:
-    """Set search criteria so discovery can tick for this user."""
+    """Set search criteria so discovery can tick for this user.
+
+    Partial: a key the caller omits is left alone (``set_profile`` skips ``None``),
+    so a save that only carries a résumé summary can't blank out roles or
+    locations. An explicit empty string *does* clear that field.
+    """
     from . import profile as profile_mod
 
     body = await request.json()

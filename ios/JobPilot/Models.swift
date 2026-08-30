@@ -169,6 +169,9 @@ struct SetupStatus: Codable {
     let has_profile: Bool
     let identity_score: Double
     let identity_missing: [String]?
+    /// The handful Autofill cannot work without (name, email). Optional so an
+    /// older build still decodes.
+    let identity_core_missing: [String]?
     let identity_have: [String]?
     let onboarding: String?
     let profile: [String: String]

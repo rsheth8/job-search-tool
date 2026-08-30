@@ -130,3 +130,71 @@ def test_setup_prefills_name_and_email_from_the_account():
     assert identity["first_name"] == "Ada"
     assert identity["last_name"] == "Lovelace"
     assert "email" not in applicant.get_identity("usr_ada")
+
+
+def test_profile_save_leaves_out_what_it_was_not_given():
+    """The quiz's last step saves only a résumé summary. Re-posting the search
+    fields from local state there wiped the locations and seniority of anyone who
+    reached it without them loaded — a retake, or a setup refresh that failed."""
+    c = TestClient(app)
+    c.post("/apply/profile", json={"user": "p1", "fields": {
+        "roles": "software engineer", "keywords": "python",
+        "locations": "Remote, Chicago", "seniority": "New grad",
+    }})
+    c.post("/apply/profile", json={
+        "user": "p1", "fields": {"resume_summary": "CS senior at UIC."}})
+    fields = c.get("/apply/profile?user=p1").json()["fields"]
+    assert fields["locations"] == "Remote, Chicago"
+    assert fields["seniority"] == "New grad"
+    assert fields["keywords"] == "python"
+    assert fields["resume_summary"] == "CS senior at UIC."
+
+
+def test_profile_save_still_clears_a_field_asked_to_clear():
+    """Absent means "leave it"; an explicit empty string still clears."""
+    c = TestClient(app)
+    c.post("/apply/profile", json={"user": "p2", "fields": {
+        "roles": "backend", "keywords": "go", "locations": "NYC",
+    }})
+    c.post("/apply/profile", json={"user": "p2", "fields": {"locations": ""}})
+    assert c.get("/apply/profile?user=p2").json()["fields"]["locations"] == ""
+
+
+def test_a_skipped_quiz_reports_itself_as_not_complete():
+    """Roles saved, nothing else. The gate lets them into the app, but `complete`
+    stays false so the Done step can say Autofill has nothing to work with
+    instead of handing over a dead feature."""
+    c = TestClient(app)
+    c.post("/apply/setup", json={"user": "thin", "action": "start"})
+    c.post("/apply/profile", json={
+        "user": "thin", "fields": {"roles": "swe", "keywords": "swe"}})
+    body = c.post("/apply/setup", json={"user": "thin", "action": "complete"}).json()
+    assert body["needs_setup"] is False
+    assert body["complete"] is False
+    assert body["identity_score"] == 0.0
+    assert applicant.autofill_map("thin") == {}
+
+
+def test_coverage_alone_is_not_enough_without_a_name_and_email():
+    """School, links and location add up to half the coverage bar while leaving
+    no name and no email — and every application form opens with those. Reaching
+    50% that way used to report `complete`, which is the app promising Autofill
+    works when it can't fill the first three boxes on the page."""
+    applicant.set_identity("nameless", {
+        "city": "Chicago", "state": "IL", "zip": "60601",
+        "country": "United States", "school": "UIC", "degree": "BS",
+        "discipline": "CS", "grad_year": "2027", "years_experience": "1",
+        "linkedin": "https://linkedin.com/in/x", "github": "https://github.com/x",
+        "work_authorized": True, "needs_sponsorship": False, "over_18": True,
+    })
+    profile.set_profile("nameless", roles="swe", keywords="swe", locations="remote")
+    body = TestClient(app).get("/apply/setup?user=nameless").json()
+    assert body["identity_score"] >= 0.5          # the fraction is satisfied
+    assert body["complete"] is False              # but the core is not
+    assert body["identity_core_missing"] == ["first name", "last name", "email"]
+
+    applicant.set_identity("nameless", {
+        "first_name": "Ada", "last_name": "Lovelace", "email": "ada@x.com"})
+    body = TestClient(app).get("/apply/setup?user=nameless").json()
+    assert body["identity_core_missing"] == []
+    assert body["complete"] is True

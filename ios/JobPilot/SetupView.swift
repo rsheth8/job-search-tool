@@ -34,6 +34,10 @@ struct SetupView: View {
     @State private var previewScore: Double = 0
     @State private var showStepJump = false
     @State private var draftBusy = false
+    /// A retake (reopened from You → Profile quiz) can be closed. So can a quiz
+    /// whose setup status never loaded — trapping someone behind a network blip
+    /// helps nobody, and they can always reopen it from You or Matches.
+    @State private var canClose = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let roleSuggestions = [
@@ -52,6 +56,17 @@ struct SetupView: View {
         let year = Calendar.current.component(.year, from: Date())
         return (0..<8).map { String(year - 1 + $0) }
     }
+    /// The terms an internship posting is likely to be hiring for right now.
+    private static var internSeasonOptions: [String] {
+        let year = Calendar.current.component(.year, from: Date())
+        return ["Summer \(year)", "Fall \(year)",
+                "Spring \(year + 1)", "Summer \(year + 1)", "Fall \(year + 1)"]
+    }
+    /// Full month names — what ATS month dropdowns list.
+    private static let monthOptions = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    ]
 
     private var api: APIClient { APIClient(config: config) }
     private var stepMotion: Animation? { reduceMotion ? nil : Theme.springSoft }
@@ -119,8 +134,7 @@ struct SetupView: View {
                 if isDemo {
                     applyDemoSample()
                 } else {
-                    prefill()
-                    Task { await startQuiz() }
+                    Task { await hydrate() }
                 }
             }
             .onChange(of: step) { _, _ in
@@ -141,6 +155,15 @@ struct SetupView: View {
                         .foregroundStyle(Theme.soft)
                         .buttonStyle(PressableButtonStyle())
                         .accessibilityLabel("Exit preview")
+                } else if canClose {
+                    // A retake replaces the whole app, so without this the only
+                    // way out of "I came back to fix one field" is to tap
+                    // through all thirteen steps again.
+                    Button("Close") { setup.needsSetup = false }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.soft)
+                        .buttonStyle(PressableButtonStyle())
+                        .accessibilityLabel("Close the profile quiz")
                 }
             }
             GeometryReader { geo in
@@ -318,12 +341,15 @@ struct SetupView: View {
                     TextField("optional", text: $identity.address)
                 }
             }
+            // One value, two ways in. The chips and the field are the same
+            // binding, so they were previously shown as two separate questions
+            // where tapping one silently cleared the other.
             labeled("Country") {
                 chipRow(["United States", "Canada"], selected: $identity.country)
             }
             card {
-                labeled("Or type another country") {
-                    TextField("optional", text: $identity.country)
+                labeled("Country (tap above or type it)") {
+                    TextField("United States", text: $identity.country)
                 }
             }
         }
@@ -378,6 +404,12 @@ struct SetupView: View {
             labeled("Graduation year") {
                 chipRow(Self.gradYearOptions, selected: $identity.gradYear)
             }
+            // Greenhouse and Workable split the education end date into a month
+            // select and a year select. Without the month, half of every
+            // education block stays blank.
+            labeled("Graduation month") {
+                chipRow(Self.monthOptions, selected: $identity.gradMonth)
+            }
         }
     }
 
@@ -414,8 +446,14 @@ struct SetupView: View {
                 chipRow(["Immediately", "2 weeks", "After graduation"],
                         selected: $identity.startDate)
             }
+            // Internship postings ask which term you're applying for. The rules
+            // and the option picker already handle it; nothing was asking.
+            labeled("Internship term (if you're applying for one)") {
+                chipRow(Self.internSeasonOptions, selected: $identity.internSeason)
+            }
             card {
-                labeled("Custom start date") {
+                // Same binding as the chips above — one answer, not two.
+                labeled("Start date (tap above or type it)") {
                     TextField("June 2026", text: $identity.startDate)
                 }
                 Divider().background(Theme.accent.opacity(0.08))
@@ -535,6 +573,27 @@ struct SetupView: View {
         }
     }
 
+    /// True when there isn't enough identity for Autofill to do anything useful.
+    /// The server decides the bar (`onboarding._IDENTITY_READY`) and reports it
+    /// as `complete`; the app doesn't second-guess the number.
+    private var tooThinToFill: Bool {
+        if isDemo { return false }
+        guard let s = setup.status else { return false }
+        return !s.complete
+    }
+
+    /// Name the fields when the server told us which ones are missing; otherwise
+    /// say why coverage matters at all.
+    private var thinReason: String {
+        let core = setup.status?.identity_core_missing ?? []
+        if !core.isEmpty {
+            return "Every application form starts with your \(core.joined(separator: ", ")) — "
+                 + "without those, ⚡ Autofill has almost nothing to put on the page."
+        }
+        return "Name, contact, and work authorization are on nearly every form. "
+             + "Without them ⚡ Autofill will leave most of the page blank."
+    }
+
     private var doneBody: some View {
         VStack(spacing: Theme.spaceM) {
             CoverageMeter(
@@ -542,11 +601,33 @@ struct SetupView: View {
                 missing: displayedMissing,
                 suggestion: nil
             )
-            Text("Skipped fields stay blank on forms. You can add them anytime in You.")
-                .font(.subheadline)
-                .foregroundStyle(Theme.soft)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+            if tooThinToFill {
+                // Letting someone finish here in silence hands them an app whose
+                // headline feature does nothing. Say so, and offer the way back.
+                FocusCard {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Autofill can't fill much yet")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.ink)
+                        Text(thinReason)
+                            .font(.subheadline)
+                            .foregroundStyle(Theme.soft)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Add my details") {
+                            withAnimation(stepMotion) { step = .you }
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
+                        .buttonStyle(PressableButtonStyle())
+                    }
+                }
+            } else {
+                Text("Skipped fields stay blank on forms. You can add them anytime in You.")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.soft)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.top, 8)
     }
@@ -703,6 +784,19 @@ struct SetupView: View {
             current.append(option)
         }
         selected.wrappedValue = current.joined(separator: ", ")
+    }
+
+    /// Load before showing anything. A quiz that opened before setup had loaded
+    /// (cold launch, or a refresh that failed) showed empty fields, no Apple
+    /// name/email, and no draft — and then saved that emptiness over what was
+    /// already there.
+    private func hydrate() async {
+        if setup.status == nil { await setup.refresh(config: config) }
+        // A retake has finished the quiz once already; it must be escapable and
+        // must not re-pin them with `mark_started`.
+        canClose = setup.status.map { !$0.needs_setup } ?? true
+        prefill()
+        await startQuiz()
     }
 
     private func prefill() {
@@ -941,7 +1035,7 @@ struct SetupView: View {
             try await saveIdentity(["linkedin", "github", "portfolio"])
         case .school:
             try await saveIdentity([
-                "school", "degree", "discipline", "gpa", "grad_year",
+                "school", "degree", "discipline", "gpa", "grad_year", "grad_month",
             ])
         case .work:
             try await saveIdentity([
@@ -950,8 +1044,8 @@ struct SetupView: View {
             ])
         case .logistics:
             try await saveIdentity([
-                "work_arrangement", "start_date", "salary_expectation",
-                "willing_to_relocate", "can_travel",
+                "work_arrangement", "start_date", "intern_season",
+                "salary_expectation", "willing_to_relocate", "can_travel",
             ])
         case .formDefaults:
             try await saveIdentity([
@@ -969,13 +1063,10 @@ struct SetupView: View {
                 try await api.addKnowledge(
                     category: "answer", text: aboutText, label: "Tell us about yourself"
                 )
-                try await api.saveProfile(
-                    roles: roles,
-                    locations: locations,
-                    seniority: seniority,
-                    keywords: keywords,
-                    resumeSummary: aboutText
-                )
+                // Summary only. Re-posting the search fields from local state here
+                // wiped the locations and seniority of anyone who reached this step
+                // without them loaded (a retake, or a setup refresh that failed).
+                try await api.saveProfile(resumeSummary: aboutText)
             }
             let why = whyRole.trimmingCharacters(in: .whitespacesAndNewlines)
             if !why.isEmpty {
@@ -1061,7 +1152,7 @@ private enum QuizStep: Int, CaseIterable, Hashable {
         case .you: return "Legal name and how they reach you."
         case .home: return "City and state unlock most location questions."
         case .links: return "LinkedIn and GitHub show up on almost every SWE form."
-        case .school: return "Degree, major, and class year. Tap all degrees that apply."
+        case .school: return "Degree, major, and when you finish. Tap all degrees that apply."
         case .work: return "Authorization questions are on nearly every form."
         case .logistics: return "Skip salary if you’d rather not store it."
         case .formDefaults: return "Pick one source. Yes/no questions Autofill can answer for you."

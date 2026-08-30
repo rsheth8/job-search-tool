@@ -791,3 +791,102 @@ def test_fields_sharing_a_block_do_not_inherit_each_others_labels(
         assert page.input_value("#country") == "United States"
     finally:
         page.close()
+
+
+# --- radio groups: the wrong value, not a blank -----------------------------
+
+def test_verbose_yes_no_radios_pick_the_side_the_person_answered(
+        browser, server, lib):
+    """The worst failure this engine had: a *wrong* answer submitted silently.
+
+    Options were matched by substring, and "yes, i know someone who works
+    here".includes("no") is true — so a No answer checked Yes on referral and
+    sponsorship questions, on real applications, without a word to the person.
+    Radio groups now go through the same option picker as <select>."""
+    identity = dict(
+        IDENTITY,
+        work_authorized="Yes", needs_sponsorship="No",
+        related_to_employee="No", previously_applied="No",
+        willing_to_relocate="Yes", can_travel="Yes", gender="Woman",
+    )
+    page = run_autofill(browser, server, lib, "verbose_yesno_radios.html",
+                        identity=identity)
+    try:
+        # authorized without sponsorship, and we need none -> the Yes option
+        assert page.is_checked("input[name='sponsor'][value='a']")
+        assert not page.is_checked("input[name='sponsor'][value='b']")
+        # "Yes, I know someone…" must not win a No answer
+        assert page.is_checked("input[name='referral'][value='b']")
+        assert not page.is_checked("input[name='referral'][value='a']")
+        assert page.is_checked("input[name='prior'][value='b']")
+        assert page.is_checked("input[name='relocate'][value='a']")
+        # not a Yes/No group at all — the substring matcher never filled it
+        assert page.is_checked("input[name='gender'][value='f']")
+        # already answered by the person: fill blanks, never overwrite
+        assert page.is_checked("input[name='travel'][value='b']")
+        assert not page.is_checked("input[name='travel'][value='a']")
+    finally:
+        page.close()
+
+
+def test_radio_option_pick_matches_python_select_value(browser, lib):
+    """Radio groups and <select> must land on the same option."""
+    page = browser.new_page()
+    try:
+        page.evaluate(lib)
+        cases = [
+            (["Yes, I do not require sponsorship",
+              "No, I will require sponsorship now or in the future"], "Yes"),
+            (["Yes, I know someone who works here", "No"], "No"),
+            (["Yes, I have applied before", "No, this is my first application"], "No"),
+            (["Male", "Female", "Non-binary"], "Woman"),
+            (["Yes", "No"], "No"),
+        ]
+        for options, value in cases:
+            js = page.evaluate("([o, v]) => window.__applyRadioPick(o, v)",
+                               [options, value])
+            py = fieldmatch.select_value(options, value)
+            assert js == py, (options, value, js, py)
+            assert js is not None, (options, value)
+    finally:
+        page.close()
+
+
+# --- drafted answers only go where they answer the question ----------------
+
+def test_a_drafted_answer_is_not_reused_for_a_different_question(browser, lib):
+    """One shared filler word used to be enough, so every free-text box on the
+    form got a paragraph answering something else — which reads as finished."""
+    page = browser.new_page()
+    try:
+        answers = [
+            {"question": "Why do you want to work at Acme?", "answer": "WHY-US"},
+            {"question": "Why are you a strong fit for the Software Engineer role?",
+             "answer": "WHY-FIT"},
+            {"question": "Tell us about a relevant project or accomplishment.",
+             "answer": "PROJECT"},
+        ]
+        page.add_init_script(
+            f"window.__APPLY = {json.dumps({'identity': {}, 'answers': answers})};")
+        page.goto("about:blank")
+        page.evaluate(lib)
+        matched = {
+            "why do you want to work at acme?": "WHY-US",
+            "why do you want to work here?": "WHY-US",
+            "what makes you a strong fit for this role?": "WHY-FIT",
+            "tell us about a project you are proud of": "PROJECT",
+        }
+        unmatched = [
+            "if you could have dinner with anyone, who would it be?",
+            "what is your favorite programming language and why?",
+            "please list any accommodations you need for the interview",
+            "describe a time you disagreed with a teammate and what you did",
+        ]
+        for label, expected in matched.items():
+            got = page.evaluate("(l) => window.__applyBestAnswer(l)", label)
+            assert got == expected, (label, got)
+        for label in unmatched:
+            got = page.evaluate("(l) => window.__applyBestAnswer(l)", label)
+            assert got is None, (label, got)
+    finally:
+        page.close()

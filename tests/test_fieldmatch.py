@@ -258,3 +258,88 @@ def test_is_resume_field_yes(label):
 ])
 def test_is_resume_field_no(label):
     assert not fieldmatch.is_resume_field(label)
+
+
+# --- an option that opens with Yes or No has already declared its side -------
+
+@pytest.mark.parametrize("option,side", [
+    # The commonest work-authorization phrasing there is. Reading it for shape
+    # finds \bnot\b and calls it No, so *both* options on the question came back
+    # "no", neither side had a candidate, and the field was left blank.
+    ("Yes, I do not require sponsorship", "yes"),
+    ("No, I will require sponsorship now or in the future", "no"),
+    ("Yes, I know someone who works here", "yes"),
+    ("Yes, I have never worked here", "yes"),
+    ("No, this is my first application", "no"),
+    ("Yes", "yes"),
+    ("No", "no"),
+    # shape still decides when neither word leads
+    ("I am not a protected veteran", "no"),
+    ("Not Hispanic or Latino", "no"),
+    ("I am authorized to work in the United States", "yes"),
+    # declining is neither
+    ("I don't wish to answer", None),
+    ("Decline to self-identify", None),
+])
+def test_option_yes_no_reads_the_lead(option, side):
+    assert fieldmatch._option_yes_no(option) == side
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("Yes", "Yes, I do not require sponsorship"),
+    ("No", "No, I will require sponsorship now or in the future"),
+])
+def test_sponsorship_question_actually_gets_answered(value, expected):
+    """This exact pair is on most Greenhouse and Lever postings."""
+    options = ["Yes, I do not require sponsorship",
+               "No, I will require sponsorship now or in the future"]
+    assert fieldmatch.select_value(options, value) == expected
+
+
+def test_graduation_month_select_matches():
+    months = ["January", "February", "March", "April", "May", "June", "July",
+              "August", "September", "October", "November", "December"]
+    assert fieldmatch.match_key("End date month") == "grad_month"
+    assert fieldmatch.select_value(months, "May") == "May"
+    assert fieldmatch.select_value(months, "December") == "December"
+
+
+# --- a bare state code must select that state, not a neighbour --------------
+
+_STATE_OPTIONS = [
+    "Alabama", "California", "Illinois", "Indiana", "Maine", "Maryland",
+    "Massachusetts", "Ohio", "Oklahoma", "Oregon", "Idaho", "Louisiana",
+    "Hawaii", "Texas", "District of Columbia", "New York",
+]
+
+
+@pytest.mark.parametrize("code,state", [
+    ("IL", "Illinois"), ("TX", "Texas"), ("CA", "California"),
+    # These are the ones that broke. "IN" scored highest against *Maine*, "LA"
+    # against *Alabama* and "HI" against *Ohio* — the wrong state, selected and
+    # saved — while OR / MA / MD / ME are stop words or ambiguous abbreviations
+    # and normalized away to nothing, leaving the field blank.
+    ("OR", "Oregon"), ("IN", "Indiana"), ("MA", "Massachusetts"),
+    ("MD", "Maryland"), ("ME", "Maine"), ("HI", "Hawaii"),
+    ("LA", "Louisiana"), ("OH", "Ohio"), ("OK", "Oklahoma"), ("ID", "Idaho"),
+    ("DC", "District of Columbia"), ("NY", "New York"),
+])
+def test_bare_state_code_selects_that_state(code, state):
+    assert fieldmatch.select_value(_STATE_OPTIONS, code) == state
+
+
+def test_state_code_is_only_expanded_against_a_state_list():
+    """Scoped on purpose: a two-letter code is only unambiguous when the options
+    it's being matched against really are state names."""
+    assert fieldmatch._expand_bare_state("IN", ["Indiana", "Illinois"]) == "Indiana"
+    assert fieldmatch._expand_bare_state("IN", ["In progress", "Done"]) == "IN"
+    assert fieldmatch._expand_bare_state("No", ["Yes", "No"]) == "No"
+    # A list of codes needs no expansion — the exact match handles it.
+    assert fieldmatch.select_value(["IL", "IN", "TX"], "IN") == "IN"
+    assert fieldmatch.select_value(["Yes", "No"], "No") == "No"
+
+
+def test_an_exact_option_wins_before_any_heuristic():
+    assert fieldmatch.select_value(["Summer 2026", "Summer 2027"], "Summer 2027") == (
+        "Summer 2027")
+    assert fieldmatch.select_value(["Remote", "Hybrid"], "remote") == "Remote"

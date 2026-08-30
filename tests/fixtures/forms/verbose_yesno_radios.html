@@ -1,0 +1,57 @@
+<!doctype html>
+<!-- The Yes/No radio groups real Greenhouse and Lever postings ship: the option
+     text is a full sentence, not the word "Yes". Every previous radio fixture
+     used bare Yes/No, which is exactly why the substring matcher's inversion
+     ("yes, i know someone".includes("no") is true) went unnoticed. -->
+<html>
+<head><meta charset="utf-8"><title>Apply — verbose Yes/No radios</title></head>
+<body>
+  <form id="app-form" action="/submitted" method="post">
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email">
+
+    <fieldset id="fs-sponsor">
+      <legend>Are you legally authorized to work in the United States without sponsorship?</legend>
+      <label><input type="radio" name="sponsor" value="a"> Yes, I do not require sponsorship</label>
+      <label><input type="radio" name="sponsor" value="b"> No, I will require sponsorship now or in the future</label>
+    </fieldset>
+
+    <fieldset id="fs-referral">
+      <legend>Do you know anyone who works at Acme?</legend>
+      <label><input type="radio" name="referral" value="a"> Yes, I know someone who works here</label>
+      <label><input type="radio" name="referral" value="b"> No</label>
+    </fieldset>
+
+    <fieldset id="fs-prior">
+      <legend>Have you previously applied to Acme?</legend>
+      <label><input type="radio" name="prior" value="a"> Yes, I have applied before</label>
+      <label><input type="radio" name="prior" value="b"> No, this is my first application</label>
+    </fieldset>
+
+    <fieldset id="fs-relocate">
+      <legend>Are you willing to relocate for this role?</legend>
+      <label><input type="radio" name="relocate" value="a"> Yes, I am open to relocating</label>
+      <label><input type="radio" name="relocate" value="b"> No, I am not able to relocate</label>
+    </fieldset>
+
+    <!-- Not a Yes/No group. The substring matcher never filled these because
+         "Woman" does not appear in "Female"; the option picker maps it. -->
+    <fieldset id="fs-gender">
+      <legend>What is your gender?</legend>
+      <label><input type="radio" name="gender" value="m"> Male</label>
+      <label><input type="radio" name="gender" value="f"> Female</label>
+      <label><input type="radio" name="gender" value="n"> Non-binary</label>
+    </fieldset>
+
+    <!-- Already answered by the person. Autofill fills blanks; it must not move
+         an answer that is already there, even when identity disagrees. -->
+    <fieldset id="fs-travel">
+      <legend>Are you willing to travel for this role?</legend>
+      <label><input type="radio" name="travel" value="a"> Yes, I am willing to travel</label>
+      <label><input type="radio" name="travel" value="b" checked> No, I would rather not travel</label>
+    </fieldset>
+
+    <button type="submit" id="go">Submit Application</button>
+  </form>
+</body>
+</html>
