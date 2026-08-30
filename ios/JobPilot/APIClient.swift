@@ -400,22 +400,32 @@ struct APIClient {
         return try JSONDecoder().decode(SetupStatus.self, from: data)
     }
 
+    /// Partial update. Only the arguments you pass are sent, and the server leaves
+    /// absent keys alone — so saving just a résumé summary can't blank out the
+    /// locations and seniority a caller happened not to have in hand. Passing an
+    /// empty string *does* clear that field; that's what the editors want.
     func saveProfile(
-        roles: String,
-        locations: String,
-        seniority: String = "",
-        keywords: String = "",
-        resumeSummary: String = ""
+        roles: String? = nil,
+        locations: String? = nil,
+        seniority: String? = nil,
+        keywords: String? = nil,
+        resumeSummary: String? = nil
     ) async throws {
-        var fields: [String: Any] = [
-            "roles": roles,
-            "keywords": keywords.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? roles : keywords,
-            "locations": locations,
-            "seniority": seniority,
-        ]
-        let summary = resumeSummary.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !summary.isEmpty { fields["resume_summary"] = summary }
+        var fields: [String: Any] = [:]
+        if let roles { fields["roles"] = roles }
+        if let locations { fields["locations"] = locations }
+        if let seniority { fields["seniority"] = seniority }
+        if let keywords {
+            // Matching runs off keywords; an empty skills box falls back to roles
+            // rather than leaving discovery with nothing to search on.
+            let kw = keywords.trimmingCharacters(in: .whitespacesAndNewlines)
+            fields["keywords"] = kw.isEmpty ? (roles ?? kw) : kw
+        }
+        if let resumeSummary {
+            let summary = resumeSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !summary.isEmpty { fields["resume_summary"] = summary }
+        }
+        guard !fields.isEmpty else { return }
         _ = try await request("POST", "/apply/profile", body: ["fields": fields])
     }
 

@@ -267,7 +267,7 @@ Rejected, Ghosted.
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q     # full pytest suite (~700 tests, fully offline)
+.venv/bin/python -m pytest -q     # full pytest suite (~750 tests, fully offline)
 ```
 
 `conftest.py` forces the offline heuristic router, neutralizes live API keys

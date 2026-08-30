@@ -344,6 +344,27 @@ def _canonical_option(text: str, *, expand_states: bool = False) -> str:
     return " ".join(out)
 
 
+_STATE_NAMES = frozenset(_canonical_option(v) for v in _STATE_ABBR.values())
+
+
+def _expand_bare_state(raw: str, options: list[str]) -> str:
+    """``IN`` → ``Indiana``, but only when the list really is state names.
+
+    A two-letter value that *is* a USPS code is unambiguous, unlike the same
+    letters inside running text ("in progress" must not become Indiana) — so the
+    ``_AMBIGUOUS_ABBR`` guard, which exists for running text, must not apply
+    here. Without this the state select got the *wrong state*: ``IN`` scored
+    highest against "Maine" and ``LA`` against "Alabama", while ``OR``, ``MA``,
+    ``MD`` and ``ME`` matched nothing at all and were left blank.
+    """
+    code = raw.strip().lower()
+    if len(code) != 2 or not code.isalpha() or code not in _STATE_ABBR:
+        return raw
+    if any(_canonical_option(o) in _STATE_NAMES for o in options):
+        return _STATE_ABBR[code].title()
+    return raw
+
+
 def _levels_in(canonical: str) -> tuple[str, ...]:
     found = []
     for level in _LEVEL_ORDER:
@@ -471,6 +492,14 @@ _DECLINE_OPT = re.compile(
     r"decline|prefer not|do not wish|don't wish|choose not to|rather not",
     re.I,
 )
+# An option that *opens* with Yes or No has already declared which side it is on.
+# Reading the rest of it for shape flips the answer on the single most common
+# work-authorization phrasing there is: "Yes, I do not require sponsorship" hits
+# ``\bnot\b`` and classifies as No, so both options on that question come back
+# "no", no side has a candidate, and the field is left blank on every Greenhouse
+# and Lever form that words it that way. The lead wins.
+_LEAD_YES = re.compile(r"^\s*(?:yes|y)\b", re.I)
+_LEAD_NO = re.compile(r"^\s*(?:no|n)\b", re.I)
 _NO_SHAPE = re.compile(
     r"\b(?:not|never|none)\b|(?:^|[\s,])no(?:[\s,]|$)|i am not|i do not|"
     r"do not have|don't have|not hispanic|not latino",
@@ -514,6 +543,10 @@ def _option_yes_no(text: str) -> str | None:
     t = (text or "").strip()
     if not t or _DECLINE_OPT.search(t):
         return None
+    if _LEAD_YES.search(t):
+        return "yes"
+    if _LEAD_NO.search(t):
+        return "no"
     if _NO_SHAPE.search(t):
         return "no"
     if _YES_SHAPE.search(t) or t.lower() in ("yes", "y", "true"):
@@ -648,6 +681,15 @@ def select_value(options: list[str], value) -> str | None:
     if not cleaned:
         return None
 
+    # An option that *is* the value wins before any heuristic. Canonicalizing
+    # first can destroy a short value outright — "OR" (Oregon) and "IN"
+    # (Indiana) are stop words, so they normalized to the empty string and
+    # matched nothing.
+    for o in cleaned:
+        if o.strip().lower() == raw.lower():
+            return o
+
+    raw = _expand_bare_state(raw, cleaned)
     expand = bool(_COMMA_ABBR.search(raw) or len(raw) == 2
                   or any(_COMMA_ABBR.search(o) for o in cleaned))
     want = _canonical_option(raw, expand_states=expand)

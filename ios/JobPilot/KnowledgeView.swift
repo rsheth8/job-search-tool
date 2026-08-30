@@ -435,6 +435,7 @@ private struct SearchEditorView: View {
     @State private var keywords = ""
     @State private var seniority = ""
     @State private var saving = false
+    @State private var loaded = false
     @State private var error: String?
 
     var body: some View {
@@ -493,22 +494,35 @@ private struct SearchEditorView: View {
                         Task { await save() }
                     }
                     .fontWeight(.semibold)
-                    .disabled(saving || roles.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(saving || !loaded
+                              || roles.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
-            .onAppear {
-                let p = setup.status?.profile ?? [:]
-                if roles.isEmpty { roles = p["roles"] ?? "" }
-                if locations.isEmpty { locations = p["locations"] ?? "" }
-                if keywords.isEmpty { keywords = p["keywords"] ?? "" }
-                if seniority.isEmpty { seniority = p["seniority"] ?? "" }
-            }
+            // Save posts every field, so the editor must know what it's editing
+            // first. Opening on a nil status and saving used to blank out the
+            // locations, skills and seniority it had never been shown.
+            .task { await loadCurrent() }
             .tint(Theme.accent)
         }
     }
 
+    private func loadCurrent() async {
+        if setup.status == nil { await setup.refresh(config: config) }
+        guard let p = setup.status?.profile else {
+            error = "Couldn't load what you have saved, so Save is off — "
+                  + "otherwise it would overwrite it with blanks. Pull to refresh You."
+            return
+        }
+        if roles.isEmpty { roles = p["roles"] ?? "" }
+        if locations.isEmpty { locations = p["locations"] ?? "" }
+        if keywords.isEmpty { keywords = p["keywords"] ?? "" }
+        if seniority.isEmpty { seniority = p["seniority"] ?? "" }
+        loaded = true
+    }
+
     private func save() async {
         defer { saving = false }
+        guard loaded else { return }
         do {
             try await APIClient(config: config).saveProfile(
                 roles: roles,
@@ -531,6 +545,7 @@ private struct IdentityEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var identity = IdentityDraft()
     @State private var saving = false
+    @State private var loaded = false
     @State private var error: String?
 
     var body: some View {
@@ -574,6 +589,7 @@ private struct IdentityEditorView: View {
                     TextField("Major", text: $identity.discipline)
                     TextField("Graduation year", text: $identity.gradYear)
                         .keyboardType(.numberPad)
+                    TextField("Graduation month (e.g. May)", text: $identity.gradMonth)
                     TextField("GPA", text: $identity.gpa)
                         .keyboardType(.decimalPad)
                 }
@@ -583,6 +599,8 @@ private struct IdentityEditorView: View {
                     TextField("Current company", text: $identity.currentCompany)
                     TextField("Current title", text: $identity.currentTitle)
                     TextField("Start date", text: $identity.startDate)
+                    TextField("Internship term (e.g. Summer 2027)",
+                              text: $identity.internSeason)
                     TextField("Work arrangement", text: $identity.workArrangement)
                     TextField("Salary expectation", text: $identity.salary)
                     Toggle("Authorized to work in the US", isOn: $identity.workAuthorized)
@@ -622,16 +640,32 @@ private struct IdentityEditorView: View {
                         Task { await save() }
                     }
                     .fontWeight(.semibold)
-                    .disabled(saving)
+                    .disabled(saving || !loaded)
                 }
             }
-            .onAppear { identity.load(from: setup.status?.identity ?? [:]) }
+            // `fullPayload()` posts every field including the blanks, so clearing
+            // one really clears it. That means the editor must not be savable
+            // before it has loaded: opening on a nil status and hitting Save
+            // erased the whole saved identity and reset every Yes/No to default.
+            .task { await loadCurrent() }
             .tint(Theme.accent)
         }
     }
 
+    private func loadCurrent() async {
+        if setup.status == nil { await setup.refresh(config: config) }
+        guard let saved = setup.status?.identity else {
+            error = "Couldn't load what you have saved, so Save is off — "
+                  + "otherwise it would overwrite it with blanks. Pull to refresh You."
+            return
+        }
+        identity.load(from: saved)
+        loaded = true
+    }
+
     private func save() async {
         defer { saving = false }
+        guard loaded else { return }
         do {
             try await APIClient(config: config).saveIdentity(fields: identity.fullPayload())
             await setup.refresh(config: config)

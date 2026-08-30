@@ -30,8 +30,12 @@ TEXT_FIELDS = (
     "address", "city", "state", "zip", "country", "location",
     # links
     "linkedin", "github", "portfolio",
-    # education
-    "school", "degree", "discipline", "gpa", "grad_year", "intern_season",
+    # education. ``grad_month`` is asked for separately because Greenhouse and
+    # Workable split the education end date into a month select and a year
+    # select; deriving the month from a bare "2027" is impossible, so that half
+    # of every education block used to go unanswered.
+    "school", "degree", "discipline", "gpa", "grad_year", "grad_month",
+    "intern_season",
     # experience
     "current_company", "current_title", "years_experience",
     # logistics commonly asked on applications
@@ -98,8 +102,10 @@ def autofill_map(user_id: str) -> dict:
                 out[k] = digits or v
             else:
                 out[k] = v
+    # A month/year the person picked explicitly wins; otherwise split whatever
+    # they typed into grad_year ("December 2027" → December + 2027).
     month, year = _split_grad(str(out.get("grad_year") or ""))
-    if month:
+    if month and not out.get("grad_month"):
         out["grad_month"] = month
     if year:
         out["grad_year_num"] = year

@@ -17,6 +17,15 @@ _ONBOARDING = "onboarding"
 # Enough identity that autofill can fill a typical Greenhouse form.
 _IDENTITY_READY = 0.5
 
+# Fields Autofill genuinely cannot work without. The fraction alone isn't
+# enough: school, links and location add up to 50% while leaving no name and no
+# email, and every application form on earth opens with those three.
+_CORE_IDENTITY = (
+    ("first_name", "first name"),
+    ("last_name", "last name"),
+    ("email", "email"),
+)
+
 
 def status(user_id: str) -> dict:
     has = profile.has_profile(user_id)
@@ -24,7 +33,12 @@ def status(user_id: str) -> dict:
     audit = knowledge.audit(user_id)
     counts = audit["knowledge_counts"]
     identity_ok = float(audit["score"] or 0) >= _IDENTITY_READY
-    complete = bool(has and identity_ok)
+    identity = applicant.get_identity(user_id)
+    core_missing = [
+        human for key, human in _CORE_IDENTITY
+        if identity.get(key) in (None, "")
+    ]
+    complete = bool(has and identity_ok and not core_missing)
     return {
         "complete": complete,
         "needs_setup": _needs_setup(has, state),
@@ -32,6 +46,7 @@ def status(user_id: str) -> dict:
         "has_profile": has,
         "identity_score": audit["score"],
         "identity_missing": audit["identity_missing"],
+        "identity_core_missing": core_missing,
         "identity_have": audit["identity_have"],
         "knowledge_counts": counts,
         "profile": profile.public_fields(user_id),

@@ -1,6 +1,6 @@
 # JobPilot — Engineering Handoff
 
-> Pick-up doc for a fresh session. Last updated **2026-08-27**.
+> Pick-up doc for a fresh session. Last updated **2026-08-30**.
 > **Invite-only iOS beta:** Sign in with Apple, session-scoped data, first-run setup,
 > TestFlight. See [`deploy/BETA.md`](deploy/BETA.md).
 
@@ -63,7 +63,8 @@ Files: `discovery.py`, `wide_discovery.py`, `jobsources/`, `jobstore.py`, `profi
 ### C. Matching (heuristic / LLM / reranker / eligibility / ghost)
 - **Heuristic + LLM score:** keyword/location pre-filter, then Haiku batch score (or
   free heuristic without a key).
-- **Personalized re-ranker** (`reranker.py`, **off by default**): pure-Python L2
+- **Personalized re-ranker** (`reranker.py`, **on by default**, no-op until it has
+  labels; the test suite forces it off): pure-Python L2
   logistic regression on your apply/dismiss/swipe labels. Features: relevance,
   kw_overlap, title_hit, loc_match, is_remote, first_party.
   Hold-out promotion guard; outcome-graded labels.
@@ -81,18 +82,22 @@ Inspect: `what do you know about me` (+ identity-coverage audit).
   tailored answers + tailored resume + identity. **Never submits** — human submits
   on the ATS site.
 - **Applicant identity** (`applicant.py`): name/email/phone/links/location/work-auth/
-  education/etc. EEO/demographic fields excluded from autofill. Canonical
-  `referral_source` keys: `company career site` | `job board` | `linkedin` |
-  `referral` | `recruiter` | `event`.
+  education/etc. Hard-blocked EEO (orientation, religion, DOB) is never filled;
+  gender/race/veteran/disability fill only when the person saved a value.
+  "How did you hear about us" is the `how_heard` key (the quiz offers LinkedIn /
+  Company website / Job board / Referral / Recruiter / Event); the ATS's own
+  wording is reached through `select_value`, not a synonym table.
+  Education end dates are two keys — `grad_year` and `grad_month` — because
+  Greenhouse and Workable render them as separate selects.
 - **Resume tailoring** (`resume_tailor.py`): per-posting one-page PDF (SWE vs AI/ML),
   Tectonic-compiled, cached. Base `.tex` on volume (see §5).
 
 ### D2. iPhone app — `ios/` (SwiftUI + WKWebView)
-Tabs: **Apply** · **About** · **Chat** · **Settings**. Apply opens the real form;
+Tabs: **Apply** · **You** · **Ask** · **Settings**. Apply opens the real form;
 ⚡ Autofill fills identity + drafted answers (Greenhouse react-select, Ashby Yes/No
 buttons). Push (APNs) on new matches. See `ios/README.md`.
 
-#### D2a. The two rules the fill engine lives by
+#### D2a. The three rules the fill engine lives by
 `Autofill.swift`'s JS is injected into **every frame** (`forMainFrameOnly: false`),
 and every frame shares one native message handler. So:
 
@@ -106,7 +111,15 @@ and every frame shares one native message handler. So:
    autopilot step revisiting a mounted field must not undo an answer the person
    typed. A *declared* combobox (role/aria-autocomplete/aria-controls) that
    matches no option is cleared, not typed into: text in the box with nothing
-   committed is a form that looks complete and submits empty.
+   committed is a form that looks complete and submits empty. Radio groups are
+   checked group-wide (`radios.some(r => r.checked)`), not per-target — testing
+   only the target let a second pass move the person's answer.
+3. **Never put an answer where it doesn't answer the question.** A blank the
+   person fills beats a paragraph they have to notice and delete, because a
+   filled box reads as finished. `bestAnswer` needs two meaningful words in
+   common and a Dice score ≥ 0.5; scoring on one shared word put the why-us
+   paragraph into "If you could have dinner with anyone…". Same rule for choice
+   fields: no matching option means leave it blank and log the skip.
 
 Blockers are judged by what a person can actually see. An invisible, score-based
 reCAPTCHA (Greenhouse) or a zero-height rendered hCaptcha (Lever) is not a wall;
@@ -118,8 +131,23 @@ Single source of truth for label→identity matching, select/Yes-No matching, EE
 never-fill. Served to iOS via `GET /apply/rules`; bundled fallback in
 `Autofill.swift` for offline. `tests/test_ios_autofill.py` + `tests/test_rules_parity.py`.
 
-Notable identity keys: `referral_source` (synonym table → company wording),
-`previously_employed` (bool → Yes/No via `_yes_no_option`, refuses ambiguous pairs).
+`select_value(options, value)` is the one option picker. **Every** choice control
+goes through it — native `<select>`, ARIA combobox, and radio groups — and the JS
+copy in `Autofill.swift` (`pickBest`) must agree with it option-for-option;
+`test_radio_option_pick_matches_python_select_value` and
+`test_pick_best_matches_python_select_value` pin that. Order inside it:
+exact option → education level → GPA band → date bucket → year → Yes/No →
+numeric band → token overlap.
+
+Three rules in there that were each a real wrong-answer bug:
+
+- **An option's lead wins** (`_LEAD_YES` / `_LEAD_NO`). "Yes, I do not require
+  sponsorship" hits `\bnot\b`, so shape-first classified it No — both options on
+  the commonest work-auth question came back "no" and the field was left blank.
+- **Radio groups don't substring-match.** `"yes, i know someone who works
+  here".includes("no")` is true, so a No answer used to check Yes.
+- **A bare two-letter state code is expanded** against a list of state names.
+  Without it `IN` scored highest against *Maine* and `LA` against *Alabama*.
 
 ---
 
@@ -152,9 +180,10 @@ Notable identity keys: `referral_source` (synonym table → company wording),
 
 1. **Fly secrets** (see `deploy/BETA.md`): `APPLY_API_TOKEN`, `AUTH_ALLOWED_EMAILS`,
    `APPLE_CLIENT_IDS`, `SENTRY_DSN`, valid `ANTHROPIC_API_KEY`.
-2. **Optional brain:** `RERANKER_ENABLED=true` (personalized
-   features for reranker + per-question answers). Import trained labels via
-   `scripts.import_user` if migrating from local dev.
+2. **Personalized re-ranker** is already on (`reranker_enabled` defaults to
+   **true** in `app/config.py`; the test suite forces it off). It cold-starts as
+   a no-op until the per-class label minimums are met, so nothing to do unless
+   you're importing trained labels via `scripts.import_user` from local dev.
 3. **Base resumes** on volume: `swe.tex` + `aiml.tex` → `/data/resumes/`.
 4. **Push:** `PUSH_ENABLED` + all `APNS_*`; `APNS_USE_SANDBOX=false` for TestFlight.
 5. **Dogfood:** one real Greenhouse/Lever/Ashby apply via Autofill; résumé manual attach.
@@ -163,8 +192,8 @@ Notable identity keys: `referral_source` (synonym table → company wording),
 
 ## 6. Config flags (defaults in `app/config.py`)
 
-`RERANKER_ENABLED` (false) · `RERANKER_OUTCOME_WEIGHTING` (true) ·
-(false) · `GHOST_FILTER_ENABLED` (true) · `ELIGIBILITY_FILTER_ENABLED` (true) ·
+`RERANKER_ENABLED` (**true**) · `RERANKER_OUTCOME_WEIGHTING` (true) ·
+`GHOST_FILTER_ENABLED` (true) · `ELIGIBILITY_FILTER_ENABLED` (true) ·
 `JOB_RELEVANCE_THRESHOLD` (0.6) ·
 `JOB_AUTO_QUEUE_THRESHOLD` (0.0 = off) · `JOB_ALERT_MODE` (digest) ·
 `JOB_ALERT_USER` ("") · `RESUME_TAILOR_ENABLED` (true) · `APPLY_API_TOKEN` ("") ·
@@ -175,7 +204,7 @@ Notable identity keys: `referral_source` (synonym table → company wording),
 ## 7. Run / test locally
 
 ```bash
-.venv/bin/python -m pytest -q          # full suite (~700 tests)
+.venv/bin/python -m pytest -q          # full suite (~750 tests)
 .venv/bin/uvicorn app.main:app --reload
 ```
 
@@ -191,13 +220,42 @@ Notable identity keys: `referral_source` (synonym table → company wording),
 - **Login-gated sites** (Workday, LinkedIn Easy Apply) are out of scope for public-form
   autofill.
 - **Exotic custom dropdowns** may still need a manual tap; ARIA comboboxes generally work.
-- **Reranker** needs enough swipe labels before enabling; LLM fit features need
+- **Reranker** is a no-op until `reranker_min_positive` / `reranker_min_negative`
+  swipe labels exist per class, so a new account ranks on relevance alone.
 - **In-app browser holds one form at a time** — popping back destroys the WebView state.
+- **`<input type="date">` is skipped.** `start_date` is free text ("After
+  graduation", "June 2026") and can't be coerced to `yyyy-mm-dd` safely, so a
+  native date picker is left to the person.
+- **`grad_month` and `intern_season`** only fill once the person answers those
+  quiz steps; both are skippable.
 
 ---
 
 ## 9. Gotchas
 
+- **`complete` needs a core, not just a fraction.** `onboarding.status()` reports
+  `complete` only when the search profile exists, coverage clears
+  `_IDENTITY_READY` (0.5 of `knowledge._IMPORTANT_IDENTITY`) *and*
+  `_CORE_IDENTITY` (first name, last name, email) is present. School + links +
+  location alone reach 50% with no name and no email, which is the app claiming
+  Autofill works when it can't fill the first three boxes on the page. The quiz's
+  Done step reads `complete` and `identity_core_missing` to say so out loud.
+- **`POST /apply/profile` is a partial update.** A key you omit is left alone; an
+  explicit `""` clears it. So `APIClient.saveProfile` takes optionals and sends
+  only what it was given — the quiz's last step saves a résumé summary *and
+  nothing else*. Re-posting the whole search profile from local state there
+  blanked the locations and seniority of anyone who reached it without them
+  loaded (a retake, or a `GET /apply/setup` that failed).
+- **An editor that posts every field must load before it can save.**
+  `IdentityDraft.fullPayload()` includes blanks on purpose so clearing a field
+  clears it — which means `IdentityEditorView` / `SearchEditorView` gate Save on
+  a `loaded` flag. Opening one on a nil `SetupGate.status` and hitting Save used
+  to erase the whole saved identity and reset every Yes/No to its default.
+- **Every new identity key needs four edits**, or it silently never fills:
+  `applicant.TEXT_FIELDS`/`BOOL_FIELDS`, a `fieldmatch.FIELD_RULES` label
+  pattern, `IdentityDraft` (property + `load` + `payload` + `fullPayload`), and
+  a quiz step that actually asks. `grad_month` and `intern_season` each had the
+  rules and the picker but no question, so they were dead keys.
 - **`.env.example` is tracked** — never put live secrets there.
 - **`scripts/` must stay OUT of `.dockerignore`** (operational scripts on Fly).
 - **Use `.venv/bin/python`**, not bare `python`.

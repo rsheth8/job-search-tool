@@ -140,3 +140,28 @@ def test_apply_token_gate(monkeypatch):
     assert c.get("/apply/identity?user=u1",
                  headers={"X-Apply-Token": "secret"}).status_code == 200
     get_settings.cache_clear()
+
+
+# --- education end dates ----------------------------------------------------
+
+def test_graduation_month_is_saved_not_only_derived():
+    """Greenhouse and Workable split the education end date into a month select
+    and a year select. A bare "2027" can't produce a month, so that half of
+    every education block used to go unanswered."""
+    applicant.set_identity("u1", {"grad_year": "2027", "grad_month": "May"})
+    fields = applicant.autofill_map("u1")
+    assert fields["grad_month"] == "May"
+    assert fields["grad_year_num"] == "2027"
+    assert fields["grad_year"] == "2027"
+
+
+def test_graduation_month_still_derived_from_a_typed_date():
+    applicant.set_identity("u2", {"grad_year": "December 2027"})
+    assert applicant.autofill_map("u2")["grad_month"] == "December"
+
+
+def test_an_explicit_graduation_month_wins_over_the_derived_one():
+    applicant.set_identity("u3", {"grad_year": "December 2027", "grad_month": "June"})
+    fields = applicant.autofill_map("u3")
+    assert fields["grad_month"] == "June"
+    assert fields["grad_year_num"] == "2027"

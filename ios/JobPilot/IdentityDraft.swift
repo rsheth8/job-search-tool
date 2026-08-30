@@ -22,11 +22,13 @@ struct IdentityDraft {
     var discipline = ""
     var gpa = ""
     var gradYear = ""
+    var gradMonth = ""
     var currentCompany = ""
     var currentTitle = ""
     var years = ""
     var salary = ""
     var startDate = ""
+    var internSeason = ""
     var workArrangement = ""
     var howHeard = ""
     var gender = ""
@@ -64,11 +66,13 @@ struct IdentityDraft {
         if discipline.isEmpty { discipline = id["discipline"] ?? "" }
         if gpa.isEmpty { gpa = id["gpa"] ?? "" }
         if gradYear.isEmpty { gradYear = id["grad_year"] ?? "" }
+        if gradMonth.isEmpty { gradMonth = id["grad_month"] ?? "" }
         if currentCompany.isEmpty { currentCompany = id["current_company"] ?? "" }
         if currentTitle.isEmpty { currentTitle = id["current_title"] ?? "" }
         if years.isEmpty { years = id["years_experience"] ?? "" }
         if salary.isEmpty { salary = id["salary_expectation"] ?? "" }
         if startDate.isEmpty { startDate = id["start_date"] ?? "" }
+        if internSeason.isEmpty { internSeason = id["intern_season"] ?? "" }
         if workArrangement.isEmpty { workArrangement = id["work_arrangement"] ?? "" }
         if howHeard.isEmpty { howHeard = id["how_heard"] ?? "" }
         if gender.isEmpty { gender = id["gender"] ?? "" }
@@ -99,10 +103,11 @@ struct IdentityDraft {
             "country": country,
             "linkedin": linkedin, "github": github, "portfolio": portfolio,
             "school": school, "degree": degree, "discipline": discipline,
-            "gpa": gpa, "grad_year": gradYear,
+            "gpa": gpa, "grad_year": gradYear, "grad_month": gradMonth,
             "current_company": currentCompany, "current_title": currentTitle,
             "years_experience": years,
             "salary_expectation": salary, "start_date": startDate,
+            "intern_season": internSeason,
             "work_arrangement": workArrangement, "how_heard": howHeard,
             "gender": gender, "race": race, "ethnicity": ethnicity,
             "veteran_status": veteranStatus, "disability_status": disabilityStatus,
@@ -138,9 +143,10 @@ struct IdentityDraft {
             "first_name", "last_name", "preferred_name", "pronouns",
             "email", "phone", "address", "city", "state", "zip", "country",
             "linkedin", "github", "portfolio",
-            "school", "degree", "discipline", "gpa", "grad_year",
+            "school", "degree", "discipline", "gpa", "grad_year", "grad_month",
             "current_company", "current_title", "years_experience",
-            "salary_expectation", "start_date", "work_arrangement", "how_heard",
+            "salary_expectation", "start_date", "intern_season",
+            "work_arrangement", "how_heard",
             "gender", "race", "ethnicity", "veteran_status", "disability_status",
             "work_authorized", "needs_sponsorship", "willing_to_relocate",
             "background_check", "drug_test", "over_18", "can_travel",
