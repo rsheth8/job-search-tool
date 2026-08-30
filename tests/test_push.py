@@ -28,7 +28,7 @@ def _configure(monkeypatch, tmp_path, **overrides):
     key = tmp_path / "apns.p8"
     key.write_text("-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n-----END PRIVATE KEY-----\n")
     env = {"PUSH_ENABLED": "true", "APNS_KEY_ID": "ABC123",
-           "APNS_TEAM_ID": "TEAM456", "APNS_BUNDLE_ID": "com.rahil.apply",
+           "APNS_TEAM_ID": "TEAM456", "APNS_BUNDLE_ID": "com.rahil.jobpilot",
            "APNS_KEY_PATH": str(key)}
     env.update(overrides)
     for k, v in env.items():

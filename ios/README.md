@@ -1,4 +1,4 @@
-# Apply — the iPhone job-application browser
+# JobPilot — the iPhone job-application browser
 
 A small native iOS app (SwiftUI + WKWebView). It's a **browser in your hand** that
 knows your job profile: tap a match → it opens the real application form in-app →
@@ -19,8 +19,8 @@ face over those endpoints (`/apply/data`, `/apply/package`, `/apply/applied`).
 ```
 ios/
   project.yml        XcodeGen — the whole Xcode project, defined in text
-  Apply/
-    ApplyApp.swift     @main + tab shell
+  JobPilot/
+    JobPilotApp.swift  @main + tab shell
     Config.swift       backend URL / token (UserDefaults; sane defaults)
     Models.swift       Codable models for the API
     APIClient.swift    async networking to the backend
@@ -40,19 +40,19 @@ You need a Mac with **Xcode** and an **Apple ID** (free works for dev).
 ```bash
 brew install xcodegen
 cd ios
-xcodegen generate        # writes Apply.xcodeproj from project.yml
-open Apply.xcodeproj
+xcodegen generate        # writes JobPilot.xcodeproj from project.yml
+open JobPilot.xcodeproj
 ```
 
 In Xcode:
-1. Select the **Apply** target → **Signing & Capabilities** → set your **Team**
-   (your Apple ID; Xcode auto-manages the cert). Change the bundle id if it clashes.
+1. Select the **JobPilot** target → **Signing & Capabilities** → set your **Team**
+   (your Apple ID; Xcode auto-manages the cert). Bundle id is `com.rahil.jobpilot`.
 2. Plug in your iPhone, select it as the run destination, press **⌘R**.
 3. First run: on the phone, **Settings → General → VPN & Device Management** → trust
    your developer cert.
 
-> No XcodeGen? Create a new **iOS App (SwiftUI)** in Xcode named `Apply`, delete its
-> stub `ContentView`/`App`, drag the files in `Apply/` into the project, and in the
+> No XcodeGen? Create a new **iOS App (SwiftUI)** in Xcode named `JobPilot`, delete its
+> stub `ContentView`/`App`, drag the files in `JobPilot/` into the project, and in the
 > target's Info add `NSAppTransportSecurity → NSAllowsArbitraryLoadsInWebContent =
 > YES` (so the browser can load any job site).
 
@@ -72,7 +72,7 @@ Open **Settings** in the app after Sign in with Apple. Defaults point at the liv
 deploy (`https://job-search-tool.fly.dev`). Base URL / API token are under
 **Advanced** — testers should not re-point the backend.
 
-TestFlight **Release** archives use `ApplyRelease.entitlements`
+TestFlight **Release** archives use `JobPilotRelease.entitlements`
 (`aps-environment: production`). Set `APNS_USE_SANDBOX=false` on Fly to match.
 Debug builds keep the sandbox entitlement.
 
@@ -108,8 +108,8 @@ and CAPTCHAs pause instead of filling. Rules match `app/fieldmatch.py` (served f
 The app gates on an account. In Xcode:
 
 1. Signing & Capabilities → **+ Capability → Sign in with Apple**
-   (also declared in `project.yml` / `Apply.entitlements`).
-2. Backend needs `APPLE_CLIENT_IDS=com.rahil.apply` (and your Team set in Xcode).
+   (also declared in `project.yml` / `JobPilot.entitlements`).
+2. Backend needs `APPLE_CLIENT_IDS=com.rahil.jobpilot` (and your Team set in Xcode).
 3. To fold old dev-keyed data into the new account on first login, set
    `AUTH_LEGACY_USER_ID=local` (or your old id) on the server once, then clear it.
 

@@ -178,7 +178,7 @@ def test_payload_is_json_serializable():
 # --- the clients' bundled fallbacks must not drift ---------------------------
 
 CLIENTS = [
-    ("ios/Apply/Autofill.swift", "FALLBACK_EEO"),
+    ("ios/JobPilot/Autofill.swift", "FALLBACK_EEO"),
 ]
 
 

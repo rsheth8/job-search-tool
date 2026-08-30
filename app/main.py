@@ -44,7 +44,7 @@ def _init_sentry() -> None:
 
 
 app = FastAPI(
-    title="Job Search Apply", version="0.1.0", lifespan=lifespan
+    title="JobPilot", version="0.1.0", lifespan=lifespan
 )
 install_error_handlers(app)
 
@@ -514,6 +514,32 @@ async def apply_setup_set(request: Request) -> dict:
         out["discovery"] = discovery.search_status(uid)
         return out
     raise HTTPException(status_code=400, detail="action must be start or complete")
+
+
+@app.get("/apply/quiz/draft")
+def apply_quiz_draft_get(request: Request, user: str | None = None) -> dict:
+    """Prefill long quiz answers from stored knowledge (no model call)."""
+    from . import onboarding
+
+    _require_apply_token(request)
+    uid = _resolve_user(request, user)
+    return {"user": uid, "draft": onboarding.quiz_draft(uid)}
+
+
+@app.post("/apply/quiz/draft")
+async def apply_quiz_draft_set(request: Request) -> dict:
+    """Same as GET, optionally polished by Claude into first-person answers."""
+    from . import onboarding
+
+    _require_apply_token(request)
+
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    uid = _resolve_user(request, body.get("user"))
+    polish = bool(body.get("polish"))
+    return {"user": uid, "draft": onboarding.quiz_draft(uid, polish=polish)}
 
 
 @app.get("/apply/profile")

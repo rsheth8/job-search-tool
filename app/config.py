@@ -138,7 +138,7 @@ class Settings(BaseSettings):
 
     # --- Sign in with Apple + in-app chat ---------------------------------
     # Comma-separated audiences accepted on Apple identity tokens (iOS bundle id).
-    apple_client_ids: str = "com.rahil.apply"
+    apple_client_ids: str = "com.rahil.jobpilot"
     # Session lifetime for Bearer tokens minted at login.
     auth_session_days: int = 90
     # When true, POST /auth/dev mints a session without Apple (tests + local).

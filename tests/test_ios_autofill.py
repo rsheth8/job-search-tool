@@ -1,6 +1,6 @@
 """The iOS app's autofill engine, run against real forms in a real browser.
 
-`ios/Apply/Autofill.swift` carries its filler as a JavaScript string injected into
+`ios/JobPilot/Autofill.swift` carries its filler as a JavaScript string injected into
 WKWebView. That's ordinary JavaScript, so we can extract it and run it against the
 same fixtures the submit worker uses — which means the iPhone's autofill gets real
 browser coverage without Xcode, a simulator, or a device in the loop.
@@ -34,7 +34,7 @@ from tests.browserutil import skip_unless_ci_chromium  # noqa: E402
 from app import fieldmatch  # noqa: E402
 
 FORMS_DIR = Path(__file__).parent / "fixtures" / "forms"
-AUTOFILL_SWIFT = Path(__file__).resolve().parents[1] / "ios" / "Apply" / "Autofill.swift"
+AUTOFILL_SWIFT = Path(__file__).resolve().parents[1] / "ios" / "JobPilot" / "Autofill.swift"
 
 IDENTITY = {
     "first_name": "Rahil", "last_name": "Sheth", "full_name": "Rahil Sheth",

@@ -1,4 +1,4 @@
-# Job Search Intelligence — Engineering Handoff
+# JobPilot — Engineering Handoff
 
 > Pick-up doc for a fresh session. Last updated **2026-08-27**.
 > **Invite-only iOS beta:** Sign in with Apple, session-scoped data, first-run setup,

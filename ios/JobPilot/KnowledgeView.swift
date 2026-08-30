@@ -432,6 +432,8 @@ private struct SearchEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var roles = ""
     @State private var locations = ""
+    @State private var keywords = ""
+    @State private var seniority = ""
     @State private var saving = false
     @State private var error: String?
 
@@ -439,13 +441,41 @@ private struct SearchEditorView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("New grad SWE, backend intern", text: $roles, axis: .vertical)
-                        .lineLimit(2...4)
+                    TagEditor(
+                        text: $roles,
+                        suggestions: [
+                            "Software engineer", "Software intern", "Backend",
+                            "Full-stack", "ML engineer", "Data scientist",
+                        ],
+                        placeholder: "Add a role",
+                        caption: "Tap every role you want matches for."
+                    )
                 } header: { Text("Roles") }
                 Section {
-                    TextField("NYC, remote, Chicago", text: $locations, axis: .vertical)
-                        .lineLimit(2...4)
+                    TagEditor(
+                        text: $locations,
+                        suggestions: ["Remote", "Chicago", "Minneapolis", "San Francisco", "NYC"],
+                        placeholder: "Add a city or Remote"
+                    )
                 } header: { Text("Locations") }
+                Section {
+                    TagEditor(
+                        text: $keywords,
+                        suggestions: ["Python", "JavaScript", "TypeScript", "React", "Java", "SQL"],
+                        placeholder: "Add a skill"
+                    )
+                } header: { Text("Skills") }
+                Section {
+                    TagEditor(
+                        text: $seniority,
+                        suggestions: [
+                            "Internship", "New grad", "Entry-level",
+                            "Junior", "Mid-level", "Senior",
+                        ],
+                        placeholder: "Add a level",
+                        caption: "You can pick more than one."
+                    )
+                } header: { Text("Seniority") }
                 if let error {
                     Text(error).font(.caption).foregroundStyle(Theme.note)
                 }
@@ -470,6 +500,8 @@ private struct SearchEditorView: View {
                 let p = setup.status?.profile ?? [:]
                 if roles.isEmpty { roles = p["roles"] ?? "" }
                 if locations.isEmpty { locations = p["locations"] ?? "" }
+                if keywords.isEmpty { keywords = p["keywords"] ?? "" }
+                if seniority.isEmpty { seniority = p["seniority"] ?? "" }
             }
             .tint(Theme.accent)
         }
@@ -481,8 +513,8 @@ private struct SearchEditorView: View {
             try await APIClient(config: config).saveProfile(
                 roles: roles,
                 locations: locations,
-                seniority: setup.status?.profile["seniority"] ?? "",
-                keywords: setup.status?.profile["keywords"] ?? ""
+                seniority: seniority,
+                keywords: keywords
             )
             await setup.refresh(config: config)
             Theme.impact(.soft)

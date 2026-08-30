@@ -1,6 +1,7 @@
 # XcodeGen generates these from project.yml — don't commit them.
+JobPilot.xcodeproj/
 Apply.xcodeproj/
-Apply/Info.plist
+JobPilot/Info.plist
 
 # Xcode user state / build output
 xcuserdata/

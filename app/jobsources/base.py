@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 logger = logging.getLogger("jobsources")
 
 HTTP_TIMEOUT_SECONDS = 12.0
+USER_AGENT = "JobPilot/1.0"
 # Cap stored description length. Generous so matchers get the real
 # responsibilities/requirements (JDs front-load boilerplate); still bounded to
 # keep SQLite small. LLM callers slice this further for token cost.
@@ -52,7 +53,7 @@ def get_json(url: str, *, timeout: float | None = None):
             url,
             timeout=timeout or HTTP_TIMEOUT_SECONDS,
             follow_redirects=True,
-            headers={"Accept": "application/json", "User-Agent": "job-search-tool/1.0"},
+            headers={"Accept": "application/json", "User-Agent": USER_AGENT},
         )
         resp.raise_for_status()
         return resp.json()
@@ -70,7 +71,7 @@ def get_text(url: str, *, timeout: float | None = None, accept: str = "*/*") -> 
             url,
             timeout=timeout or HTTP_TIMEOUT_SECONDS,
             follow_redirects=True,
-            headers={"Accept": accept, "User-Agent": "job-search-tool/1.0"},
+            headers={"Accept": accept, "User-Agent": USER_AGENT},
         )
         resp.raise_for_status()
         return resp.text

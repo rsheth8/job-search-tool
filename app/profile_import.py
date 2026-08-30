@@ -18,7 +18,7 @@ logger = logging.getLogger("profile_import")
 
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 MAX_PARSE_CHARS = 24_000
-MAX_KNOWLEDGE = 6
+MAX_KNOWLEDGE = 12
 
 _EEO_KEYS = frozenset({
     "gender", "race", "ethnicity", "veteran_status", "disability_status",
@@ -31,11 +31,16 @@ _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b", re.I)
 _PHONE_RE = re.compile(
     r"(?:\+?1[\s.\-]?)?(?:\(?\d{3}\)?[\s.\-]?)\d{3}[\s.\-]?\d{4}\b"
 )
+# Country subdomains (uk.linkedin.com) and m/mwlite paths show up when people
+# paste a profile from the mobile app. Query strings are ignored.
 _LINKEDIN_RE = re.compile(
-    r"(?:https?://)?(?:www\.)?linkedin\.com/in/([A-Za-z0-9\-_%]+)/?", re.I
+    r"(?:https?://)?(?:(?:www|m|[\w-]+)\.)?linkedin\.com/"
+    r"(?:in|pub|mwlite/in)/([A-Za-z0-9\-_%]+)",
+    re.I,
 )
 _GITHUB_RE = re.compile(
-    r"(?:https?://)?(?:www\.)?github\.com/([A-Za-z0-9](?:[A-Za-z0-9\-]{0,37}[A-Za-z0-9])?)/?",
+    r"(?:https?://)?(?:www\.)?github\.com/"
+    r"([A-Za-z0-9](?:[A-Za-z0-9\-]{0,37}[A-Za-z0-9])?)\b",
     re.I,
 )
 _CITY_STATE_RE = re.compile(
@@ -49,10 +54,34 @@ _DEGREE_RE = re.compile(
     re.I,
 )
 _SCHOOL_RE = re.compile(
-    r"\b((?:[A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){0,5}\s+)?"
+    r"\b("
+    r"University of [A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){0,4}"
+    r"|[A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){0,4}\s+"
     r"(?:University|College|Institute|Polytechnic)"
-    r"(?:\s+of\s+[A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){0,4})?)\b"
+    r")\b"
 )
+_GPA_RE = re.compile(
+    r"\b(?:GPA|G\.P\.A\.?)\s*[:\-]?\s*([0-4](?:\.\d{1,2})?)\b", re.I
+)
+# Resume section headings that PDF extract often glues onto the next line.
+_SECTION_NOISE = frozenset({
+    "leadership", "experience", "education", "skills", "projects", "awards",
+    "activities", "coursework", "summary", "objective", "profile", "work",
+    "professional", "relevant", "selected", "technical", "certifications",
+    "involvement", "honors", "volunteer", "publications", "research",
+    "employment", "campus", "organizations", "affiliations",
+})
+_GEO_WORDS = frozenset({
+    "remote", "hybrid", "onsite", "on-site", "nationwide", "relocate",
+    "nyc", "sf", "la", "chicago", "boston", "seattle", "austin", "denver",
+    "minneapolis", "atlanta", "dallas", "miami", "portland", "bay", "area",
+})
+_SKILLISH = frozenset({
+    "react", "ai", "ml", "node", "python", "java", "javascript", "typescript",
+    "sql", "aws", "docker", "swift", "kotlin", "rust", "go", "golang", "c++",
+    "pytorch", "tensorflow", "flask", "django", "fastapi", "mongodb", "redis",
+    "graphql", "html", "css", "next.js", "nextjs", "vue", "angular",
+})
 _YOE_RE = re.compile(
     r"\b(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?)\s+(?:of\s+)?(?:experience|exp)\b",
     re.I,
@@ -62,7 +91,7 @@ _SKILL_WORDS = (
     "python", "javascript", "typescript", "react", "node", "go", "golang",
     "rust", "java", "kotlin", "swift", "c++", "sql", "aws", "gcp", "azure",
     "docker", "kubernetes", "pytorch", "tensorflow", "pandas", "django",
-    "flask", "fastapi", "next.js", "graphql", "postgres", "mongodb",
+    "flask", "fastapi", "next.js", "graphql", "postgres", "mongodb", "ai",
 )
 
 
@@ -106,6 +135,7 @@ def import_linkedin(user_id: str, *, url: str = "", text: str = "",
         extracted = _merge_extracted(extracted, parsed)
         if slug_url:
             extracted["identity"]["linkedin"] = slug_url
+    extracted = _sanitize_extracted(extracted)
     if not extracted["identity"] and not extracted["knowledge"] and not extracted["profile"]:
         raise ProfileImportError(
             "Paste a LinkedIn profile URL, or upload a LinkedIn PDF "
@@ -120,6 +150,7 @@ def apply_extracted(user_id: str, extracted: dict, *, source: str) -> dict:
     profile_in = extracted.get("profile") or {}
     knowledge_in = extracted.get("knowledge") or []
 
+    warning = _clean_text(extracted.get("warning"))
     filled: list[str] = []
     current = applicant.get_identity(user_id)
     to_set: dict = {}
@@ -183,6 +214,9 @@ def apply_extracted(user_id: str, extracted: dict, *, source: str) -> dict:
     from . import onboarding
 
     status = onboarding.status(user_id)
+    note = _note(source, filled)
+    if warning:
+        note = f"{note} {warning}".strip() if filled else warning
     return {
         "ok": True,
         "source": source,
@@ -191,9 +225,10 @@ def apply_extracted(user_id: str, extracted: dict, *, source: str) -> dict:
         "identity_score": status["identity_score"],
         "identity_missing": status["identity_missing"],
         "has_profile": status["has_profile"],
-        "note": _note(source, filled),
+        "note": note,
         "identity": status["identity"],
         "profile": status["profile"],
+        "draft": onboarding.quiz_draft(user_id),
     }
 
 
@@ -201,9 +236,8 @@ def parse_document(text: str) -> dict:
     """Heuristic extract, then Claude overlay when a key is available."""
     heur = _heuristic_parse(text)
     llm = _llm_parse(text)
-    if llm:
-        return _merge_extracted(heur, llm)
-    return heur
+    merged = _merge_extracted(heur, llm) if llm else heur
+    return _sanitize_extracted(merged)
 
 
 def github_username(raw: str) -> str:
@@ -213,7 +247,11 @@ def github_username(raw: str) -> str:
     m = _GITHUB_RE.search(raw)
     if m:
         login = m.group(1)
-        if login.lower() in ("orgs", "settings", "explore", "topics", "features"):
+        if login.lower() in (
+            "orgs", "settings", "explore", "topics", "features", "pulls",
+            "issues", "notifications", "new", "login", "signup", "marketplace",
+            "sponsors", "about", "pricing", "enterprise", "customer-stories",
+        ):
             return ""
         return login
     if _GITHUB_USER_RE.match(raw):
@@ -229,12 +267,21 @@ def linkedin_url(raw: str) -> str:
 
 
 def fetch_github(username: str) -> dict:
+    identity: dict = {"github": f"https://github.com/{username}"}
     user = _github_get(f"/users/{username}")
     if user is None:
-        raise ProfileImportError("Couldn't reach GitHub. Try again in a moment.", 502)
+        # Rate limit / outage: still save the URL so Autofill has the link.
+        return {
+            "identity": identity,
+            "profile": {},
+            "knowledge": [],
+            "warning": (
+                "Saved your GitHub URL. Couldn't load the public profile "
+                "right now — Autofill still has the link."
+            ),
+        }
     if user.get("_status") == 404:
         raise ProfileImportError(f"No GitHub user named {username}.")
-    identity: dict = {"github": f"https://github.com/{username}"}
     name = _clean_text(user.get("name"))
     first, last = _split_name(name)
     if first:
@@ -259,8 +306,11 @@ def fetch_github(username: str) -> dict:
     bio = _clean_text(user.get("bio"))
     if bio:
         profile_fields["resume_summary"] = bio
+    if identity.get("city") and identity.get("state"):
+        profile_fields["locations"] = f"{identity['city']}, {identity['state']}"
 
     knowledge_items = []
+    langs: list[str] = []
     repos = _github_get(f"/users/{username}/repos?per_page=30&sort=updated")
     if isinstance(repos, list):
         picked = _pick_repos(repos)
@@ -268,6 +318,11 @@ def fetch_github(username: str) -> dict:
             blurb = _repo_blurb(repo)
             if blurb:
                 knowledge_items.append({"category": "project", "text": blurb})
+            lang = _clean_text(repo.get("language"))
+            if lang:
+                langs.append(lang.lower())
+    if langs:
+        profile_fields["keywords"] = ", ".join(dict.fromkeys(langs))
 
     return {"identity": identity, "profile": profile_fields, "knowledge": knowledge_items}
 
@@ -301,6 +356,250 @@ def _pdf_text(data: bytes) -> str:
         return ""
 
 
+def _education_block(blob: str) -> str:
+    return _section_after(
+        blob,
+        r"(?:^|\n)\s*(?:education|academic background|academics)\s*\n",
+        r"\n\s*(?:experience|projects?|skills|leadership|work history|"
+        r"professional experience|employment)\s*\n",
+    )
+
+
+def _school_from_text(blob: str) -> str:
+    if not blob:
+        return ""
+    found = []
+    for match in _SCHOOL_RE.finditer(blob):
+        cleaned = _clean_school(match.group(1))
+        if cleaned and cleaned not in found:
+            found.append(cleaned)
+    found.sort(key=lambda s: (s.lower().startswith("university of"), len(s)), reverse=True)
+    return found[0] if found else ""
+
+
+_DEGREE_TOKEN = re.compile(
+    r"^(?:B\.?S\.?|B\.?A\.?|M\.?S\.?|M\.?A\.?|M\.?Eng\.?|Ph\.?D\.?|MBA|GPA)$",
+    re.I,
+)
+
+
+def _clean_school(name: str) -> str:
+    name = _clean_text(name)
+    if not name:
+        return ""
+    uni = re.search(
+        r"(University of [A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){0,4})",
+        name,
+    )
+    if uni:
+        name = uni.group(1)
+    words = name.split()
+    noise = _SECTION_NOISE | {
+        "event", "director", "intern", "software", "engineer", "teaching",
+        "assistant", "ambassador", "volunteer", "member", "president",
+        "chair", "officer", "lead", "head",
+    }
+    while words and words[0].strip(".,").lower() in noise:
+        words.pop(0)
+    cut = next(
+        (i for i, word in enumerate(words)
+         if _DEGREE_TOKEN.match(word.strip(".,"))),
+        None,
+    )
+    if cut is not None:
+        words = words[:cut]
+    name = " ".join(words)
+    if re.fullmatch(r"(University|College|Institute|Polytechnic|School)", name, re.I):
+        return ""
+    if not re.search(r"University|College|Institute|Polytechnic|School", name, re.I):
+        return ""
+    return name
+
+
+_DEGREE_CANON = (
+    ("doctorofphilosophy", "Ph.D."),
+    ("bachelorofscience", "B.S."),
+    ("bachelorofarts", "B.A."),
+    ("masterofengineering", "M.Eng."),
+    ("masterofscience", "M.S."),
+    ("meng", "M.Eng."),
+    ("bsc", "B.S."),
+    ("msc", "M.S."),
+    ("mba", "MBA"),
+    ("phd", "Ph.D."),
+    ("bs", "B.S."),
+    ("ba", "B.A."),
+    ("ms", "M.S."),
+)
+
+
+def _normalize_degree(raw: str) -> str:
+    t = _clean_text(raw)
+    compact = re.sub(r"[.\s]+", "", t.lower())
+    for key, label in _DEGREE_CANON:
+        if compact == key or compact.startswith(key):
+            return label
+    return t
+
+
+def _degrees_from_text(blob: str) -> list[str]:
+    out: list[str] = []
+    for match in _DEGREE_RE.finditer(blob or ""):
+        deg = _normalize_degree(match.group(1))
+        if deg and deg not in out:
+            out.append(deg)
+        if len(out) >= 3:
+            break
+    return out
+
+
+def _discipline_from_text(blob: str) -> str:
+    if re.search(r"data science", blob, re.I):
+        return "Data Science"
+    if re.search(r"computer science|\bCS\b", blob, re.I):
+        return "Computer Science"
+    if re.search(r"software engineering", blob, re.I):
+        return "Software Engineering"
+    if re.search(r"electrical engineering|\bEE\b", blob, re.I):
+        return "Electrical Engineering"
+    return ""
+
+
+def _grad_year_from_text(edu: str, blob: str) -> str:
+    search = edu or blob
+    expected = re.search(
+        r"expected\s+(?:[A-Za-z]+\s+)?(20[1-3]\d)", search, re.I
+    )
+    if expected:
+        return expected.group(1)
+    labeled = re.search(
+        r"(?:expected|graduat(?:ing|ion)|class of|"
+        r"(?:jan(?:uary)?|may|june|july|aug(?:ust)?|dec(?:ember)?))\s+"
+        r"(20[1-3]\d)",
+        search,
+        re.I,
+    )
+    if labeled:
+        return labeled.group(1)
+    years = _GRAD_YEAR_RE.findall(search)
+    if years:
+        return max(years)
+    years = _GRAD_YEAR_RE.findall(blob)
+    return max(years) if years else ""
+
+
+def _roles_and_seniority(blob: str, grad_year: str) -> dict:
+    head = blob[:3000]
+    has_intern = bool(re.search(r"\bintern(?:ship)?\b", head, re.I))
+    has_newgrad = bool(re.search(
+        r"new\s+grad|recent\s+grad|class of 202[5-9]|"
+        r"expected\s+20(?:2[6-9]|3\d)",
+        blob,
+        re.I,
+    ))
+    if grad_year and grad_year >= "2025":
+        has_newgrad = True
+    has_swe = bool(re.search(
+        r"software engineer|full[ -]?stack|backend|front[ -]?end|\bswe\b|"
+        r"developer",
+        head,
+        re.I,
+    ))
+    has_ml = bool(re.search(
+        r"machine learning|data scien|\bml engineer", head, re.I
+    ))
+    roles: list[str] = []
+    if has_swe:
+        roles.append("software engineer")
+        if has_intern:
+            roles.append("software intern")
+    if has_ml:
+        roles.append("machine learning engineer")
+        roles.append("data scientist")
+        if has_intern:
+            roles.append("ML intern")
+    if not roles and has_intern:
+        roles.append("intern")
+    if not roles and has_newgrad:
+        roles.append("new grad SWE")
+    seniority: list[str] = []
+    if has_intern:
+        seniority.append("Internship")
+    if has_newgrad:
+        seniority.append("New grad")
+    out: dict = {}
+    if roles:
+        out["roles"] = ", ".join(dict.fromkeys(roles))
+    if seniority:
+        out["seniority"] = ", ".join(dict.fromkeys(seniority))
+    return out
+
+
+def _is_geo_location(text: str) -> bool:
+    parts = [p.strip() for p in re.split(r"[,;/|]+", text or "") if p.strip()]
+    if not parts:
+        return False
+    skillish = 0
+    geo = 0
+    for part in parts:
+        tok = part.lower().strip()
+        words = set(re.findall(r"[a-z0-9.+#]+", tok))
+        if words & _SKILLISH or tok in _SKILLISH:
+            skillish += 1
+            continue
+        if _CITY_STATE_RE.search(part) or words & _GEO_WORDS:
+            geo += 1
+            continue
+        if re.search(r"\b(city|area|county|metro)\b", tok):
+            geo += 1
+            continue
+        if tok in {s.lower() for s in _SKILL_WORDS}:
+            skillish += 1
+        elif len(tok) == 2 and tok.isalpha():
+            geo += 1
+        else:
+            geo += 1
+    return geo >= skillish and skillish < max(1, len(parts))
+
+
+def _sanitize_extracted(data: dict) -> dict:
+    ident = dict(data.get("identity") or {})
+    prof = dict(data.get("profile") or {})
+    school = _clean_school(ident.get("school") or "")
+    if school:
+        ident["school"] = school
+    else:
+        ident.pop("school", None)
+    if ident.get("linkedin"):
+        url = linkedin_url(str(ident["linkedin"]))
+        if url:
+            ident["linkedin"] = url
+    if ident.get("github"):
+        user = github_username(str(ident["github"]))
+        if user:
+            ident["github"] = f"https://github.com/{user}"
+    locs = _clean_text(prof.get("locations"))
+    if locs and not _is_geo_location(locs):
+        prof.pop("locations", None)
+        if ident.get("city") and ident.get("state"):
+            city_state = f"{ident['city']}, {ident['state']}"
+            if _is_geo_location(city_state):
+                prof["locations"] = city_state
+    elif locs:
+        prof["locations"] = locs
+    roles = _clean_text(prof.get("roles"))
+    if re.fullmatch(r"interns?(hip)?", roles, re.I):
+        kw = (prof.get("keywords") or "").lower()
+        if any(s in kw for s in ("python", "java", "react", "typescript", "javascript")):
+            prof["roles"] = "software engineer intern"
+    return {
+        "identity": ident,
+        "profile": prof,
+        "knowledge": list(data.get("knowledge") or []),
+        **({"warning": data["warning"]} if data.get("warning") else {}),
+    }
+
+
 def _heuristic_parse(text: str) -> dict:
     blob = text[: MAX_PARSE_CHARS * 2]
     identity: dict = {}
@@ -328,17 +627,22 @@ def _heuristic_parse(text: str) -> dict:
     if last:
         identity["last_name"] = last
 
-    school = _SCHOOL_RE.search(blob)
+    edu = _education_block(blob)
+    school = _school_from_text(edu) or _school_from_text(blob)
     if school:
-        identity["school"] = _clean_text(school.group(1))
-    degree = _DEGREE_RE.search(blob)
-    if degree:
-        identity["degree"] = _clean_text(degree.group(1))
-    if re.search(r"computer science|\bCS\b", blob, re.I):
-        identity.setdefault("discipline", "Computer Science")
-    gy = _GRAD_YEAR_RE.search(blob)
+        identity["school"] = school
+    degrees = _degrees_from_text(edu or blob)
+    if degrees:
+        identity["degree"] = ", ".join(degrees[:2])
+    disc = _discipline_from_text(edu or blob)
+    if disc:
+        identity["discipline"] = disc
+    gpa = _GPA_RE.search(edu or blob)
+    if gpa:
+        identity["gpa"] = gpa.group(1)
+    gy = _grad_year_from_text(edu, blob)
     if gy:
-        identity["grad_year"] = gy.group(1)
+        identity["grad_year"] = gy
     yoe = _YOE_RE.search(blob)
     if yoe:
         identity["years_experience"] = yoe.group(1)
@@ -346,23 +650,21 @@ def _heuristic_parse(text: str) -> dict:
     profile_fields: dict = {}
     skills = [s for s in _SKILL_WORDS if re.search(rf"\b{re.escape(s)}\b", blob, re.I)]
     if skills:
-        profile_fields["keywords"] = ", ".join(dict.fromkeys(skills) )
-    if re.search(r"\bintern(?:ship)?\b", blob[:1500], re.I):
-        profile_fields["seniority"] = "Internship"
-        profile_fields.setdefault("roles", "intern")
-    elif re.search(r"new\s+grad|recent\s+grad", blob[:1500], re.I):
-        profile_fields["seniority"] = "New grad"
-        profile_fields.setdefault("roles", "new grad SWE")
-    elif re.search(r"software engineer|developer|swe\b", blob[:2000], re.I):
-        profile_fields.setdefault("roles", "software engineer")
+        profile_fields["keywords"] = ", ".join(dict.fromkeys(skills))
+    profile_fields.update(_roles_and_seniority(blob, identity.get("grad_year") or ""))
 
+    locs: list[str] = []
     if identity.get("city") and identity.get("state"):
-        profile_fields.setdefault(
-            "locations", f"{identity['city']}, {identity['state']}"
-        )
+        locs.append(f"{identity['city']}, {identity['state']}")
+    if re.search(r"\bremote\b", blob[:2500], re.I):
+        locs.append("Remote")
+    if locs:
+        profile_fields["locations"] = ", ".join(dict.fromkeys(locs))
 
     knowledge_items = _experience_from_text(blob) + _projects_from_text(blob)
-    return {"identity": identity, "profile": profile_fields, "knowledge": knowledge_items}
+    return _sanitize_extracted(
+        {"identity": identity, "profile": profile_fields, "knowledge": knowledge_items}
+    )
 
 
 _EXTRACT_SCHEMA = {
@@ -431,7 +733,15 @@ def _llm_parse(text: str) -> dict | None:
                 "Split work vs projects: category 'experience' is internships, jobs, "
                 "TA, or ambassador roles and MUST include the employer city/state "
                 "(e.g. Chicago, IL). Category 'project' is personal or GitHub work "
-                "and must NOT include an employer location."
+                "and must NOT include an employer location. "
+                "locations are geographic only (cities, regions, Remote) — never "
+                "skills, libraries, or 'AI'. school is the institution name only "
+                "(e.g. University of Minnesota), never a section header like "
+                "LEADERSHIP or EDUCATION. grad_year is expected or most recent "
+                "graduation, not an internship year. roles are job titles they want "
+                "(software engineer, software intern) — never a lone word 'intern' "
+                "if they study CS. If they have internships and a 2025+ graduation, "
+                "seniority is 'Internship, New grad'."
             ),
             messages=[{"role": "user", "content": snippet}],
             output_config={"format": {"type": "json_schema", "schema": _EXTRACT_SCHEMA}},
@@ -460,7 +770,7 @@ def _github_get(path: str):
     s = get_settings()
     headers = {
         "Accept": "application/vnd.github+json",
-        "User-Agent": "JobPilot-Apply/1.0",
+        "User-Agent": "JobPilot/1.0",
     }
     token = (s.github_token or "").strip()
     if token:
@@ -646,6 +956,14 @@ def _label(key: str) -> str:
 
 
 def _note(source: str, filled: list[str]) -> str:
+    if source == "linkedin" and filled and all(
+        "linkedin" in f.lower() for f in filled
+    ):
+        return (
+            "Saved your LinkedIn URL for Autofill. LinkedIn doesn't let apps "
+            "read the profile page — upload a LinkedIn PDF (More → Save to PDF) "
+            "to fill school, jobs, and skills."
+        )
     if not filled:
         return "Nothing new to add — those details were already on your profile."
     n = len(filled)

@@ -17,7 +17,7 @@ fly secrets set -a job-search-tool \
   APPLY_API_TOKEN=... \
   AUTH_ALLOW_DEV_LOGIN=false \
   AUTH_ALLOWED_EMAILS=you@example.com,friend@example.com \
-  APPLE_CLIENT_IDS=com.rahil.apply \
+  APPLE_CLIENT_IDS=com.rahil.jobpilot \
   SENTRY_DSN=https://...@...ingest.sentry.io/...
 
 # First Apple login only — fold old dev rows into the new usr_…:
@@ -38,9 +38,9 @@ and `reminder_delivery: "app"`. If `invite_ready` is false, do not invite anyone
 
 ## TestFlight
 
-1. Apple Developer Program + App Store Connect app `Apply` (`com.rahil.apply`).
-2. `cd ios && xcodegen generate && open Apply.xcodeproj`
-3. Archive a **Release** build (uses `ApplyRelease.entitlements` →
+1. Apple Developer Program + App Store Connect app `JobPilot` (`com.rahil.jobpilot`).
+2. `cd ios && xcodegen generate && open JobPilot.xcodeproj`
+3. Archive a **Release** build (uses `JobPilotRelease.entitlements` →
    `aps-environment: production`).
 4. Upload → Internal testers (fits a handful of friends).
 5. Add each Apple email to `AUTH_ALLOWED_EMAILS` **before** they tap Sign in.

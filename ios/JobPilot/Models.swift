@@ -182,6 +182,24 @@ struct ImportResult: Codable {
     let knowledge_added: Int
     let identity_score: Double?
     let note: String?
+    let draft: QuizDraft?
+}
+
+struct QuizDraft: Codable {
+    var project: String?
+    var achievement: String?
+    var strength: String?
+    var preference: String?
+    var about: String?
+    var why_role: String?
+    var roles: String?
+    var locations: String?
+    var keywords: String?
+    var seniority: String?
+}
+
+struct QuizDraftEnvelope: Codable {
+    let draft: QuizDraft
 }
 
 struct HealthInfo: Codable {

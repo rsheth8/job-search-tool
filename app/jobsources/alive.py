@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 
 from .. import ats
 from . import ghost
-from .base import JobPosting
+from .base import USER_AGENT, JobPosting
 
 logger = logging.getLogger("jobsources.alive")
 
@@ -79,7 +79,7 @@ def http_get(url: str, *, timeout: float = _TIMEOUT) -> FetchResult:
         follow_redirects=True,
         headers={
             "Accept": "application/json, text/html, */*",
-            "User-Agent": "job-search-tool/1.0",
+            "User-Agent": USER_AGENT,
         },
     )
     text = (resp.text or "")[:_BODY_CHARS]

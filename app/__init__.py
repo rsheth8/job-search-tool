@@ -1,1 +1,1 @@
-"""Personal Job Search SMS Intelligence System."""
+"""JobPilot — personal job-search engine."""

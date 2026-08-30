@@ -1454,6 +1454,130 @@ typealias StatusChip = QuietStatusCompat
 typealias ChipTone = QuietChipTone
 typealias JobCard = QuietRowCompat
 
+enum QuizList {
+    static func split(_ raw: String) -> [String] {
+        raw.split { $0 == "," || $0 == ";" || $0 == "\n" }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    static func join(_ items: [String]) -> String {
+        var seen: [String] = []
+        for item in items {
+            let trimmed = item.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            if !seen.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+                seen.append(trimmed)
+            }
+        }
+        return seen.joined(separator: ", ")
+    }
+}
+
+/// Tappable chips plus an optional custom field. Stores a comma-separated string
+/// so search profile / identity payloads stay backend-compatible.
+struct TagEditor: View {
+    @Binding var text: String
+    var suggestions: [String] = []
+    var placeholder: String = "Add another"
+    var allowCustom: Bool = true
+    var caption: String? = nil
+
+    @State private var draft = ""
+
+    private var tags: [String] { QuizList.split(text) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let caption, !caption.isEmpty {
+                Text(caption)
+                    .font(.caption)
+                    .foregroundStyle(Theme.soft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !tags.isEmpty {
+                WrapHStack(spacing: 8, lineSpacing: 8) {
+                    ForEach(tags, id: \.self) { tag in
+                        SelectChip(label: tag, selected: true, removable: true) {
+                            remove(tag)
+                        }
+                    }
+                }
+            }
+            if allowCustom {
+                HStack(spacing: 8) {
+                    TextField(placeholder, text: $draft)
+                        .textInputAutocapitalization(.words)
+                        .submitLabel(.done)
+                        .onSubmit { add(draft) }
+                    if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Button("Add") { add(draft) }
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.accent)
+                    }
+                }
+            }
+            let unused = suggestions.filter { sug in
+                !tags.contains { $0.caseInsensitiveCompare(sug) == .orderedSame }
+            }
+            if !unused.isEmpty {
+                WrapHStack(spacing: 8, lineSpacing: 8) {
+                    ForEach(unused, id: \.self) { sug in
+                        SelectChip(label: sug, selected: false) {
+                            add(sug)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func add(_ raw: String) {
+        let pieces = QuizList.split(raw)
+        guard !pieces.isEmpty else { return }
+        text = QuizList.join(tags + pieces)
+        draft = ""
+        Theme.selection()
+    }
+
+    private func remove(_ tag: String) {
+        text = QuizList.join(tags.filter { $0.caseInsensitiveCompare(tag) != .orderedSame })
+        Theme.selection()
+    }
+}
+
+struct SelectChip: View {
+    let label: String
+    let selected: Bool
+    var removable: Bool = false
+    let action: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Text(label)
+                    .font(.subheadline.weight(selected ? .semibold : .regular))
+                if selected && removable {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                }
+            }
+            .foregroundStyle(selected ? Color.white : Theme.ink)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(selected ? Theme.accent : Theme.cardFill, in: Capsule())
+            .overlay(
+                Capsule().strokeBorder(Theme.cloud.opacity(selected ? 0 : 0.9), lineWidth: 1)
+            )
+            .animation(reduceMotion ? nil : Theme.quick, value: selected)
+        }
+        .buttonStyle(PressableButtonStyle())
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityLabel(removable && selected ? "\(label), selected, double tap to remove" : label)
+    }
+}
+
 enum QuietChipTone { case accent, success, warning, muted }
 
 struct QuietStatusCompat: View {

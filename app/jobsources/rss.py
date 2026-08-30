@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 
 import logging
 
-from .base import JobPosting, strip_html
+from .base import USER_AGENT, JobPosting, strip_html
 
 logger = logging.getLogger("jobsources.rss")
 
@@ -131,7 +131,7 @@ def _fetch_xml(url: str) -> bytes | None:
             url,
             timeout=12.0,
             follow_redirects=True,
-            headers={"User-Agent": "job-search-tool/1.0", "Accept": "application/rss+xml,*/*"},
+            headers={"User-Agent": USER_AGENT, "Accept": "application/rss+xml,*/*"},
         )
         resp.raise_for_status()
         return resp.content

@@ -305,7 +305,7 @@ EXTRA_NAMES: dict[str, list[str]] = {
 
 
 def _get(url: str, **kwargs) -> httpx.Response:
-    headers = {"User-Agent": "job-search-tool/catalog-builder"}
+    headers = {"User-Agent": "JobPilot/catalog-builder"}
     resp = httpx.get(url, timeout=60.0, follow_redirects=True, headers=headers, **kwargs)
     resp.raise_for_status()
     return resp

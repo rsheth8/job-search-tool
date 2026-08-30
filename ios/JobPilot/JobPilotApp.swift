@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct ApplyApp: App {
+struct JobPilotApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var config = Config.shared
     @StateObject private var push = PushManager.shared
@@ -58,7 +58,7 @@ struct ApplyApp: App {
     }
 
     #if DEBUG
-    /// Simulator walk-through: `simctl launch … com.rahil.apply -JobPilotTab 1`
+    /// Simulator walk-through: `simctl launch … com.rahil.jobpilot -JobPilotTab 1`
     private static func applyDebugLaunchArgs() {
         let args = ProcessInfo.processInfo.arguments
         if let i = args.firstIndex(of: "-JobPilotTab"),

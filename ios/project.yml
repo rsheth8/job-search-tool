@@ -1,26 +1,26 @@
 # XcodeGen project definition — the whole Xcode project is generated from this text.
-#   brew install xcodegen && cd ios && xcodegen generate && open Apply.xcodeproj
-# (or just create a new SwiftUI app in Xcode and drop the Apply/ sources in).
-name: Apply
+#   brew install xcodegen && cd ios && xcodegen generate && open JobPilot.xcodeproj
+# (or just create a new SwiftUI app in Xcode named JobPilot and drop the JobPilot/ sources in).
+name: JobPilot
 options:
-  bundleIdPrefix: com.rahil.apply
+  bundleIdPrefix: com.rahil
   deploymentTarget:
     iOS: "17.0"
 settings:
   base:
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
-    DEVELOPMENT_TEAM: ""        # set your Apple Team ID in Xcode → Signing
+    DEVELOPMENT_TEAM: "P28MCS4P38"
     CODE_SIGN_STYLE: Automatic
     ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 targets:
-  Apply:
+  JobPilot:
     type: application
     platform: iOS
     sources:
-      - Apply
+      - JobPilot
     info:
-      path: Apply/Info.plist
+      path: JobPilot/Info.plist
       properties:
         CFBundleDisplayName: JobPilot
         UILaunchScreen:
@@ -32,10 +32,15 @@ targets:
         SentryDSN: ""
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.rahil.apply
+        PRODUCT_BUNDLE_IDENTIFIER: com.rahil.jobpilot
         GENERATE_INFOPLIST_FILE: NO
       configs:
         Debug:
-          CODE_SIGN_ENTITLEMENTS: Apply/Apply.entitlements
+          CODE_SIGN_ENTITLEMENTS: JobPilot/JobPilot.entitlements
         Release:
-          CODE_SIGN_ENTITLEMENTS: Apply/ApplyRelease.entitlements
+          CODE_SIGN_ENTITLEMENTS: JobPilot/JobPilotRelease.entitlements
+schemes:
+  JobPilot:
+    build:
+      targets:
+        JobPilot: all

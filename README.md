@@ -1,4 +1,4 @@
-# Job Search Intelligence
+# JobPilot
 
 A personal, conversational job-application engine. **Invite-only iOS beta:** Sign in
 with Apple, discover and rank roles, prepare answers and a tailored resume, and
@@ -249,7 +249,7 @@ Apply tab    ──> GET /apply/* + GET /apply/rules (WKWebView autofill)
 | `app/importer.py` | Bulk backfill (brain-dump or CSV). |
 | `app/stats.py` | Pipeline analytics. |
 | `app/deadlines.py` | Dated events + agenda. |
-| `ios/` | SwiftUI app: Apply · About · Chat · Settings. |
+| `ios/` | JobPilot iOS app (Apply · You · Ask · Settings). |
 | `cli.py` | Local REPL + `import` / `agenda` subcommands. |
 
 ## Data model

@@ -1,4 +1,4 @@
-# Job Search Intelligence — container image.
+# JobPilot — container image.
 # Python 3.13 (NOT 3.14 — pydantic-core had no wheels at setup time).
 FROM python:3.13-slim
 

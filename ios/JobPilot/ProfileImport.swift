@@ -87,7 +87,7 @@ struct ProfileImportPanel: View {
         .sheet(isPresented: $githubOpen) {
             HandleSheet(
                 title: "GitHub",
-                prompt: "Username or profile URL",
+                prompt: "Username or github.com/you — we pull public repos when GitHub is reachable.",
                 placeholder: "octocat",
                 keyboard: .URL
             ) { handle in
@@ -98,13 +98,16 @@ struct ProfileImportPanel: View {
             }
         }
         .sheet(isPresented: $linkedinOpen) {
-            HandleSheet(
-                title: "LinkedIn",
-                prompt: "Profile URL",
-                placeholder: "https://linkedin.com/in/…",
-                keyboard: .URL
-            ) { handle in
-                try await api.importLinkedIn(url: handle)
+            LinkedInImportSheet { url, file in
+                if let file {
+                    return try await api.importLinkedIn(
+                        url: url,
+                        filename: file.filename,
+                        data: file.data,
+                        mime: file.mime
+                    )
+                }
+                return try await api.importLinkedIn(url: url)
             } onDone: { result in
                 linkedinOpen = false
                 Task { await finish(result) }
@@ -141,8 +144,10 @@ struct ProfileImportPanel: View {
             rowDivider
 
             importRow(
-                title: "LinkedIn URL",
-                subtitle: demo ? "Sample link — nothing is saved." : "We’ll save the link. Upload a PDF above to fill more.",
+                title: "LinkedIn",
+                subtitle: demo
+                    ? "Sample link — nothing is saved."
+                    : "Paste the profile URL. LinkedIn blocks scraping — add a PDF to fill school and jobs.",
                 icon: "link",
                 key: "linkedin",
                 index: 2
@@ -480,6 +485,164 @@ private struct HandleSheet: View {
         defer { busy = false }
         do {
             let result = try await submit(trimmed)
+            onDone(result)
+        } catch {
+            withAnimation(reduceMotion ? nil : Theme.quick) {
+                self.error = APIClient.userMessage(for: error)
+                if (self.error ?? "").isEmpty {
+                    self.error = "Couldn't import that."
+                }
+            }
+        }
+    }
+}
+
+private struct LinkedInFile {
+    let filename: String
+    let data: Data
+    let mime: String
+}
+
+private struct LinkedInImportSheet: View {
+    let submit: (String, LinkedInFile?) async throws -> ImportResult
+    let onDone: (ImportResult) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @FocusState private var focused: Bool
+    @State private var value = ""
+    @State private var busy = false
+    @State private var error: String?
+    @State private var pickingPDF = false
+    @State private var attached: LinkedInFile?
+
+    private var trimmed: String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canImport: Bool {
+        !trimmed.isEmpty || attached != nil
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: Theme.spaceL) {
+                PageHeader(
+                    eyebrow: "Import",
+                    title: "LinkedIn",
+                    subtitle: "Paste your profile URL so Autofill can fill LinkedIn fields. LinkedIn doesn't let apps read the page — attach a PDF (More → Save to PDF) to fill school, jobs, and skills."
+                )
+
+                FocusCard {
+                    TextField("https://linkedin.com/in/…", text: $value)
+                        .font(.body)
+                        .foregroundStyle(Theme.ink)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                        .focused($focused)
+                        .submitLabel(.go)
+                        .onSubmit { Task { await go() } }
+                }
+                .padding(.horizontal, Theme.spaceL)
+
+                Button {
+                    pickingPDF = true
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: attached == nil ? "doc.badge.plus" : "checkmark.circle.fill")
+                            .foregroundStyle(Theme.accent)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(attached == nil ? "Attach LinkedIn PDF" : attached!.filename)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.ink)
+                            Text(attached == nil
+                                 ? "Optional, but this is how school and jobs get filled."
+                                 : "We’ll read this like a resume.")
+                                .font(.caption)
+                                .foregroundStyle(Theme.soft)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                .buttonStyle(PressableButtonStyle())
+                .padding(.horizontal, Theme.spaceL)
+
+                if let error {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(Theme.note)
+                        .padding(.horizontal, Theme.spaceL)
+                }
+
+                Spacer(minLength: 0)
+
+                VStack(spacing: Theme.spaceM) {
+                    PrimaryButton(
+                        title: "Import",
+                        busy: busy,
+                        busyTitle: "Importing…"
+                    ) {
+                        Task { await go() }
+                    }
+                    .disabled(!canImport)
+                    .opacity(canImport ? 1 : 0.45)
+
+                    Button("Cancel") { dismiss() }
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Theme.soft)
+                        .buttonStyle(PressableButtonStyle())
+                        .disabled(busy)
+                }
+                .padding(.horizontal, Theme.spaceL)
+                .padding(.bottom, Theme.spaceL)
+            }
+            .toolbar(.hidden, for: .navigationBar)
+            .ambientScreen()
+            .interactiveDismissDisabled(busy)
+            .fileImporter(
+                isPresented: $pickingPDF,
+                allowedContentTypes: [.pdf, .plainText, .utf8PlainText],
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    guard let url = urls.first else { return }
+                    attach(url)
+                case .failure:
+                    error = "Couldn't open that file."
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .presentationCornerRadius(28)
+        .presentationBackground(Theme.fog)
+    }
+
+    private func attach(_ url: URL) {
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let data = try Data(contentsOf: url)
+            let ext = url.pathExtension.lowercased()
+            let mime = ext == "pdf" ? "application/pdf" : "text/plain"
+            attached = LinkedInFile(filename: url.lastPathComponent, data: data, mime: mime)
+            error = nil
+        } catch {
+            self.error = "Couldn't read that file."
+        }
+    }
+
+    private func go() async {
+        guard canImport, !busy else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            let result = try await submit(trimmed, attached)
             onDone(result)
         } catch {
             withAnimation(reduceMotion ? nil : Theme.quick) {

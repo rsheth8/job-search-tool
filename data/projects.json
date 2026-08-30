@@ -276,7 +276,7 @@
         "FastAPI + SQLite job-search engine: wide ATS/RSS discovery, heuristic + LLM relevance scoring, a personalized re-ranker, and an iOS client that autofills Greenhouse/Lever/Ashby forms",
         "Per-posting one-page LaTeX resumes (Tectonic) and drafted answers grounded in a personal knowledge store --- the human always submits"
       ],
-      "summary": "JobPilot / job-search-tool (2026–present): FastAPI job-search engine with ATS discovery, scoring/re-ranking, iOS autofill, and tailored one-page LaTeX resumes. Never auto-submits. https://github.com/rsheth8/job-search-tool"
+      "summary": "JobPilot (2026–present): FastAPI job-search engine with ATS discovery, scoring/re-ranking, iOS autofill, and tailored one-page LaTeX resumes. Never auto-submits. https://github.com/rsheth8/job-search-tool"
     },
     {
       "id": "ai_slack_bot",

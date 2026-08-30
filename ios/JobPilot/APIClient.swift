@@ -138,7 +138,17 @@ struct APIClient {
         let detail = jsonDetail(data)
         let err: APIError
         switch code {
-        case 401, 429, 500, 502, 503, 504:
+        case 401:
+            // Sign-in 401 is almost never an expired session — it's usually
+            // Apple's audience (bundle id) not listed in APPLE_CLIENT_IDS.
+            if path.contains("/auth/apple") {
+                err = .message(
+                    "Couldn't verify Sign in with Apple. Set APPLE_CLIENT_IDS=com.rahil.jobpilot on Fly, wait for the machine to restart, then try again."
+                )
+            } else {
+                err = .http(code)
+            }
+        case 429, 500, 502, 503, 504:
             err = .http(code)
         default:
             if let detail, !detail.isEmpty { err = .message(detail) }
@@ -422,13 +432,32 @@ struct APIClient {
         return try JSONDecoder().decode(ImportResult.self, from: data)
     }
 
-    func importLinkedIn(url: String) async throws -> ImportResult {
+    func importLinkedIn(url: String, filename: String? = nil, data: Data? = nil,
+                        mime: String = "application/pdf") async throws -> ImportResult {
+        if let data, let filename, !data.isEmpty {
+            return try await multipart(
+                "/apply/import/linkedin",
+                filename: filename,
+                data: data,
+                mime: mime,
+                fields: ["url": url]
+            )
+        }
         let data = try await request("POST", "/apply/import/linkedin", body: ["url": url])
         return try JSONDecoder().decode(ImportResult.self, from: data)
     }
 
+    func fetchQuizDraft(polish: Bool = false) async throws -> QuizDraft {
+        if polish {
+            let data = try await request("POST", "/apply/quiz/draft", body: ["polish": true])
+            return try JSONDecoder().decode(QuizDraftEnvelope.self, from: data).draft
+        }
+        let data = try await request("GET", "/apply/quiz/draft")
+        return try JSONDecoder().decode(QuizDraftEnvelope.self, from: data).draft
+    }
+
     private func multipart(_ path: String, filename: String, data file: Data,
-                           mime: String) async throws -> ImportResult {
+                           mime: String, fields: [String: String] = [:]) async throws -> ImportResult {
         try Task.checkCancellation()
         guard let base = config.base,
               let resolved = URL(string: path, relativeTo: base)?.absoluteURL else {
@@ -444,6 +473,11 @@ struct APIClient {
         applyHeaders(&req, requestId: requestId, userAgent: userAgent)
         var body = Data()
         func put(_ s: String) { if let d = s.data(using: .utf8) { body.append(d) } }
+        for (name, value) in fields where !value.isEmpty {
+            put("--\(boundary)\r\n")
+            put("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n")
+            put("\(value)\r\n")
+        }
         put("--\(boundary)\r\n")
         put("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n")
         put("Content-Type: \(mime)\r\n\r\n")

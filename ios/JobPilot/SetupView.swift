@@ -33,7 +33,25 @@ struct SetupView: View {
     @State private var didStart = false
     @State private var previewScore: Double = 0
     @State private var showStepJump = false
+    @State private var draftBusy = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private static let roleSuggestions = [
+        "Software engineer", "Software intern", "Backend", "Full-stack",
+        "Frontend", "Mobile", "ML engineer", "Data scientist", "ML intern",
+    ]
+    private static let locationSuggestions = [
+        "Remote", "Chicago", "Minneapolis", "San Francisco", "NYC",
+        "Seattle", "Austin", "Boston",
+    ]
+    private static let skillSuggestions = [
+        "Python", "JavaScript", "TypeScript", "React", "Java", "SQL",
+        "AWS", "Docker", "FastAPI", "PyTorch",
+    ]
+    private static var gradYearOptions: [String] {
+        let year = Calendar.current.component(.year, from: Date())
+        return (0..<8).map { String(year - 1 + $0) }
+    }
 
     private var api: APIClient { APIClient(config: config) }
     private var stepMotion: Animation? { reduceMotion ? nil : Theme.springSoft }
@@ -117,14 +135,6 @@ struct SetupView: View {
             HStack {
                 stepCounter
                 Spacer()
-                if displayedScore > 0 {
-                    Text("\(Int(displayedScore * 100))% ready")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.accent)
-                        .monospacedDigit()
-                        .contentTransition(reduceMotion ? .identity : .numericText())
-                        .animation(reduceMotion ? nil : Theme.tick, value: displayedScore)
-                }
                 if isDemo {
                     Button("Exit") { dismiss() }
                         .font(.caption.weight(.semibold))
@@ -186,8 +196,7 @@ struct SetupView: View {
         switch step {
         case .welcome: welcomeBody
         case .search: searchFields
-        case .name: nameFields
-        case .contact: contactFields
+        case .you: youFields
         case .home: homeFields
         case .links: linkFields
         case .school: schoolFields
@@ -218,11 +227,17 @@ struct SetupView: View {
             ProfileImportPanel(demo: isDemo) { result in
                 if isDemo {
                     previewScore = result.identity_score ?? previewScore
+                    applyDraft(QuizDemo.draft)
                     return
                 }
                 await setup.refresh(config: config)
                 if step != .done { setup.needsSetup = true }
                 prefill()
+                if let draft = result.draft {
+                    applyDraft(draft)
+                } else {
+                    await loadDraft(polish: false)
+                }
             }
         }
     }
@@ -231,28 +246,41 @@ struct SetupView: View {
         VStack(alignment: .leading, spacing: Theme.spaceM) {
             card {
                 labeled("Roles") {
-                    TextField("New grad SWE, backend intern", text: $roles, axis: .vertical)
-                        .lineLimit(2...4)
+                    TagEditor(
+                        text: $roles,
+                        suggestions: Self.roleSuggestions,
+                        placeholder: "Add a role",
+                        caption: "Tap all that apply. This is how matches are found."
+                    )
                 }
                 Divider().background(Theme.accent.opacity(0.08))
                 labeled("Locations") {
-                    TextField("NYC, remote, Chicago", text: $locations, axis: .vertical)
-                        .lineLimit(2...4)
+                    TagEditor(
+                        text: $locations,
+                        suggestions: Self.locationSuggestions,
+                        placeholder: "Add a city or Remote"
+                    )
                 }
                 Divider().background(Theme.accent.opacity(0.08))
                 labeled("Skills to match on") {
-                    TextField("Python, React, SQL — optional", text: $keywords, axis: .vertical)
-                        .lineLimit(2...3)
+                    TagEditor(
+                        text: $keywords,
+                        suggestions: Self.skillSuggestions,
+                        placeholder: "Add a skill"
+                    )
                 }
             }
             labeled("Seniority") {
-                chipRow(["Internship", "New grad", "Junior", "Mid-level", "Senior"],
-                        selected: $seniority)
+                chipRow(
+                    ["Internship", "New grad", "Entry-level", "Junior", "Mid-level", "Senior"],
+                    selected: $seniority,
+                    multi: true
+                )
             }
         }
     }
 
-    private var nameFields: some View {
+    private var youFields: some View {
         card {
             labeled("First name") { TextField("Ada", text: $identity.firstName) }
             Divider().background(Theme.accent.opacity(0.08))
@@ -262,14 +290,6 @@ struct SetupView: View {
                 TextField("If forms ask what you go by", text: $identity.preferredName)
             }
             Divider().background(Theme.accent.opacity(0.08))
-            labeled("Pronouns") {
-                TextField("optional", text: $identity.pronouns)
-            }
-        }
-    }
-
-    private var contactFields: some View {
-        card {
             labeled("Email") {
                 TextField("you@school.edu", text: $identity.email)
                     .keyboardType(.emailAddress)
@@ -335,21 +355,28 @@ struct SetupView: View {
     }
 
     private var schoolFields: some View {
-        card {
-            labeled("School") { TextField("University", text: $identity.school) }
-            Divider().background(Theme.accent.opacity(0.08))
-            labeled("Degree") { TextField("B.S. Computer Science", text: $identity.degree) }
-            Divider().background(Theme.accent.opacity(0.08))
-            labeled("Major / field of study") {
-                TextField("Computer Science", text: $identity.discipline)
+        VStack(alignment: .leading, spacing: Theme.spaceM) {
+            card {
+                labeled("School") { TextField("University", text: $identity.school) }
+                Divider().background(Theme.accent.opacity(0.08))
+                labeled("Major / field of study") {
+                    TagEditor(
+                        text: $identity.discipline,
+                        suggestions: ["Computer Science", "Data Science", "Software Engineering", "Electrical Engineering"],
+                        placeholder: "Add a major"
+                    )
+                }
+                Divider().background(Theme.accent.opacity(0.08))
+                labeled("GPA") {
+                    TextField("optional", text: $identity.gpa).keyboardType(.decimalPad)
+                }
             }
-            Divider().background(Theme.accent.opacity(0.08))
+            labeled("Degree") {
+                chipRow(["B.S.", "B.A.", "M.S.", "M.Eng.", "MBA", "Ph.D."],
+                        selected: $identity.degree, multi: true)
+            }
             labeled("Graduation year") {
-                TextField("2026", text: $identity.gradYear).keyboardType(.numberPad)
-            }
-            Divider().background(Theme.accent.opacity(0.08))
-            labeled("GPA") {
-                TextField("optional", text: $identity.gpa).keyboardType(.decimalPad)
+                chipRow(Self.gradYearOptions, selected: $identity.gradYear)
             }
         }
     }
@@ -381,7 +408,7 @@ struct SetupView: View {
         VStack(alignment: .leading, spacing: Theme.spaceM) {
             labeled("Work arrangement") {
                 chipRow(["Remote", "Hybrid", "On-site", "Flexible"],
-                        selected: $identity.workArrangement)
+                        selected: $identity.workArrangement, multi: true)
             }
             labeled("When can you start?") {
                 chipRow(["Immediately", "2 weeks", "After graduation"],
@@ -407,10 +434,15 @@ struct SetupView: View {
     private var formDefaultFields: some View {
         VStack(alignment: .leading, spacing: Theme.spaceM) {
             labeled("How do you usually hear about roles?") {
-                chipRow(
-                    ["LinkedIn", "Company website", "Job board", "Referral", "Recruiter", "Event"],
-                    selected: $identity.howHeard
-                )
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Pick one — most applications only allow a single source.")
+                        .font(.caption)
+                        .foregroundStyle(Theme.soft)
+                    chipRow(
+                        ["LinkedIn", "Company website", "Job board", "Referral", "Recruiter", "Event"],
+                        selected: $identity.howHeard
+                    )
+                }
             }
             card {
                 Toggle("Okay with a background check", isOn: $identity.backgroundCheck)
@@ -429,39 +461,49 @@ struct SetupView: View {
     }
 
     private var storyFields: some View {
-        card {
-            labeled("A project worth citing") {
-                TextField("I built …", text: $project, axis: .vertical)
-                    .lineLimit(3...6)
+        VStack(alignment: .leading, spacing: Theme.spaceM) {
+            draftButton(title: "Fill from my profile") {
+                await loadDraft(polish: false)
             }
-            Divider().background(Theme.accent.opacity(0.08))
-            labeled("An achievement") {
-                TextField("I cut latency 40% …", text: $achievement, axis: .vertical)
-                    .lineLimit(2...5)
-            }
-            Divider().background(Theme.accent.opacity(0.08))
-            labeled("A strength") {
-                TextField("Systems debugging", text: $strength, axis: .vertical)
-                    .lineLimit(2...4)
-            }
-            Divider().background(Theme.accent.opacity(0.08))
-            labeled("What you want in a role") {
-                TextField("Real ownership, strong mentorship …", text: $preference, axis: .vertical)
-                    .lineLimit(2...4)
+            card {
+                labeled("A project worth citing") {
+                    TextField("I built …", text: $project, axis: .vertical)
+                        .lineLimit(3...6)
+                }
+                Divider().background(Theme.accent.opacity(0.08))
+                labeled("An achievement") {
+                    TextField("I cut latency 40% …", text: $achievement, axis: .vertical)
+                        .lineLimit(2...5)
+                }
+                Divider().background(Theme.accent.opacity(0.08))
+                labeled("A strength") {
+                    TextField("Systems debugging", text: $strength, axis: .vertical)
+                        .lineLimit(2...4)
+                }
+                Divider().background(Theme.accent.opacity(0.08))
+                labeled("What you want in a role") {
+                    TextField("Real ownership, strong mentorship …", text: $preference, axis: .vertical)
+                        .lineLimit(2...4)
+                }
             }
         }
     }
 
     private var answerFields: some View {
-        card {
-            labeled("Tell us about yourself") {
-                TextField("A short paragraph you reuse on applications", text: $about, axis: .vertical)
-                    .lineLimit(4...8)
+        VStack(alignment: .leading, spacing: Theme.spaceM) {
+            draftButton(title: "Write these for me") {
+                await loadDraft(polish: true)
             }
-            Divider().background(Theme.accent.opacity(0.08))
-            labeled("Why this kind of work?") {
-                TextField("What you say when they ask why this role or company", text: $whyRole, axis: .vertical)
-                    .lineLimit(4...8)
+            card {
+                labeled("Tell us about yourself") {
+                    TextField("A short paragraph you reuse on applications", text: $about, axis: .vertical)
+                        .lineLimit(4...8)
+                }
+                Divider().background(Theme.accent.opacity(0.08))
+                labeled("Why this kind of work?") {
+                    TextField("What you say when they ask why this role or company", text: $whyRole, axis: .vertical)
+                        .lineLimit(4...8)
+                }
             }
         }
     }
@@ -606,16 +648,61 @@ struct SetupView: View {
         }
     }
 
-    private func chipRow(_ options: [String], selected: Binding<String>) -> some View {
+    private func chipRow(_ options: [String], selected: Binding<String>,
+                         multi: Bool = false) -> some View {
         WrapHStack(spacing: 8, lineSpacing: 8) {
             ForEach(Array(options.enumerated()), id: \.element) { i, option in
-                QuizChip(label: option, selected: selected.wrappedValue == option) {
-                    selected.wrappedValue = selected.wrappedValue == option ? "" : option
-                    Theme.selection()
+                SelectChip(
+                    label: option,
+                    selected: optionIsOn(option, in: selected.wrappedValue, multi: multi)
+                ) {
+                    toggleChip(option, selected: selected, options: options, multi: multi)
                 }
                 .staggerAppear(i)
             }
         }
+    }
+
+    private func optionIsOn(_ option: String, in stored: String, multi: Bool) -> Bool {
+        let s = stored.lowercased()
+        let o = option.lowercased()
+        if !multi {
+            if stored == option || s == o { return true }
+            if option.count == 4, option.allSatisfy(\.isNumber) { return s.contains(option) }
+            return false
+        }
+        if QuizList.split(stored).contains(where: { $0.caseInsensitiveCompare(option) == .orderedSame }) {
+            return true
+        }
+        switch o {
+        case "on-site": return s.contains("on-site") || s.contains("onsite")
+        case "internship": return s.contains("intern")
+        case "new grad": return s.contains("new grad") || s.contains("newgrad")
+        case "entry-level": return s.contains("entry")
+        case "b.s.": return s.contains("b.s") || s.contains("bachelor")
+        case "b.a.": return s.contains("b.a") && !s.contains("b.s")
+        case "m.s.": return s.contains("m.s") || s.contains("master")
+        case "ph.d.": return s.contains("ph.d") || s.contains("phd")
+        default:
+            return s.contains(o)
+        }
+    }
+
+    private func toggleChip(_ option: String, selected: Binding<String>,
+                            options: [String], multi: Bool) {
+        Theme.selection()
+        if !multi {
+            let on = optionIsOn(option, in: selected.wrappedValue, multi: false)
+            selected.wrappedValue = on ? "" : option
+            return
+        }
+        var current = options.filter { optionIsOn($0, in: selected.wrappedValue, multi: true) }
+        if current.contains(option) {
+            current.removeAll { $0 == option }
+        } else {
+            current.append(option)
+        }
+        selected.wrappedValue = current.joined(separator: ", ")
     }
 
     private func prefill() {
@@ -625,6 +712,73 @@ struct SetupView: View {
         if keywords.isEmpty { keywords = s.profile["keywords"] ?? "" }
         if seniority.isEmpty { seniority = s.profile["seniority"] ?? "" }
         identity.load(from: s.identity)
+        Task { await loadDraft(polish: false) }
+    }
+
+    private func applyDraft(_ draft: QuizDraft, overwrite: Bool = false) {
+        func take(_ current: inout String, _ incoming: String?) {
+            let value = (incoming ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty else { return }
+            if overwrite || current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                current = value
+            }
+        }
+        take(&roles, draft.roles)
+        take(&locations, draft.locations)
+        take(&keywords, draft.keywords)
+        take(&seniority, draft.seniority)
+        take(&project, draft.project)
+        take(&achievement, draft.achievement)
+        take(&strength, draft.strength)
+        take(&preference, draft.preference)
+        take(&about, draft.about)
+        take(&whyRole, draft.why_role)
+    }
+
+    private func loadDraft(polish: Bool) async {
+        if isDemo {
+            applyDraft(QuizDemo.draft, overwrite: polish)
+            return
+        }
+        draftBusy = true
+        defer { draftBusy = false }
+        do {
+            let draft = try await api.fetchQuizDraft(polish: polish)
+            applyDraft(draft, overwrite: polish)
+        } catch {
+            if APIClient.isCancellation(error) { return }
+            if polish {
+                self.error = APIClient.userMessage(for: error)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func draftButton(title: String, action: @escaping () async -> Void) -> some View {
+        Button {
+            Task { await action() }
+        } label: {
+            HStack(spacing: 8) {
+                if draftBusy {
+                    PropellerIcon(speed: .medium, size: 14)
+                        .foregroundStyle(Theme.accent)
+                } else {
+                    Image(systemName: "sparkles")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
+                }
+                Text(draftBusy ? "Writing…" : title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Theme.accent.opacity(0.12), in: Capsule())
+        }
+        .buttonStyle(PressableButtonStyle())
+        .disabled(draftBusy)
+        .accessibilityLabel(title)
     }
 
     private func applyDemoSample() {
@@ -777,12 +931,10 @@ struct SetupView: View {
                 seniority: seniority,
                 keywords: keywords
             )
-        case .name:
+        case .you:
             try await saveIdentity([
-                "first_name", "last_name", "preferred_name", "pronouns",
+                "first_name", "last_name", "preferred_name", "email", "phone",
             ])
-        case .contact:
-            try await saveIdentity(["email", "phone"])
         case .home:
             try await saveIdentity(["city", "state", "zip", "country", "address"])
         case .links:
@@ -881,15 +1033,14 @@ struct SetupView: View {
 }
 
 private enum QuizStep: Int, CaseIterable, Hashable {
-    case welcome, search, name, contact, home, links, school, work
+    case welcome, search, you, home, links, school, work
     case logistics, formDefaults, story, answers, demographics, done
 
     var title: String {
         switch self {
         case .welcome: return "Let’s get Autofill ready"
         case .search: return "What are you looking for?"
-        case .name: return "Your name"
-        case .contact: return "How they reach you"
+        case .you: return "Your name and contact"
         case .home: return "Where you live"
         case .links: return "Links forms ask for"
         case .school: return "School"
@@ -905,17 +1056,16 @@ private enum QuizStep: Int, CaseIterable, Hashable {
 
     var subtitle: String? {
         switch self {
-        case .welcome: return "Start from a resume, GitHub, or LinkedIn — or fill it in by hand."
-        case .search: return "Roles and locations — this is how matches are found."
-        case .name: return "Legal name on applications. Preferred name is optional."
-        case .contact: return "Used to fill email and phone fields."
+        case .welcome: return "Start from a resume, GitHub, or LinkedIn — or tap through by hand."
+        case .search: return "Tap every role, city, and skill that should match. Seniority can be more than one."
+        case .you: return "Legal name and how they reach you."
         case .home: return "City and state unlock most location questions."
         case .links: return "LinkedIn and GitHub show up on almost every SWE form."
-        case .school: return "Degree, major, and class year."
+        case .school: return "Degree, major, and class year. Tap all degrees that apply."
         case .work: return "Authorization questions are on nearly every form."
         case .logistics: return "Skip salary if you’d rather not store it."
-        case .formDefaults: return "Yes/no questions Autofill can answer for you."
-        case .story: return "Projects and achievements ground written answers."
+        case .formDefaults: return "Pick one source. Yes/no questions Autofill can answer for you."
+        case .story: return "Tap Fill from my profile if you already imported a resume."
         case .answers: return "Saved verbatim when a form asks the same thing."
         case .demographics: return "Only filled when you choose to save them. Easy to skip."
         case .done: return "Coverage is how much Autofill can fill without asking."
@@ -935,29 +1085,6 @@ private enum QuizStep: Int, CaseIterable, Hashable {
 
     var next: QuizStep? { QuizStep(rawValue: rawValue + 1) }
     var previous: QuizStep? { QuizStep(rawValue: rawValue - 1) }
-}
-
-private struct QuizChip: View {
-    let label: String
-    let selected: Bool
-    let action: () -> Void
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        Button(action: action) {
-            Text(label)
-                .font(.subheadline.weight(selected ? .semibold : .regular))
-                .foregroundStyle(selected ? Color.white : Theme.ink)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(selected ? Theme.accent : Theme.cardFill, in: Capsule())
-                .overlay(
-                    Capsule().strokeBorder(Theme.cloud.opacity(selected ? 0 : 0.9), lineWidth: 1)
-                )
-                .animation(reduceMotion ? nil : Theme.quick, value: selected)
-        }
-        .buttonStyle(PressableButtonStyle())
-    }
 }
 
 #Preview("Quiz preview") {

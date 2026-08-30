@@ -79,7 +79,23 @@ enum QuizDemo {
             filled: filled,
             knowledge_added: source == "resume" ? 3 : 1,
             identity_score: source == "resume" ? 0.74 : 0.58,
-            note: "Preview only — nothing was saved."
+            note: "Preview only — nothing was saved.",
+            draft: draft
+        )
+    }
+
+    static var draft: QuizDraft {
+        QuizDraft(
+            project: project,
+            achievement: achievement,
+            strength: strength,
+            preference: preference,
+            about: about,
+            why_role: whyRole,
+            roles: roles,
+            locations: locations,
+            keywords: keywords,
+            seniority: seniority
         )
     }
 

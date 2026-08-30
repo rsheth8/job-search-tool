@@ -2,8 +2,8 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-WEBVIEW = ROOT / "ios" / "Apply" / "WebView.swift"
-AUTOFILL = ROOT / "ios" / "Apply" / "Autofill.swift"
+WEBVIEW = ROOT / "ios" / "JobPilot" / "WebView.swift"
+AUTOFILL = ROOT / "ios" / "JobPilot" / "Autofill.swift"
 
 
 def test_webview_uses_the_persistent_cookie_store():

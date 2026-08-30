@@ -67,6 +67,7 @@ def test_resume_import_fills_empty_fields_and_projects():
     assert body["ok"] is True
     assert body["source"] == "resume"
     assert body["knowledge_added"] >= 1
+    assert body["draft"]["project"] or body["draft"]["about"]
     ident = applicant.get_identity("u1")
     assert ident["email"] == "ada@example.com"
     assert ident["school"]
@@ -169,6 +170,99 @@ def test_linkedin_url_saves_without_scraping():
     }).json()
     assert body["ok"] is True
     assert applicant.get_identity("u1")["linkedin"].endswith("/ada-lovelace")
+    assert "PDF" in body["note"] or "profile page" in body["note"].lower()
+
+
+def test_linkedin_accepts_country_subdomain_and_query():
+    assert pi.linkedin_url("https://uk.linkedin.com/in/ada-lovelace?trk=x") == (
+        "https://www.linkedin.com/in/ada-lovelace"
+    )
+    assert pi.linkedin_url("https://www.linkedin.com/mwlite/in/ada") == (
+        "https://www.linkedin.com/in/ada"
+    )
+
+
+def test_github_saves_url_when_api_is_unreachable(monkeypatch):
+    monkeypatch.setattr(pi, "_github_get", lambda path: None)
+    body = TestClient(app).post("/apply/import/github", json={
+        "user": "u1", "username": "octocat",
+    }).json()
+    assert body["ok"] is True
+    assert applicant.get_identity("u1")["github"] == "https://github.com/octocat"
+    assert "GitHub URL" in body["note"] or "couldn't load" in body["note"].lower()
+
+
+def test_school_header_is_not_glued_onto_the_university():
+    text = """
+Rahil Sheth
+rahilsheth05@gmail.com | Vernon Hills, IL
+https://linkedin.com/in/rsheth8 | https://github.com/rsheth8
+
+EDUCATION
+University of Minnesota Twin Cities
+B.S. Computer Science, May 2026, GPA 3.5
+M.S. Data Science (expected December 2027)
+
+LEADERSHIP
+Event Director, University of Minnesota — 400+ members
+
+EXPERIENCE
+Software Developer Intern — HCSC, Chicago, IL (Jun–Aug 2025)
+Software/ML intern at printpal.io, Chicago, IL (May–Aug 2023)
+
+SKILLS
+Python, JavaScript, TypeScript, React, AI, SQL, AWS
+
+PROJECTS
+Distill — Chrome extension with multi-provider LLM integration.
+"""
+    got = pi.parse_document(text)
+    ident = got["identity"]
+    assert ident["school"].startswith("University of Minnesota")
+    assert "B.S" not in ident["school"]
+    assert "LEADERSHIP" not in ident["school"]
+    assert ident["grad_year"] == "2027"
+    assert "M.S." in ident["degree"] or "B.S." in ident["degree"]
+    assert ident.get("gpa") == "3.5"
+    loc = got["profile"].get("locations") or ""
+    assert "React" not in loc and "AI" not in loc.split()
+    assert "Vernon Hills" in loc or "IL" in loc
+    roles = (got["profile"].get("roles") or "").lower()
+    assert roles != "intern"
+    assert "software" in roles
+    seniority = got["profile"].get("seniority") or ""
+    assert "Internship" in seniority
+    assert "New grad" in seniority
+
+
+def test_skill_list_is_not_used_as_locations():
+    messy = {
+        "identity": {"city": "Chicago", "state": "IL", "school": "LEADERSHIP University of Minnesota"},
+        "profile": {"locations": "React, AI", "roles": "intern", "keywords": "python, react"},
+        "knowledge": [],
+    }
+    got = pi._sanitize_extracted(messy)
+    assert "LEADERSHIP" not in got["identity"]["school"]
+    assert "University of Minnesota" in got["identity"]["school"]
+    assert "React" not in (got["profile"].get("locations") or "")
+    assert "Chicago" in got["profile"]["locations"]
+    assert got["profile"]["roles"] != "intern"
+
+
+def test_quiz_draft_uses_stored_knowledge():
+    knowledge.add("u1", "project", "Built Distill, a Chrome LLM extension.")
+    knowledge.add("u1", "strength", "Full-stack product engineering")
+    knowledge.add(
+        "u1", "answer", "I'm Rahil.", label="Tell us about yourself"
+    )
+    applicant.set_identity("u1", {"first_name": "Rahil", "school": "UMN"})
+    profile.set_profile("u1", roles="software engineer", locations="Chicago")
+    body = TestClient(app).get("/apply/quiz/draft?user=u1").json()
+    draft = body["draft"]
+    assert "Distill" in draft["project"]
+    assert "Full-stack" in draft["strength"]
+    assert draft["about"] == "I'm Rahil."
+    assert "software engineer" in draft["roles"]
 
 
 def test_linkedin_pdf_text_fills_like_a_resume():

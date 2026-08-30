@@ -168,6 +168,7 @@ final class WebViewModel: NSObject, ObservableObject, WKNavigationDelegate, WKUI
             // Soft probe so the banner updates after redirects (skip if we just
             // navigated into an embed — that load will probe on its own didFinish).
             w.evaluateJavaScript("window.__applyDrive && window.__applyDrive({ mode: 'probe' })")
+        }
     }
 
     /// If this careers page only hosts the application inside an ATS iframe, navigate

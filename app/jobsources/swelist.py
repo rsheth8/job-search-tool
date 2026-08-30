@@ -14,7 +14,7 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-from .base import HTTP_TIMEOUT_SECONDS, JobPosting, get_json, iso_from_epoch_ms
+from .base import HTTP_TIMEOUT_SECONDS, USER_AGENT, JobPosting, get_json, iso_from_epoch_ms
 
 logger = logging.getLogger("jobsources.swelist")
 
@@ -197,7 +197,7 @@ def _unwrap_apply_url(url: str) -> str:
         return url
     import httpx
 
-    headers = {"User-Agent": "job-search-tool/1.0", "Accept": "*/*"}
+    headers = {"User-Agent": USER_AGENT, "Accept": "*/*"}
     try:
         resp = httpx.get(
             url,
