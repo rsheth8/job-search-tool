@@ -1,0 +1,17 @@
+{
+  "note": "Headings written with a trailing colon ('Education:'), and a 'Class of' graduation year rather than a date range. No GPA anywhere, so the parser must leave it empty rather than borrow a number from elsewhere on the page.",
+  "identity": {
+    "first_name": "Wei",
+    "last_name": "Chen",
+    "email": "wei.chen@example.com",
+    "phone": "(206) 555-0133",
+    "city": "Seattle",
+    "state": "WA",
+    "school": "University of Washington",
+    "degree": "B.S.",
+    "discipline": "Electrical Engineering",
+    "grad_year": "2025"
+  },
+  "locations": "Seattle, WA",
+  "absent": ["gpa"]
+}

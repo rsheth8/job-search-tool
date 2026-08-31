@@ -1,0 +1,37 @@
+% Right-aligned dates via \hfill, compound heading, graduation date in a
+% parenthetical beside the degree. This is the shape that broke the parser:
+% content-stream extraction welds "MN" to "Aug", and the enrolment year sits
+% before the graduation year.
+\documentclass[letterpaper,11pt]{article}
+\usepackage[margin=0.6in]{geometry}
+\usepackage{enumitem}
+\pagestyle{empty}
+\setlist[itemize]{leftmargin=*,nosep,label={--}}
+\newcommand{\heading}[1]{\vspace{6pt}\textbf{\large #1}\vspace{2pt}\hrule\vspace{4pt}}
+\begin{document}
+\begin{center}
+  {\LARGE \textbf{Priya Raman}}\\[2pt]
+  (612) 555-0148 \quad--\quad priya.raman@example.com \quad--\quad
+  linkedin.com/in/priyaraman \quad--\quad github.com/priyaraman
+\end{center}
+
+\heading{EDUCATION \& LEADERSHIP}
+\textbf{University of Minnesota}, Minneapolis, MN \hfill Aug 2023 -- Present\\
+M.S. Data Science (In Progress) \quad B.S. Computer Science (May 2026)
+\quad Undergrad GPA: 3.7/4.0\\
+Honors: Dean's List (2023--2026), Regents Scholarship\\
+Leadership: Co-President, Cricket Club (200+ members)
+
+\heading{PROFESSIONAL EXPERIENCE}
+\textbf{Northwind Health} -- Software Developer Intern \hfill June -- Aug 2025
+\begin{itemize}
+  \item Shipped 20+ production tickets on a 20M+ member mobile platform using React Native and Java Spring Boot.
+  \item Revamped the provider search UI with the Google Maps API, cutting average search time by 35 percent.
+\end{itemize}
+
+\heading{KEY PROJECTS}
+\textbf{Routewise} -- a transit planner used by 400 people each week, built with Python and PostgreSQL.
+
+\heading{SKILLS \& AWARDS}
+Python, Java, React, TypeScript, PostgreSQL, Docker, AWS
+\end{document}

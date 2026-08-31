@@ -1,0 +1,36 @@
+% A sidebar layout. Plain extraction interleaves the two columns; layout mode
+% has to keep them apart. The location lives in the sidebar, not the header.
+\documentclass[letterpaper,11pt]{article}
+\usepackage[margin=0.55in]{geometry}
+\usepackage{enumitem}
+\pagestyle{empty}
+\setlist[itemize]{leftmargin=*,nosep,label={--}}
+\newcommand{\heading}[1]{\vspace{5pt}\textbf{#1}\vspace{3pt}\hrule\vspace{3pt}}
+\begin{document}
+\noindent\begin{minipage}[t]{0.32\textwidth}
+\raggedright
+{\large \textbf{Marcus Webb}}\\[6pt]
+Austin, TX\\
+(512) 555-0117\\
+marcus.webb@example.com\\
+github.com/marcuswebb\\[8pt]
+\textbf{SKILLS}\\
+Go, Python, Kubernetes,\\
+Terraform, PostgreSQL
+\end{minipage}\hfill
+\begin{minipage}[t]{0.63\textwidth}
+\heading{EXPERIENCE}
+\textbf{Halcyon Systems} -- Senior Platform Engineer \hfill 2021 -- Present
+\begin{itemize}
+  \item Led the migration of 40 services onto Kubernetes with no customer-visible downtime.
+\end{itemize}
+\textbf{Bellwether Labs} -- Backend Engineer \hfill 2018 -- 2021
+\begin{itemize}
+  \item Built the billing pipeline that processes 3M events a day.
+\end{itemize}
+
+\heading{EDUCATION}
+\textbf{University of Texas at Austin} \hfill 2018\\
+B.S. Computer Science
+\end{minipage}
+\end{document}

@@ -1,0 +1,19 @@
+{
+  "note": "The easy case, on purpose: bare headings, one column, no right-aligned dates. A regression guard, so that loosening the heading patterns and adding column splitting cannot quietly break the layout that always worked.",
+  "identity": {
+    "first_name": "Dana",
+    "last_name": "Ortiz",
+    "email": "dana.ortiz@example.com",
+    "phone": "(303) 555-0192",
+    "city": "Denver",
+    "state": "CO",
+    "school": "Colorado State University",
+    "degree": "B.A.",
+    "gpa": "3.4",
+    "grad_year": "2019"
+  },
+  "locations": "Denver, CO",
+  "xfail": {
+    "discipline": "Economics. _discipline_from_text matches a fixed list of four disciplines, so anything outside computing comes back empty. The LLM overlay fills this in production; the heuristic alone cannot."
+  }
+}
