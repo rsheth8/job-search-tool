@@ -3,7 +3,7 @@ chosen user id. Safe against a populated production DB: never overwrites existin
 rows and never collides with the id sequence.
 
     # on Fly (brain.db already uploaded to the volume):
-    flyctl ssh console -a job-search-tool \\
+    fly ssh console -a job-search-tool \\
         -C "python -m scripts.import_user /data/brain.db U07XXXXX"
 """
 from __future__ import annotations
@@ -18,15 +18,17 @@ def main(argv: list[str]) -> int:
         print(__doc__)
         return 2
     in_path, dst_user = argv
-    added = import_user(in_path, dst_user)
-    if not added:
-        print(f"Nothing imported (already present, or empty file).")
+    t = import_user(in_path, dst_user)
+    if not t.counts:
+        print("Nothing imported (already present, or empty file).")
         return 0
     print(f"Imported {in_path} -> '{dst_user}':")
-    for table, n in sorted(added.items()):
+    for table, n in sorted(t.counts.items()):
         print(f"  {table:24} {n}")
-    print(f"Total rows added: {sum(added.values())}")
-    return 0
+    print(f"Total rows added: {t.rows}")
+    for table, why in sorted(t.skipped_tables.items()):
+        print(f"  skipped {table}: {why}")
+    return 0 if t.complete else 1
 
 
 if __name__ == "__main__":

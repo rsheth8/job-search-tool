@@ -20,16 +20,18 @@ def main(argv: list[str]) -> int:
         print(__doc__)
         return 2
     user_id, out_path = argv
-    counts = export_user(user_id, out_path)
-    if not counts:
+    t = export_user(user_id, out_path)
+    if not t.counts:
         print(f"No brain data found for '{user_id}'.")
         return 0
     print(f"Exported '{user_id}' -> {out_path}:")
-    for table, n in sorted(counts.items()):
+    for table, n in sorted(t.counts.items()):
         print(f"  {table:24} {n}")
-    print(f"Total rows: {sum(counts.values())}\n"
-          f"Ship {out_path} to the target machine, then run scripts.import_user.")
-    return 0
+    print(f"Total rows: {t.rows}")
+    for table, why in sorted(t.skipped_tables.items()):
+        print(f"  skipped {table}: {why}")
+    print(f"Ship {out_path} to the target machine, then run scripts.import_user.")
+    return 0 if t.complete else 1
 
 
 if __name__ == "__main__":

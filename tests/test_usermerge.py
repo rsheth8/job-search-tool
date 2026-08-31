@@ -113,9 +113,11 @@ def test_export_import_moves_trained_brain_to_a_fresh_db(tmp_path):
 
     _train_local()
     brain = str(tmp_path / "brain.db")
-    counts = usermerge.export_user("local", brain)
+    exported = usermerge.export_user("local", brain)
+    counts = exported.counts
     assert counts["training_labels"] == 12 and counts["reranker_models"] == 1
     assert counts["job_search_profile"] == 1
+    assert exported.complete, exported.skipped_tables
 
     # A separate, schema-complete "production" DB.
     prod = str(tmp_path / "prod.db")
@@ -124,8 +126,10 @@ def test_export_import_moves_trained_brain_to_a_fresh_db(tmp_path):
     pc.executescript(SCHEMA)
     _migrate_schema(pc)
 
-    added = usermerge.import_user(brain, "U07LVJVD4PL", conn=pc)
+    imported = usermerge.import_user(brain, "U07LVJVD4PL", conn=pc)
+    added = imported.counts
     assert added["training_labels"] == 12 and added["reranker_models"] == 1
+    assert imported.complete, imported.skipped_tables
 
     # The model, profile, identity, and labels all landed under the target id.
     model = pc.execute("SELECT model_json FROM reranker_models WHERE user_id = ?",
