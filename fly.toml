@@ -6,6 +6,15 @@
 app = 'job-search-tool'
 primary_region = 'iad'
 
+# Swap, so a memory spike degrades into slowness instead of a SIGKILL. The LaTeX
+# compile is short-lived and bursty — exactly the shape swap handles well.
+#
+# This MUST stay above the first table header. TOML assigns a bare key to the
+# most recent [table], so written after [env] it silently became an environment
+# variable named "swap_size_mb": `fly config validate` passed, the deploy
+# succeeded, and the machine came up with SwapTotal: 0.
+swap_size_mb = 512
+
 [build]
 [env]
   DATABASE_PATH = '/data/job_search.db'
@@ -35,12 +44,6 @@ primary_region = 'iad'
   LLM_MAX_CALLS_PER_USER_PER_DAY = '80'
   APPLY_CORS_ORIGINS = '*'
   APPLY_CORS_ORIGIN_REGEX = ''
-
-# Swap, so a spike degrades into slowness instead of a SIGKILL. The LaTeX
-# compile is short-lived and bursty — exactly the shape swap handles well — and
-# being paged out for a second is strictly better than losing the process, the
-# request, and every other in-flight request with it.
-swap_size_mb = 512
 
 [[mounts]]
   source = 'data'
