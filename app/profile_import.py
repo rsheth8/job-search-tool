@@ -89,6 +89,20 @@ def _find_city_state(text: str) -> tuple[str, str] | None:
 
 
 _GRAD_YEAR_RE = re.compile(r"\b(20[1-3]\d)\b")
+#: "Aug 2023 - Present". The year is when they *started*, and the line is
+#: explicitly saying they have not finished, so it is not a graduation year.
+_ONGOING_RE = re.compile(
+    r"\b(20[1-3]\d)\s*(?:[-\u2010-\u2015]|\bto\b|\buntil\b)\s*"
+    r"(?:present|current|now|ongoing)\b",
+    re.I,
+)
+#: Years stated as the end of a degree, in descending order of how much the
+#: resume is actually promising. Anything here beats counting years.
+_GRAD_LABELLED = (
+    r"expected\s+(?:[A-Za-z]+\s+)?(20[1-3]\d)",
+    r"(?:graduat(?:es|ing|ion)|class of|degree conferred)"
+    r"[^\n0-9]{0,16}(20[1-3]\d)",
+)
 _DEGREE_RE = re.compile(
     r"\b((?:B\.?S\.?|B\.?A\.?|M\.?S\.?|M\.?Eng\.?|Ph\.?D\.?|MBA|"
     r"Bachelor(?:'s)?(?: of [^,\n]+)?|Master(?:'s)?(?: of [^,\n]+)?)"
@@ -598,27 +612,51 @@ def _discipline_from_text(blob: str) -> str:
     return ""
 
 
+def _candidate_years(text: str) -> list[str]:
+    """Years in ``text``, minus any that only ever open an unfinished range."""
+    if not text:
+        return []
+    skip = [m.span(1) for m in _ONGOING_RE.finditer(text)]
+    return [
+        m.group(1) for m in _GRAD_YEAR_RE.finditer(text)
+        if not any(lo <= m.start() < hi for lo, hi in skip)
+    ]
+
+
 def _grad_year_from_text(edu: str, blob: str) -> str:
+    """When the degree *ends* -- the latest education year, not the first one.
+
+    An explicit promise ("expected May 2026", "Class of 2027") wins outright.
+    Failing that the answer is the largest year in the education section,
+    because graduation is the last thing that happens in one.
+
+    This used to take the first month-labelled year it found, which on the
+    commonest header there is -- an enrolment range on the school line and the
+    graduation date beside the degree --
+
+        University of Minnesota, Minneapolis, MN    Aug 2023 - Present
+        B.S. Computer Science(May 2026)
+
+    returned 2023, the year he *started*. That is not a cosmetic error: it went
+    onto applications as a graduation year, and _roles_and_seniority reads the
+    same field to decide whether someone is a new grad, so it also mis-sorted
+    every job he was shown.
+
+    A year that only ever opens an unfinished range is dropped rather than
+    guessed from: "Aug 2023 - Present" with no end date means we do not know
+    when they graduate, and an empty field the user fills in beats a wrong one
+    autofilled onto a real application.
+    """
     search = edu or blob
-    expected = re.search(
-        r"expected\s+(?:[A-Za-z]+\s+)?(20[1-3]\d)", search, re.I
-    )
-    if expected:
-        return expected.group(1)
-    labeled = re.search(
-        r"(?:expected|graduat(?:ing|ion)|class of|"
-        r"(?:jan(?:uary)?|may|june|july|aug(?:ust)?|dec(?:ember)?))\s+"
-        r"(20[1-3]\d)",
-        search,
-        re.I,
-    )
-    if labeled:
-        return labeled.group(1)
-    years = _GRAD_YEAR_RE.findall(search)
-    if years:
-        return max(years)
-    years = _GRAD_YEAR_RE.findall(blob)
-    return max(years) if years else ""
+    for pattern in _GRAD_LABELLED:
+        hits = re.findall(pattern, search, re.I)
+        if hits:
+            return max(hits)
+    for source in (search, blob):
+        years = _candidate_years(source)
+        if years:
+            return max(years)
+    return ""
 
 
 def _roles_and_seniority(blob: str, grad_year: str) -> dict:
