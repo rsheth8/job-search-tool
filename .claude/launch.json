@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "app",
-      "runtimeExecutable": "/Users/rahilsheth/Documents/job-search-tool/.venv/bin/python",
+      "runtimeExecutable": ".venv/bin/python",
       "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--reload", "--port", "8000"],
       "port": 8000
     }
