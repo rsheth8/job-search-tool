@@ -180,7 +180,7 @@ Three rules in there that were each a real wrong-answer bug:
 - **`JOB_ALERT_USER`:** your `usr_…` (or empty → busiest user). Digests land in chat.
 - **`FEEDBACK_NOTIFY_USER`:** your `usr_…` — feedback pings you in chat.
 - Tools: `scripts.migrate_user`, `scripts.export_user`, `scripts.import_user` (move a
-  "brain" across DBs). On Fly: `flyctl ssh console -C "cd /app && python -m scripts.X …"`.
+  "brain" across DBs). On Fly: `flyctl ssh console -C "python -m scripts.X …"`.
 
 ---
 
@@ -238,9 +238,9 @@ Three rules in there that were each a real wrong-answer bug:
    and prints what Apple actually said:
 
    ```
-   fly ssh console -a job-search-tool -C "cd /app && python -m scripts.push_check --list"
-   fly ssh console -a job-search-tool -C "cd /app && python -m scripts.push_check --user usr_… --check"
-   fly ssh console -a job-search-tool -C "cd /app && python -m scripts.push_check --user usr_…"
+   fly ssh console -a job-search-tool -C "python -m scripts.push_check --list"
+   fly ssh console -a job-search-tool -C "python -m scripts.push_check --user usr_… --check"
+   fly ssh console -a job-search-tool -C "python -m scripts.push_check --user usr_…"
    ```
 
    `--check` inspects and stops; without it one alert goes out. Exit code is 0
@@ -366,4 +366,9 @@ release, and macOS runners bill at 10x.
 - **Use `.venv/bin/python`**, not bare `python`.
 - **Brain export:** `posting_summaries` is keyed by `source:external_id` — re-export
   after `usermerge.py` fixes if restoring an old brain.
-- **Run scripts on Fly from `/app`:** SSH lands in `/`; `cd /app && python -m scripts.X`.
+- **Run scripts on Fly:** `fly ssh console -C` **execs the binary directly** —
+  there is no shell, so `cd`, `&&` and globs are not available and `cd /app && …`
+  fails with `exec: "cd": executable file not found in $PATH`. It also starts in
+  the image's WORKDIR, which is already `/app`, so none of that is needed:
+  `fly ssh console -a job-search-tool -C "python -m scripts.X …"`. If you do need
+  shell syntax, ask for one explicitly: `-C "/bin/sh -c 'a && b'"`.

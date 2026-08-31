@@ -11,9 +11,9 @@ one that nobody happened to notify.
 
 This runs *on the machine*, where the secrets and the device tokens both live:
 
-    fly ssh console -a job-search-tool -C "cd /app && python -m scripts.push_check --list"
-    fly ssh console -a job-search-tool -C "cd /app && python -m scripts.push_check --user usr_abc --check"
-    fly ssh console -a job-search-tool -C "cd /app && python -m scripts.push_check --user usr_abc"
+    fly ssh console -a job-search-tool -C "python -m scripts.push_check --list"
+    fly ssh console -a job-search-tool -C "python -m scripts.push_check --user usr_abc --check"
+    fly ssh console -a job-search-tool -C "python -m scripts.push_check --user usr_abc"
 
 `--check` inspects and stops. Without it, one real notification is sent to every
 device registered to that user, and the APNs reply for each is printed — including

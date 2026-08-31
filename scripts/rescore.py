@@ -19,7 +19,7 @@ Usage:
     .venv/bin/python -m scripts.rescore --all --min-change 0.05
 
 On Fly:
-    fly ssh console -a job-search-tool -C "cd /app && python -m scripts.rescore --all"
+    fly ssh console -a job-search-tool -C "python -m scripts.rescore --all"
 """
 from __future__ import annotations
 
