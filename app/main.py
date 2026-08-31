@@ -134,7 +134,10 @@ def apply_data(request: Request, user: str | None = None) -> dict:
         return {"why": detail["line"], "reasons": detail["reasons"],
                 "concerns": detail["concerns"]}
 
-    staged = {it["posting_id"] for it in apply_queue.list_queue(uid)}
+    filed = apply_queue.list_queue(uid)
+    # Everything ever staged, submitted included, so a job already applied to
+    # cannot come back round as a fresh match.
+    staged = {it["posting_id"] for it in filed}
     queued = []
     for i, r in enumerate(
         r for r in jobstore.list_review_queue(uid) if r["id"] not in staged
@@ -148,8 +151,12 @@ def apply_data(request: Request, user: str | None = None) -> dict:
             "fresh": shortlist.is_fresh(r["posted_at"]),
             **explain(r["id"], r["relevance_score"]),
         })
+    # ...but a submitted item belongs on the Filed pane, not in the queue. It
+    # used to stay, and since the phone reads `queue.first` as "up next", the
+    # job you had just applied to sat at the top of the dashboard and the queue
+    # never advanced.
     queue = [{**it, **explain(it["posting_id"], it.get("score"))}
-             for it in apply_queue.list_queue(uid)]
+             for it in filed if it["status"] != "submitted"]
     return {
         "user": uid, "queued": queued, "queue": queue,
         "discovery": discovery.search_status(uid),
@@ -176,27 +183,92 @@ async def apply_discover(request: Request) -> dict:
     return {"user": uid, **discovery.kick(uid, force=force)}
 
 
+def _application_json(r) -> dict:
+    return {
+        "id": r["id"],
+        "company": r["company"],
+        "role": r["role"],
+        "status": r["status"],
+        "applied_at": r["applied_at"],
+        "next_follow_up_at": r["next_follow_up_at"],
+    }
+
+
 @app.get("/apply/applications")
 def apply_applications(request: Request, user: str | None = None) -> dict:
-    """Applications already filed — the tracker half of the Apply tab."""
-    from . import store
+    """Applications already filed — the tracker half of the Apply tab.
+
+    ``statuses`` is the canonical stage list, so the phone can offer a picker
+    without hardcoding a vocabulary that lives on the server.
+    """
+    from . import intents, store
 
     uid = _resolve_user(request, user)
     rows = store.list_applications(uid, limit=50)
     return {
         "user": uid,
-        "applications": [
-            {
-                "id": r["id"],
-                "company": r["company"],
-                "role": r["role"],
-                "status": r["status"],
-                "applied_at": r["applied_at"],
-                "next_follow_up_at": r["next_follow_up_at"],
-            }
-            for r in rows
-        ],
+        "applications": [_application_json(r) for r in rows],
+        "statuses": list(intents.CANONICAL_STATUSES),
     }
+
+
+# The store has been able to edit, restage and delete an application all along;
+# nothing exposed it, so a filed row was permanent from the phone -- including a
+# duplicate the user could see but not remove.
+
+
+@app.post("/apply/applications/status")
+async def apply_application_status(request: Request) -> dict:
+    """Move a filed application to another stage."""
+    from . import store
+
+    body = await request.json()
+    uid = _resolve_user(request, body.get("user"))
+    status = (body.get("status") or "").strip()
+    if not status:
+        return {"ok": False, "error": "status is required"}
+    # Free text is allowed on purpose, the way the SMS router allows it: store
+    # something useful rather than reject a stage we have not thought of.
+    row = store.update_status(uid, int(body["application_id"]), status)
+    if row is None:
+        return {"ok": False}
+    return {"ok": True, "application": _application_json(row)}
+
+
+@app.post("/apply/applications/edit")
+async def apply_application_edit(request: Request) -> dict:
+    """Correct the company or role on a filed application."""
+    from . import store
+
+    body = await request.json()
+    uid = _resolve_user(request, body.get("user"))
+    fields: dict = {}
+    for key in ("company", "role"):
+        if body.get(key) is not None:
+            value = str(body[key]).strip()
+            if not value:
+                return {"ok": False, "error": f"{key} cannot be empty"}
+            fields[key] = value
+    if not fields:
+        return {"ok": False, "error": "nothing to change"}
+    row = store.edit_application(uid, int(body["application_id"]), **fields)
+    if row is None:
+        return {"ok": False}
+    return {"ok": True, "application": _application_json(row)}
+
+
+@app.post("/apply/applications/delete")
+async def apply_application_delete(request: Request) -> dict:
+    """Remove a filed application.
+
+    The posting keeps its ``applied`` status: deleting a tracker row you filed
+    by mistake should not put a job you really did apply to back in the queue.
+    """
+    from . import store
+
+    body = await request.json()
+    uid = _resolve_user(request, body.get("user"))
+    return {"ok": store.delete_application(uid, int(body["application_id"]))}
 
 
 @app.get("/apply/knowledge")
@@ -315,11 +387,17 @@ async def apply_applied(request: Request) -> dict:
     posting = jobstore.get_posting(uid, pid)
     if posting is None:
         return {"ok": False}
-    store.create_application(uid, posting["company"] or "Unknown",
-                             posting["title"] or "Role", source="mobile")
+    # create_application is a plain INSERT with no natural key, so tapping
+    # Filed twice used to file the same job twice. The posting's own status is
+    # the record of whether one was logged already -- by this route, by the
+    # agent, or by jobstore matching an application it was told about over SMS.
+    duplicate = (posting["status"] or "") == "applied"
+    if not duplicate:
+        store.create_application(uid, posting["company"] or "Unknown",
+                                 posting["title"] or "Role", source="mobile")
     jobstore.mark_posting_status(uid, posting["id"], "applied")
     apply_queue.mark(uid, pid, "submitted")
-    return {"ok": True}
+    return {"ok": True, "duplicate": duplicate}
 
 
 @app.post("/apply/remove")

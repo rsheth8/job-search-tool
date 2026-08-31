@@ -172,7 +172,13 @@ def test_endpoints_stage_review_and_mark():
 
     assert c.post("/apply/mark", json={"user": "u1", "posting_id": pid,
                                        "status": "submitted"}).json()["ok"]
-    assert c.get("/apply/data?user=u1").json()["queue"][0]["status"] == "submitted"
+    # A submitted item leaves the queue -- it belongs on the Filed pane. This
+    # used to assert queue[0]["status"] == "submitted", which encoded the bug:
+    # the phone reads queue.first as "up next", so the job you had just applied
+    # to stayed at the top of the dashboard and nothing advanced.
+    after = c.get("/apply/data?user=u1").json()
+    assert [q["posting_id"] for q in after["queue"]] == []
+    assert [q["posting_id"] for q in after["queued"]] == []  # nor re-offered
 
 
 def test_applied_logs_application_and_marks_posting():

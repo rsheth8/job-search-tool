@@ -207,10 +207,35 @@ struct APIClient {
         _ = try? await request("POST", "/apply/discover", body: ["force": force])
     }
 
-    func fetchApplications() async throws -> [FiledApplication] {
+    func fetchApplications() async throws -> (apps: [FiledApplication], statuses: [String]) {
         let data = try await request("GET", "/apply/applications?user=\(encodedUser)")
         let decoded = try JSONDecoder().decode(ApplicationsResponse.self, from: data)
-        return decoded.applications ?? []
+        return (decoded.applications ?? [], decoded.statuses ?? [])
+    }
+
+    /// Remove a filed application — the way back from a double-tap on Filed.
+    func deleteApplication(id: Int) async throws {
+        _ = try await request("POST", "/apply/applications/delete",
+                              body: ["user": config.user, "application_id": id])
+    }
+
+    /// Move a filed application to another stage.
+    @discardableResult
+    func setApplicationStatus(id: Int, status: String) async throws -> FiledApplication? {
+        let data = try await request("POST", "/apply/applications/status",
+                                     body: ["user": config.user,
+                                            "application_id": id, "status": status])
+        return try? JSONDecoder().decode(ApplicationUpdateResponse.self, from: data).application
+    }
+
+    /// Correct the company or role. Omitted fields are left alone.
+    @discardableResult
+    func editApplication(id: Int, company: String?, role: String?) async throws -> FiledApplication? {
+        var body: [String: Any] = ["user": config.user, "application_id": id]
+        if let company { body["company"] = company }
+        if let role { body["role"] = role }
+        let data = try await request("POST", "/apply/applications/edit", body: body)
+        return try? JSONDecoder().decode(ApplicationUpdateResponse.self, from: data).application
     }
 
     /// Stage a match so its application package gets prepared.
