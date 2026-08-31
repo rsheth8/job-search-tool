@@ -17,6 +17,9 @@ struct QueueView: View {
     @State private var pendingPass: QueueItem?
     @State private var pane = 0
     @State private var filed: [FiledApplication] = []
+    @State private var stages: [String] = FiledApplication.defaultStages
+    @State private var editingApp: FiledApplication?
+    @State private var pendingDelete: FiledApplication?
     @State private var showAll = false
     @State private var tapeFocus: Int?
     @State private var searching = false
@@ -100,6 +103,29 @@ struct QueueView: View {
                 Button("Cancel", role: .cancel) { pendingPass = nil }
             } message: {
                 Text("It won’t appear in matches again.")
+            }
+            .confirmationDialog(
+                "Delete this application?",
+                isPresented: Binding(
+                    get: { pendingDelete != nil },
+                    set: { if !$0 { pendingDelete = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    if let app = pendingDelete {
+                        Task { await deleteFiled(app) }
+                    }
+                    pendingDelete = nil
+                }
+                Button("Cancel", role: .cancel) { pendingDelete = nil }
+            } message: {
+                Text("Removes it from your tracker. The job stays applied, so it will not come back as a match.")
+            }
+            .sheet(item: $editingApp) { app in
+                EditApplicationSheet(app: app) { company, role in
+                    await saveEdit(app, company: company, role: role)
+                }
             }
             .onChange(of: path.count) { _, count in
                 chrome.dockHidden = count > 0
@@ -326,6 +352,8 @@ struct QueueView: View {
                         filedRow(app)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 12)
+                            .contentShape(Rectangle())
+                            .contextMenu { filedMenu(app) }
                             .staggerAppear(min(i, 8))
                     }
                 }
@@ -442,6 +470,100 @@ struct QueueView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// Long-press a filed row. There is no List here (the rows live in a
+    /// GroupedSurface), so swipe actions are not available -- the matches rows
+    /// use a context menu for the same reason.
+    @ViewBuilder
+    private func filedMenu(_ app: FiledApplication) -> some View {
+        Menu {
+            ForEach(stages, id: \.self) { stage in
+                Button {
+                    Task { await setStage(app, to: stage) }
+                } label: {
+                    if app.status == stage {
+                        Label(stage, systemImage: "checkmark")
+                    } else {
+                        Text(stage)
+                    }
+                }
+            }
+        } label: {
+            Label("Change stage", systemImage: "arrow.triangle.branch")
+        }
+        Button { editingApp = app } label: {
+            Label("Edit company or role", systemImage: "pencil")
+        }
+        Button(role: .destructive) { pendingDelete = app } label: {
+            Label("Delete", systemImage: "trash")
+        }
+    }
+
+    private func setStage(_ app: FiledApplication, to stage: String) async {
+        guard app.status != stage else { return }
+        do {
+            let updated = try await api.setApplicationStatus(id: app.id, status: stage)
+            await MainActor.run {
+                applyEdit(updated ?? app, fallbackStatus: stage)
+                Theme.notify(.success)
+                flashToast("Moved to \(stage)")
+            }
+        } catch {
+            await MainActor.run { flashToast(APIClient.userMessage(for: error)) }
+        }
+    }
+
+    private func saveEdit(_ app: FiledApplication, company: String, role: String) async {
+        let newCompany = company == (app.company ?? "") ? nil : company
+        let newRole = role == (app.role ?? "") ? nil : role
+        guard newCompany != nil || newRole != nil else { return }
+        do {
+            let updated = try await api.editApplication(
+                id: app.id, company: newCompany, role: newRole
+            )
+            await MainActor.run {
+                if let updated { applyEdit(updated) }
+                Theme.notify(.success)
+                flashToast("Saved")
+            }
+        } catch {
+            await MainActor.run { flashToast(APIClient.userMessage(for: error)) }
+        }
+    }
+
+    private func deleteFiled(_ app: FiledApplication) async {
+        // Optimistic: the row goes now, and comes back if the server refuses.
+        await MainActor.run {
+            withAnimation(Theme.springSoft) { filed.removeAll { $0.id == app.id } }
+        }
+        do {
+            try await api.deleteApplication(id: app.id)
+            await MainActor.run {
+                Theme.notify(.success)
+                flashToast("Deleted")
+            }
+        } catch {
+            await MainActor.run {
+                flashToast(APIClient.userMessage(for: error))
+            }
+            await load()
+        }
+    }
+
+    /// Replace one row in place, so editing does not reshuffle the list.
+    private func applyEdit(_ updated: FiledApplication, fallbackStatus: String? = nil) {
+        guard let i = filed.firstIndex(where: { $0.id == updated.id }) else { return }
+        withAnimation(Theme.springSoft) {
+            filed[i] = FiledApplication(
+                id: updated.id,
+                company: updated.company ?? filed[i].company,
+                role: updated.role ?? filed[i].role,
+                status: updated.status ?? fallbackStatus ?? filed[i].status,
+                applied_at: updated.applied_at ?? filed[i].applied_at,
+                next_follow_up_at: updated.next_follow_up_at
+            )
+        }
     }
 
     private func filedDate(_ iso: String?) -> String? {
@@ -629,11 +751,13 @@ struct QueueView: View {
         defer { loading = false }
         do {
             let data = try await api.fetchData(refresh: refresh)
-            let apps = (try? await api.fetchApplications()) ?? []
+            let filedResult = try? await api.fetchApplications()
+            let apps = filedResult?.apps ?? []
             withAnimation(Theme.springSoft) {
                 queue = data.queue
                 matches = data.matches
                 filed = apps
+                if let served = filedResult?.statuses, !served.isEmpty { stages = served }
                 searching = data.searching
             }
             chrome.readyCount = data.queue.count
@@ -676,6 +800,70 @@ private struct TapePhaseEffect: ViewModifier {
             view
                 .scaleEffect(freeze || phase.isIdentity ? 1 : 0.92)
                 .opacity(freeze || phase.isIdentity ? 1 : 0.7)
+        }
+    }
+}
+
+/// Correct the company or role on an application already filed.
+///
+/// Only what changed is sent: the endpoint leaves omitted fields alone, so a
+/// blank box is never mistaken for "clear this".
+private struct EditApplicationSheet: View {
+    let app: FiledApplication
+    let onSave: (String, String) async -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var company: String
+    @State private var role: String
+    @State private var saving = false
+
+    init(app: FiledApplication, onSave: @escaping (String, String) async -> Void) {
+        self.app = app
+        self.onSave = onSave
+        _company = State(initialValue: app.company ?? "")
+        _role = State(initialValue: app.role ?? "")
+    }
+
+    private var trimmedCompany: String {
+        company.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private var trimmedRole: String {
+        role.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private var canSave: Bool {
+        !saving && !trimmedCompany.isEmpty && !trimmedRole.isEmpty
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Company") {
+                    TextField("Company", text: $company)
+                        .textInputAutocapitalization(.words)
+                        .autocorrectionDisabled()
+                }
+                Section("Role") {
+                    TextField("Role", text: $role)
+                        .textInputAutocapitalization(.words)
+                }
+            }
+            .navigationTitle("Edit application")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        saving = true
+                        Task {
+                            await onSave(trimmedCompany, trimmedRole)
+                            dismiss()
+                        }
+                    }
+                    .disabled(!canSave)
+                }
+            }
         }
     }
 }

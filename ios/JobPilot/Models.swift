@@ -232,4 +232,22 @@ struct FiledApplication: Codable, Identifiable, Hashable {
 
 struct ApplicationsResponse: Codable {
     let applications: [FiledApplication]?
+    /// Canonical stages, served with the list so the picker is not a second
+    /// copy of a vocabulary that lives on the server.
+    let statuses: [String]?
+}
+
+extension FiledApplication {
+    /// Picker vocabulary for a server that predates `statuses` on the list
+    /// response. Kept in step with `intents.CANONICAL_STATUSES`; the served
+    /// list wins whenever there is one.
+    static let defaultStages = ["Applied", "OA received", "Phone screen",
+                                "Interview", "Onsite", "Offer", "Rejected",
+                                "Ghosted"]
+}
+
+/// `{"ok": true, "application": {...}}` from the edit/status endpoints.
+struct ApplicationUpdateResponse: Codable {
+    let ok: Bool?
+    let application: FiledApplication?
 }
