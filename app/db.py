@@ -350,6 +350,9 @@ CREATE TABLE IF NOT EXISTS users (
     apple_sub       TEXT UNIQUE,
     email           TEXT,
     display_name    TEXT,
+    -- scrypt hash for email accounts; NULL for Sign in with Apple rows.
+    -- Also ALTERed in for existing databases, like every other column here.
+    password_hash   TEXT,
     legacy_user_id  TEXT,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
@@ -388,8 +391,9 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_llm_usage_user_day ON llm_usage(user_id, day);
-CREATE INDEX IF NOT EXISTS idx_llm_usage_feature
-    ON llm_usage(user_id, day, feature);
+-- idx_llm_usage_feature is created in _migrate_schema, not here: this script
+-- runs before the migration that adds `feature`, so on an existing database
+-- the index would reference a column that does not exist yet.
 
 -- Invite-only beta feedback from the iOS app.
 CREATE TABLE IF NOT EXISTS feedback (
@@ -502,7 +506,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE llm_usage ADD COLUMN feature TEXT NOT NULL DEFAULT ''"
         )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_llm_usage_feature "
-            "ON llm_usage(user_id, day, feature)"
-        )
+    # Unconditional, and after the ALTER: a fresh database gets `feature` from
+    # SCHEMA and an existing one gets it from the line above, so this is the one
+    # place that creates the index and both paths end up with the same shape.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_llm_usage_feature "
+        "ON llm_usage(user_id, day, feature)"
+    )
