@@ -24,7 +24,7 @@ Run with the project venv:
 # Export local training data, import on Fly under your Apple user id:
 DATABASE_PATH=job_search.db .venv/bin/python -m scripts.export_user local brain.db
 fly ssh sftp put -a job-search-tool brain.db /data/brain.db
-fly ssh console -a job-search-tool -C "cd /app && python -m scripts.import_user /data/brain.db usr_abc123"
+fly ssh console -a job-search-tool -C "python -m scripts.import_user /data/brain.db usr_abc123"
 
 # Merge split accounts:
 .venv/bin/python -m scripts.migrate_user local usr_abc123 --dry-run
@@ -42,4 +42,8 @@ fly ssh console -a job-search-tool -C "cd /app && python -m scripts.import_user 
     --token "$APPLY_API_TOKEN" --spend
 ```
 
-On Fly, SSH lands in `/` — always `cd /app && python -m scripts.X …`.
+On Fly, `fly ssh console -C` execs the binary directly: there is no shell, so
+`cd /app && …` fails with `exec: "cd": executable file not found in $PATH`. It
+already starts in the image's WORKDIR (`/app`), so just run the module:
+`fly ssh console -a job-search-tool -C "python -m scripts.X …"`. Need shell
+syntax? Ask for a shell: `-C "/bin/sh -c 'a && b'"`.

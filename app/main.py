@@ -887,14 +887,17 @@ def health() -> dict:
             ("APNS_KEY_ID", s.apns_key_id),
             ("APNS_TEAM_ID", s.apns_team_id),
             ("APNS_BUNDLE_ID", s.apns_bundle_id),
-            ("APNS_KEY_PATH", s.apns_key_path),
         ) if not value.strip()
     )
+    # The key can arrive either way, so neither name alone is "missing".
+    if not s.apns_key_source:
+        apns_missing.append("APNS_KEY_PEM (or APNS_KEY_PATH)")
     info["push"] = {
         "enabled": s.push_enabled,
         "active": s.push_active,
         "sandbox": s.apns_use_sandbox,
-        "missing": apns_missing,
+        "key_source": s.apns_key_source,
+        "missing": sorted(apns_missing),
     }
 
     info["dependencies"] = _dependency_report()
@@ -918,7 +921,7 @@ def _dependency_report() -> dict:
     Resume tailoring and cover letters are on by default and need both pypdf
     and tectonic. Without them the app logs and skips -- correct, but silent, so
     "why did resumes stop working" was only answerable from log archaeology.
-    Push needs pyjwt + cryptography for the APNs token.
+    Push needs pyjwt + cryptography to sign the APNs token, and h2 to send it.
     """
     import importlib.util
 
@@ -936,11 +939,16 @@ def _dependency_report() -> dict:
     # bare which("tectonic") would report the deploy image's binary as missing.
     pypdf, tectonic = have("pypdf"), resolve_tectonic() is not None
     jwt_ok, crypto_ok = have("jwt"), have("cryptography")
+    # APNs is HTTP/2 only. Without h2, httpx raises inside the per-device try in
+    # push.send, which swallows it -- so every notification silently fails to
+    # deliver while the config looks perfect. Name it here.
+    h2_ok = have("h2")
     report = {
         "pypdf": pypdf,
         "tectonic": tectonic,
         "pyjwt": jwt_ok,
         "cryptography": crypto_ok,
+        "h2": h2_ok,
     }
     missing = []
     if (s.resume_tailor_enabled or s.cover_letter_enabled):
@@ -950,6 +958,8 @@ def _dependency_report() -> dict:
             missing.append("tectonic (resume/cover PDFs cannot be compiled)")
     if s.push_enabled and not (jwt_ok and crypto_ok):
         missing.append("pyjwt+cryptography (push notifications cannot be signed)")
+    if s.push_enabled and not h2_ok:
+        missing.append("h2 (APNs is HTTP/2 only; deliveries will silently fail)")
     report["missing"] = missing
     return report
 

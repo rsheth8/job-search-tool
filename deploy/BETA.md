@@ -74,7 +74,7 @@ from a good one, since every paid call site fails open silently.
 
 ```bash
 # Read recent feedback from the volume:
-fly ssh console -a job-search-tool -C "cd /app && python -c \"
+fly ssh console -a job-search-tool -C "python -c \"
 from app.feedback import list_recent
 from pprint import pprint
 pprint(list_recent(20))
