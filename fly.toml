@@ -36,6 +36,12 @@ primary_region = 'iad'
   APPLY_CORS_ORIGINS = '*'
   APPLY_CORS_ORIGIN_REGEX = ''
 
+# Swap, so a spike degrades into slowness instead of a SIGKILL. The LaTeX
+# compile is short-lived and bursty — exactly the shape swap handles well — and
+# being paged out for a second is strictly better than losing the process, the
+# request, and every other in-flight request with it.
+swap_size_mb = 512
+
 [[mounts]]
   source = 'data'
   destination = '/data'
@@ -56,4 +62,10 @@ primary_region = 'iad'
 
 [[vm]]
   size = 'shared-cpu-1x'
-  memory = '512mb'
+  # 512mb OOM-killed uvicorn mid-request while a tester was preparing an
+  # application. Tailoring runs a tectonic LaTeX compile, which is the largest
+  # allocation this app ever makes, and the kernel took the whole process down
+  # (anon-rss 302MB of ~470MB usable) — the machine rebooted and the request
+  # died with it. It is intermittent by nature: the same endpoint returned 200
+  # a minute later.
+  memory = '1gb'
