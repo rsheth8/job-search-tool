@@ -42,6 +42,6 @@ def test_list_postings_orders_by_relevance_and_filters_status():
 
 def test_mark_status_and_counts():
     row = jobstore.save_posting("u", _posting("7"), status="new")
-    jobstore.mark_posting_status(row["id"], "applied")
+    jobstore.mark_posting_status("u", row["id"], "applied")
     assert jobstore.get_posting("u", row["id"])["status"] == "applied"
     assert jobstore.counts_by_status("u") == {"applied": 1}

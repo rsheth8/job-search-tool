@@ -124,7 +124,7 @@ def _apply_parsed(user_id: str, p, raw: str, summary: ImportSummary) -> None:
                 applied_at=None, raw=raw, summary=summary,
             )
         else:
-            store.update_status(app["id"], status, raw_sms=raw)
+            store.update_status(user_id, app["id"], status, raw_sms=raw)
             summary.updated += 1
     elif p.intent == Intent.NOTE:
         note = p.message
@@ -135,7 +135,7 @@ def _apply_parsed(user_id: str, p, raw: str, summary: ImportSummary) -> None:
         if app is None:
             summary.skipped.append((raw, f"{company} not tracked yet"))
             return
-        store.add_note(app["id"], note, raw_sms=raw)
+        store.add_note(user_id, app["id"], note, raw_sms=raw)
         summary.noted += 1
     else:
         summary.skipped.append((raw, "couldn't interpret"))
@@ -193,6 +193,6 @@ def import_csv(user_id: str, csv_text: str) -> ImportSummary:
             app = store.find_application(user_id, company, role=role) or \
                 store.find_application(user_id, company)
             if app is not None:
-                store.add_note(app["id"], note, raw_sms=raw)
+                store.add_note(user_id, app["id"], note, raw_sms=raw)
                 summary.noted += 1
     return summary

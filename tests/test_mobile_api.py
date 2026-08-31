@@ -109,7 +109,7 @@ def test_apply_data_still_works_when_a_posting_vanishes(client):
     _profile()
     posting = _posting()
     apply_queue.stage("u1", posting["id"])
-    jobstore.mark_posting_status(posting["id"], "dismissed")
+    jobstore.mark_posting_status("u1", posting["id"], "dismissed")
     assert client.get("/apply/data?user=u1").status_code == 200
 
 
@@ -207,7 +207,7 @@ def test_apply_data_wakes_expired_snooze(client):
     _profile()
     posting = _posting()
     past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-    jobstore.snooze_posting(posting["id"], past)
+    jobstore.snooze_posting("u1", posting["id"], past)
     body = client.get("/apply/data?user=u1").json()
     assert any(row["posting_id"] == posting["id"] for row in body["queued"])
     assert jobstore.get_posting("u1", posting["id"])["status"] == "queued"

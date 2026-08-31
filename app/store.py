@@ -101,21 +101,36 @@ def find_application(
         return conn.execute(sql, params).fetchone()
 
 
-def get_application(app_id: int) -> sqlite3.Row | None:
+def get_application(user_id: str, app_id: int) -> sqlite3.Row | None:
+    """One application, or None when it is not this user's.
+
+    ``user_id`` is not optional and not a courtesy: application ids are a shared
+    AUTOINCREMENT sequence, so without it this reads whatever row holds that
+    number regardless of who owns it.
+    """
     with connect() as conn:
         return conn.execute(
-            "SELECT * FROM applications WHERE id = ?", (app_id,)
+            "SELECT * FROM applications WHERE id = ? AND user_id = ?",
+            (app_id, user_id),
         ).fetchone()
 
 
-def update_status(app_id: int, status: str, *, raw_sms: str | None = None) -> sqlite3.Row:
+def update_status(user_id: str, app_id: int, status: str, *,
+                  raw_sms: str | None = None) -> sqlite3.Row | None:
+    """Move an application to ``status``. None when it is not this user's.
+
+    The ownership test is the UPDATE's own WHERE clause rather than a lookup
+    beforehand, so there is no window between checking and writing.
+    """
     now = _now()
     with connect() as conn:
-        conn.execute(
+        cur = conn.execute(
             "UPDATE applications SET status = ?, last_updated_at = ?, "
-            "next_follow_up_at = ? WHERE id = ?",
-            (status, _iso(now), _next_followup(now, status), app_id),
+            "next_follow_up_at = ? WHERE id = ? AND user_id = ?",
+            (status, _iso(now), _next_followup(now, status), app_id, user_id),
         )
+        if not cur.rowcount:
+            return None
         conn.execute(
             """
             INSERT INTO application_events
@@ -129,17 +144,22 @@ def update_status(app_id: int, status: str, *, raw_sms: str | None = None) -> sq
         ).fetchone()
 
 
-def add_note(app_id: int, note: str, *, raw_sms: str | None = None) -> None:
+def add_note(user_id: str, app_id: int, note: str, *,
+             raw_sms: str | None = None) -> bool:
+    """Attach a note. False when the application is not this user's."""
     now = _now()
     with connect() as conn:
         row = conn.execute(
-            "SELECT status FROM applications WHERE id = ?", (app_id,)
+            "SELECT status FROM applications WHERE id = ? AND user_id = ?",
+            (app_id, user_id),
         ).fetchone()
-        status = row["status"] if row else None
+        if row is None:
+            return False
+        status = row["status"]
         conn.execute(
             "UPDATE applications SET last_updated_at = ?, next_follow_up_at = ? "
-            "WHERE id = ?",
-            (_iso(now), _next_followup(now, status), app_id),
+            "WHERE id = ? AND user_id = ?",
+            (_iso(now), _next_followup(now, status), app_id, user_id),
         )
         conn.execute(
             """
@@ -149,6 +169,7 @@ def add_note(app_id: int, note: str, *, raw_sms: str | None = None) -> None:
             """,
             (app_id, note, _iso(now), raw_sms),
         )
+        return True
 
 
 def list_applications(user_id: str, *, limit: int = 25) -> list[sqlite3.Row]:
@@ -190,17 +211,18 @@ def application_outcomes(user_id: str) -> list[tuple[str | None, str | None, lis
 
 
 def edit_application(
+    user_id: str,
     app_id: int,
     *,
     company: str | None = None,
     role: str | None = None,
     applied_at: datetime | None = None,
     raw_sms: str | None = None,
-) -> sqlite3.Row:
+) -> sqlite3.Row | None:
     """Correct stored attributes of an application (not a stage change).
 
     Only the provided fields change. Records an 'edit' event describing the
-    correction so the history stays honest.
+    correction so the history stays honest. None when it is not this user's.
     """
     now = _now()
     changes: list[str] = []
@@ -221,10 +243,12 @@ def edit_application(
     sets.append("last_updated_at = ?")
     params.append(_iso(now))
     with connect() as conn:
-        conn.execute(
-            f"UPDATE applications SET {', '.join(sets)} WHERE id = ?",
-            (*params, app_id),
+        cur = conn.execute(
+            f"UPDATE applications SET {', '.join(sets)} WHERE id = ? AND user_id = ?",
+            (*params, app_id, user_id),
         )
+        if not cur.rowcount:
+            return None
         conn.execute(
             """
             INSERT INTO application_events
@@ -238,20 +262,32 @@ def edit_application(
         ).fetchone()
 
 
-def delete_application(app_id: int) -> None:
+def delete_application(user_id: str, app_id: int) -> bool:
     """Remove an application. Events cascade-delete; reminders/deadlines/recruiter
-    rows keep their data but null out the link (ON DELETE SET NULL)."""
+    rows keep their data but null out the link (ON DELETE SET NULL).
+
+    False when the row is not this user's — and nothing is deleted."""
     with connect() as conn:
-        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        cur = conn.execute(
+            "DELETE FROM applications WHERE id = ? AND user_id = ?",
+            (app_id, user_id))
+        return cur.rowcount > 0
 
 
-def list_events(app_id: int, *, limit: int = 100) -> list[sqlite3.Row]:
-    """Event timeline for one application, oldest first."""
+def list_events(user_id: str, app_id: int, *,
+                limit: int = 100) -> list[sqlite3.Row]:
+    """Event timeline for one application, oldest first. Empty when not theirs.
+
+    ``application_events`` has no ``user_id`` of its own — ownership lives on the
+    parent, so every query here joins through it rather than trusting the id.
+    """
     with connect() as conn:
         return conn.execute(
-            "SELECT * FROM application_events WHERE application_id = ? "
-            "ORDER BY timestamp, id LIMIT ?",
-            (app_id, limit),
+            "SELECT e.* FROM application_events e "
+            "JOIN applications a ON a.id = e.application_id "
+            "WHERE e.application_id = ? AND a.user_id = ? "
+            "ORDER BY e.timestamp, e.id LIMIT ?",
+            (app_id, user_id, limit),
         ).fetchall()
 
 
@@ -278,41 +314,49 @@ def applications_in_window(
 
 # --- undo support -----------------------------------------------------------
 
-def last_event_id(app_id: int, event_type: str) -> int | None:
+def last_event_id(user_id: str, app_id: int, event_type: str) -> int | None:
     """Id of the most recent event of a type for an app (the one just written)."""
     with connect() as conn:
         row = conn.execute(
-            "SELECT id FROM application_events WHERE application_id = ? AND type = ? "
-            "ORDER BY id DESC LIMIT 1",
-            (app_id, event_type),
+            "SELECT e.id FROM application_events e "
+            "JOIN applications a ON a.id = e.application_id "
+            "WHERE e.application_id = ? AND a.user_id = ? AND e.type = ? "
+            "ORDER BY e.id DESC LIMIT 1",
+            (app_id, user_id, event_type),
         ).fetchone()
         return row["id"] if row else None
 
 
-def delete_event(event_id: int) -> None:
+def delete_event(user_id: str, event_id: int) -> bool:
+    """Drop one event, if it hangs off an application this user owns."""
     with connect() as conn:
-        conn.execute("DELETE FROM application_events WHERE id = ?", (event_id,))
+        cur = conn.execute(
+            "DELETE FROM application_events WHERE id = ? AND application_id IN "
+            "(SELECT id FROM applications WHERE user_id = ?)",
+            (event_id, user_id))
+        return cur.rowcount > 0
 
 
 # Columns undo is allowed to write back (guards the f-string SQL below).
 _RESTORABLE = {"status", "company", "role", "applied_at", "last_updated_at"}
 
 
-def restore_application(app_id: int, fields: dict) -> None:
+def restore_application(user_id: str, app_id: int, fields: dict) -> bool:
     """Write prior field values straight back (for undo). No event is recorded —
     undo also deletes the original event, so the timeline reads as if nothing
     happened. Values are applied verbatim, so a column can be restored to NULL.
     """
     cols = [c for c in fields if c in _RESTORABLE]
     if not cols:
-        return
+        return False
     sets = ", ".join(f"{c} = ?" for c in cols)
     params = [fields[c] for c in cols]
     with connect() as conn:
-        conn.execute(
-            f"UPDATE applications SET {sets} WHERE id = ?",
-            (*params, app_id),
+        cur = conn.execute(
+            f"UPDATE applications SET {sets} WHERE id = ? AND user_id = ?",
+            (*params, app_id, user_id),
         )
+        return cur.rowcount > 0
 
 
 def record_undo(user_id: str, kind: str, payload: dict, summary: str) -> None:
@@ -350,7 +394,7 @@ def clear_undo(user_id: str) -> None:
         conn.execute("DELETE FROM undo_log WHERE user_id = ?", (user_id,))
 
 
-def has_recruiter_signal(app_id: int) -> bool:
+def has_recruiter_signal(user_id: str, app_id: int) -> bool:
     """True if notes mention a recruiter, or a legacy recruiters row exists.
 
     Follow-up scoring uses this as a small priority bonus. Live Apollo discovery
@@ -359,18 +403,19 @@ def has_recruiter_signal(app_id: int) -> bool:
     with connect() as conn:
         row = conn.execute(
             "SELECT 1 FROM recruiters r "
-            "JOIN applications a ON a.id = ? "
+            "JOIN applications a ON a.id = ? AND a.user_id = ? "
             "WHERE r.user_id = a.user_id AND lower(r.company) = lower(a.company) "
             "LIMIT 1",
-            (app_id,),
+            (app_id, user_id),
         ).fetchone()
         if row is not None:
             return True
         row = conn.execute(
-            "SELECT 1 FROM application_events "
-            "WHERE application_id = ? AND type = 'note' "
-            "AND lower(coalesce(content,'')) LIKE '%recruiter%' "
+            "SELECT 1 FROM application_events e "
+            "JOIN applications a ON a.id = e.application_id AND a.user_id = ? "
+            "WHERE e.application_id = ? AND e.type = 'note' "
+            "AND lower(coalesce(e.content,'')) LIKE '%recruiter%' "
             "LIMIT 1",
-            (app_id,),
+            (user_id, app_id),
         ).fetchone()
         return row is not None

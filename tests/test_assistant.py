@@ -77,8 +77,8 @@ def test_check_phrasings_route_to_check(text):
 def test_check_returns_rich_summary():
     store.create_application("u", "Stripe", "SWE")
     app = store.find_application("u", "Stripe")
-    store.update_status(app["id"], "OA received")
-    store.add_note(app["id"], "recruiter was great")
+    store.update_status("u", app["id"], "OA received")
+    store.add_note("u", app["id"], "recruiter was great")
     reply = handle_sms("u", "what's the status of stripe")
     assert "Stripe" in reply
     assert "OA received" in reply

@@ -570,12 +570,12 @@ def _do_update(user_id: str, slots: dict, raw: str) -> str:
 
     prev_status = app["status"]
     prev_lua = app["last_updated_at"]
-    updated = store.update_status(app["id"], status, raw_sms=raw)
+    updated = store.update_status(user_id, app["id"], status, raw_sms=raw)
     store.record_undo(
         user_id, "status",
         {"app_id": app["id"], "prev_status": prev_status,
          "prev_last_updated_at": prev_lua,
-         "event_id": store.last_event_id(app["id"], "status")},
+         "event_id": store.last_event_id(user_id, app["id"], "status")},
         f"{app['company']} → {status} (it was {prev_status})",
     )
     ctx.set_context(
@@ -619,14 +619,14 @@ def _do_note(user_id: str, slots: dict, raw: str) -> str:
     memory = ctx.get_context(user_id)
     app = store.find_application(user_id, company)
     if app is None and memory.get("last_application_id"):
-        app = store.get_application(memory["last_application_id"])
+        app = store.get_application(user_id, memory["last_application_id"])
     if app is None:
         return f"I don't have {company} on file yet. Log it first with 'applied {company}'."
     prev_lua = app["last_updated_at"]
-    store.add_note(app["id"], note, raw_sms=raw)
+    store.add_note(user_id, app["id"], note, raw_sms=raw)
     store.record_undo(
         user_id, "note",
-        {"app_id": app["id"], "event_id": store.last_event_id(app["id"], "note"),
+        {"app_id": app["id"], "event_id": store.last_event_id(user_id, app["id"], "note"),
          "prev_last_updated_at": prev_lua},
         f"the note on {app['company']}",
     )
@@ -1001,7 +1001,7 @@ def _do_apply_job(user_id: str, p: ParsedMessage, raw: str) -> str:
     app = store.create_application(
         user_id, company, title, status="Applied", source="discovery", raw_sms=raw
     )
-    jobstore.mark_posting_status(posting["id"], "applied")
+    jobstore.mark_posting_status(user_id, posting["id"], "applied")
     ctx.set_context(user_id, company=company, role=title, application_id=app["id"])
     store.record_undo(
         user_id, "apply", {"app_id": app["id"], "company": company},
@@ -1120,7 +1120,7 @@ def _do_dismiss_job(user_id: str, p: ParsedMessage) -> str:
     posting = _resolve_posting(user_id, p)
     if posting is None:
         return _posting_not_found(p, "dismiss")
-    jobstore.mark_posting_status(posting["id"], "dismissed")
+    jobstore.mark_posting_status(user_id, posting["id"], "dismissed")
     return f"👍 Dismissed #{posting['id']} ({_posting_label(posting)}) — won't surface it again."
 
 
@@ -1132,7 +1132,7 @@ def _do_snooze_job(user_id: str, p: ParsedMessage) -> str:
     if when is None:
         from datetime import timedelta
         when = _now_utc() + timedelta(days=7)
-    jobstore.snooze_posting(posting["id"], when.isoformat())
+    jobstore.snooze_posting(user_id, posting["id"], when.isoformat())
     return (f"😴 Snoozed #{posting['id']} ({_posting_label(posting)}) until "
             f"{when.date().isoformat()} — it'll resurface in 'any new jobs' then.")
 
@@ -1282,7 +1282,7 @@ def _do_delete(user_id: str, slots: dict, raw: str) -> str:
     if app is None:
         return f"Nothing to delete for {company}."
     deleted_company = app["company"]
-    store.delete_application(app["id"])
+    store.delete_application(user_id, app["id"])
     # Tombstone, not a reversible record — so "undo" is honest about a delete
     # being gone rather than silently reversing the action before it.
     store.record_undo(
@@ -1306,37 +1306,38 @@ def _do_undo(user_id: str) -> str:
             f"Re-add it with 'applied {company}'."
         )
     if kind == "apply":
-        store.delete_application(p["app_id"])
+        store.delete_application(user_id, p["app_id"])
     elif kind == "status":
-        store.restore_application(p["app_id"], {
+        store.restore_application(user_id, p["app_id"], {
             "status": p["prev_status"],
             "last_updated_at": p["prev_last_updated_at"],
         })
         if p.get("event_id"):
-            store.delete_event(p["event_id"])
+            store.delete_event(user_id, p["event_id"])
     elif kind == "note":
         if p.get("event_id"):
-            store.delete_event(p["event_id"])
+            store.delete_event(user_id, p["event_id"])
         store.restore_application(
+            user_id,
             p["app_id"], {"last_updated_at": p["prev_last_updated_at"]}
         )
     elif kind == "edit":
         prev = p["prev"]
-        store.restore_application(p["app_id"], {
+        store.restore_application(user_id, p["app_id"], {
             "company": prev["company"], "role": prev["role"],
             "applied_at": prev["applied_at"],
             "last_updated_at": prev["last_updated_at"],
         })
         if p.get("event_id"):
-            store.delete_event(p["event_id"])
+            store.delete_event(user_id, p["event_id"])
     elif kind == "bulk":
         for c in p["changes"]:
-            store.restore_application(c["app_id"], {
+            store.restore_application(user_id, c["app_id"], {
                 "status": c["prev_status"],
                 "last_updated_at": c["prev_last_updated_at"],
             })
             if c.get("event_id"):
-                store.delete_event(c["event_id"])
+                store.delete_event(user_id, c["event_id"])
 
     store.clear_undo(user_id)
     return f"↩️ Undone — reversed {summary}."
@@ -1407,10 +1408,10 @@ def _apply_edit(
         "applied_at": app["applied_at"], "last_updated_at": app["last_updated_at"],
     }
     store.edit_application(
-        app["id"], company=new_name, role=new_role,
+        user_id, app["id"], company=new_name, role=new_role,
         applied_at=new_date, raw_sms=raw,
     )
-    event_id = store.last_event_id(app["id"], "edit")
+    event_id = store.last_event_id(user_id, app["id"], "edit")
     changes = []
     if new_name:
         changes.append(f"name → {new_name}")
@@ -1480,9 +1481,9 @@ def _do_bulk(user_id: str, slots: dict, raw: str) -> str:
             "app_id": a["id"], "prev_status": a["status"],
             "prev_last_updated_at": a["last_updated_at"],
         })
-        store.update_status(a["id"], new_status, raw_sms=raw or "bulk update")
+        store.update_status(user_id, a["id"], new_status, raw_sms=raw or "bulk update")
     for c in changes:
-        c["event_id"] = store.last_event_id(c["app_id"], "status")
+        c["event_id"] = store.last_event_id(user_id, c["app_id"], "status")
     store.record_undo(
         user_id, "bulk", {"changes": changes},
         f"the bulk change of {len(changes)} application(s) to {new_status}",
@@ -1514,7 +1515,7 @@ def _do_check(user_id: str, p: ParsedMessage, memory: dict) -> str:
     lines = [f"📄 {role_line}", f"Status: {app['status']} (last update {last})"]
 
     # Most recent note, if any.
-    notes = [e for e in store.list_events(app["id"]) if e["type"] == "note"]
+    notes = [e for e in store.list_events(user_id, app["id"]) if e["type"] == "note"]
     if notes:
         lines.append(f"Last note: “{notes[-1]['content']}”")
 

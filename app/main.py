@@ -317,7 +317,7 @@ async def apply_applied(request: Request) -> dict:
         return {"ok": False}
     store.create_application(uid, posting["company"] or "Unknown",
                              posting["title"] or "Role", source="mobile")
-    jobstore.mark_posting_status(posting["id"], "applied")
+    jobstore.mark_posting_status(uid, posting["id"], "applied")
     apply_queue.mark(uid, pid, "submitted")
     return {"ok": True}
 
@@ -347,7 +347,7 @@ async def apply_pass(request: Request) -> dict:
     if jobstore.get_posting(uid, pid) is None:
         return {"ok": False}
     apply_queue.remove(uid, pid)
-    jobstore.mark_posting_status(pid, "dismissed")
+    jobstore.mark_posting_status(uid, pid, "dismissed")
     return {"ok": True}
 
 
@@ -370,7 +370,7 @@ async def apply_snooze(request: Request) -> dict:
     days = max(1, min(days, 90))
     until = datetime.now(timezone.utc) + timedelta(days=days)
     apply_queue.remove(uid, pid)
-    jobstore.snooze_posting(pid, until.isoformat())
+    jobstore.snooze_posting(uid, pid, until.isoformat())
     return {"ok": True, "until": until.isoformat()}
 
 

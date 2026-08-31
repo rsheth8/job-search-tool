@@ -101,7 +101,7 @@ def test_rescore_leaves_other_users_alone():
 
 def test_rescore_does_not_touch_status_or_ordering_columns():
     user, ids = _seed()
-    jobstore.mark_posting_status(ids[0], "dismissed")
+    jobstore.mark_posting_status("u", ids[0], "dismissed")
     rescore_user(user, dry_run=False, min_change=0.001)
     rows = {r["id"]: r for r in jobstore.list_postings(user, limit=500)}
     assert rows[ids[0]]["status"] == "dismissed"

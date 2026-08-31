@@ -181,7 +181,7 @@ def mark_matching_postings_applied(
         if posting_match.matches_application(
             company, role, row["company"], row["title"]
         ):
-            mark_posting_status(row["id"], "applied")
+            mark_posting_status(user_id, row["id"], "applied")
             n += 1
     return n
 
@@ -261,22 +261,34 @@ def list_postings(
     return rows[:limit]
 
 
-def mark_posting_status(posting_id: int, status: str) -> None:
+def mark_posting_status(user_id: str, posting_id: int, status: str) -> bool:
+    """Set a posting's status. False when it is not this user's.
+
+    Posting ids are a shared AUTOINCREMENT sequence. Every current caller looks
+    the row up scoped first, but that made the isolation a convention each call
+    site had to remember; the WHERE clause makes it a property of the write.
+    """
     with connect() as conn:
-        conn.execute(
-            "UPDATE job_postings SET status = ?, snoozed_until = NULL WHERE id = ?",
-            (status, posting_id),
+        cur = conn.execute(
+            "UPDATE job_postings SET status = ?, snoozed_until = NULL "
+            "WHERE id = ? AND user_id = ?",
+            (status, posting_id, user_id),
         )
+        return cur.rowcount > 0
 
 
-def snooze_posting(posting_id: int, until_iso: str) -> None:
+def snooze_posting(user_id: str, posting_id: int, until_iso: str) -> bool:
     """Mute a posting until ``until_iso`` — hidden from listings until then,
-    when ``wake_snoozed`` resurfaces it as 'queued' (rejoins the review queue)."""
+    when ``wake_snoozed`` resurfaces it as 'queued' (rejoins the review queue).
+
+    False when the posting is not this user's."""
     with connect() as conn:
-        conn.execute(
-            "UPDATE job_postings SET status = 'snoozed', snoozed_until = ? WHERE id = ?",
-            (until_iso, posting_id),
+        cur = conn.execute(
+            "UPDATE job_postings SET status = 'snoozed', snoozed_until = ? "
+            "WHERE id = ? AND user_id = ?",
+            (until_iso, posting_id, user_id),
         )
+        return cur.rowcount > 0
 
 
 def wake_snoozed(user_id: str, now_iso: str) -> int:

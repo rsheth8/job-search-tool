@@ -17,7 +17,7 @@ R = HeuristicRouter()
 
 def test_edit_application_changes_only_given_fields():
     app = store.create_application("u", "Stripe", "SWE")
-    store.edit_application(app["id"], role="SWE II")
+    store.edit_application("u", app["id"], role="SWE II")
     row = store.find_application("u", "Stripe")
     assert row["role"] == "SWE II"
     assert row["company"] == "Stripe"  # untouched
@@ -26,12 +26,12 @@ def test_edit_application_changes_only_given_fields():
 def test_edit_application_rename_and_date():
     app = store.create_application("u", "Databricks", "SWE")
     when = datetime(2026, 3, 1, tzinfo=timezone.utc)
-    store.edit_application(app["id"], company="Databricks Inc", applied_at=when)
-    row = store.get_application(app["id"])
+    store.edit_application("u", app["id"], company="Databricks Inc", applied_at=when)
+    row = store.get_application("u", app["id"])
     assert row["company"] == "Databricks Inc"
     assert row["applied_at"].startswith("2026-03-01")
     # An 'edit' event is recorded for history.
-    assert any(e["type"] == "edit" for e in store.list_events(app["id"]))
+    assert any(e["type"] == "edit" for e in store.list_events("u", app["id"]))
 
 
 # --- routing ----------------------------------------------------------------
