@@ -24,6 +24,13 @@ from .db import SCHEMA, connect
 # Tables that are global (not per-user) even if unrelated columns exist.
 _SKIP = {"sqlite_sequence"}
 
+# Excluded from a "everything this user owns" transfer. Sessions are credentials,
+# not content, and they carry a foreign key to `users` — a row this transfer never
+# takes, because a user's *account* is not part of their data. Exporting them
+# could only ever produce a dangling reference, and importing them would hand a
+# restored account someone else's live tokens.
+_NEVER_TRANSFER = {"sessions"}
+
 # The "search brain" — what's worth carrying from a local dev DB to production:
 # your profile + identity, swipe labels, surfaced postings, and the trained model.
 # These are all directly user-scoped (no child-id remapping needed), so they move
@@ -71,6 +78,50 @@ def _columns_in(conn: sqlite3.Connection, schema: str, table: str) -> list[str]:
     return [r[1] for r in conn.execute(f"PRAGMA {schema}.table_info({table})")]
 
 
+def _dependency_order(conn: sqlite3.Connection, schema: str,
+                      tables: list[str]) -> list[str]:
+    """Sort so a table is inserted after everything it references.
+
+    Foreign keys are enforced on the destination, so alphabetical order is not
+    merely untidy — `apply_queue` sorts before `job_postings` and references it,
+    which fails outright. Anything referencing a table outside this set (a
+    parent we are not transferring) is left where it is; that edge cannot be
+    satisfied by ordering and is handled by the caller.
+    """
+    inside = set(tables)
+    deps = {
+        t: {r[2] for r in conn.execute(f"PRAGMA {schema}.foreign_key_list({t})")}
+        & inside - {t}
+        for t in tables
+    }
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    def visit(t: str, path: frozenset[str]) -> None:
+        if t in seen or t in path:  # a cycle cannot be ordered; leave it be
+            return
+        for parent in sorted(deps.get(t, ())):
+            visit(parent, path | {t})
+        seen.add(t)
+        ordered.append(t)
+
+    for t in tables:
+        visit(t, frozenset())
+    return ordered
+
+
+def _remapped_parent(conn: sqlite3.Connection, schema: str, table: str) -> str | None:
+    """The table this one references by a surrogate id, if any.
+
+    Only matters on import, where the parent's ``id`` is reassigned by the
+    destination. Export copies ids verbatim, so a backup keeps its links intact.
+    """
+    for r in conn.execute(f"PRAGMA {schema}.foreign_key_list({table})"):
+        if (r[4] or "id") == "id":
+            return r[2]
+    return None
+
+
 def _plan(conn: sqlite3.Connection, src_schema: str, dst_schema: str, tables):
     """Work out what can actually cross between two attached databases.
 
@@ -84,7 +135,11 @@ def _plan(conn: sqlite3.Connection, src_schema: str, dst_schema: str, tables):
     src_tables, dst_tables = _tables_in(conn, src_schema), _tables_in(conn, dst_schema)
     if tables is None:
         tables = [t for t in sorted(src_tables)
-                  if t not in _SKIP and "user_id" in _columns_in(conn, src_schema, t)]
+                  if t not in _SKIP and t not in _NEVER_TRANSFER
+                  and "user_id" in _columns_in(conn, src_schema, t)]
+    tables = _dependency_order(conn, src_schema,
+                               [t for t in tables if t in src_tables]) + \
+        [t for t in tables if t not in src_tables]
 
     plan, skipped, dropped = [], {}, {}
     for t in tables:
@@ -242,6 +297,17 @@ def import_user(in_path: str, dst_user_id: str, *, tables=BRAIN_TABLES,
         try:
             plan, skipped, dropped = _plan(conn, "imp", "main", tables)
             for t, cols in plan:
+                # Dropping 'id' is what makes an import safe against a populated
+                # database — but it means a child row's stored parent id no longer
+                # refers to anything. `apply_queue.posting_id` would point at
+                # whatever posting happens to hold that number in the destination,
+                # which is worse than not importing it. Say so rather than
+                # producing plausible, wrong links.
+                parent = _remapped_parent(conn, "main", t)
+                if parent:
+                    skipped[t] = (f"references {parent}(id), which is renumbered "
+                                  f"on import — the links cannot be preserved")
+                    continue
                 # Drop a surrogate autoincrement 'id' so the destination assigns
                 # its own (avoids PK collisions); repoint user_id to dst.
                 cols = [c for c in cols if c != "id"]

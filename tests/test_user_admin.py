@@ -493,3 +493,104 @@ def test_plain_orphans_without_a_profile_exit_zero(capsys):
     code, out = _run(["orphans"], capsys)
     assert code == 0
     assert "discovery still ticks" not in out
+
+
+# --- foreign keys between the tables being moved ----------------------------
+#
+# Found by running the finished CLI against production, which is the only place
+# these tables all have rows at once:
+#
+#     sqlite3.IntegrityError: FOREIGN KEY constraint failed
+#
+# The plan was in alphabetical order, so `apply_queue` was inserted before the
+# `job_postings` it references. Every test above used a single table, so none of
+# them could see it.
+
+def _linked_rows(uid: str = "u1") -> None:
+    """One row in each table that references another."""
+    with connect() as c:
+        c.execute("INSERT INTO job_postings (user_id, source, external_id, company,"
+                  " title, url, first_seen_at) VALUES (?,'greenhouse','e1','Acme',"
+                  "'Eng','http://x','2026-01-01')", (uid,))
+        pid = c.execute("SELECT id FROM job_postings WHERE user_id = ?",
+                        (uid,)).fetchone()[0]
+        c.execute("INSERT INTO apply_queue (user_id, posting_id, status, created_at,"
+                  " updated_at) VALUES (?,?,'staged','x','x')", (uid, pid))
+        c.execute("INSERT INTO applications (user_id, company, status,"
+                  " last_updated_at) VALUES (?,'Acme','Applied','x')", (uid,))
+        aid = c.execute("SELECT id FROM applications WHERE user_id = ?",
+                        (uid,)).fetchone()[0]
+        c.execute("INSERT INTO reminders (user_id, application_id, remind_at, body,"
+                  " created_at) VALUES (?,?,'x','b','x')", (uid, aid))
+
+
+def test_exporting_everything_does_not_violate_a_foreign_key(tmp_path):
+    """The production failure. Alphabetically `apply_queue` precedes the
+    `job_postings` it points at."""
+    _make_account("u1")
+    _linked_rows()
+    t = export_user("u1", str(tmp_path / "o.db"), tables=None)
+    assert t.counts["apply_queue"] == 1 and t.counts["job_postings"] == 1
+    assert t.counts["reminders"] == 1 and t.counts["applications"] == 1
+    assert t.complete
+
+
+def test_a_parent_is_ordered_before_its_children():
+    from app.usermerge import _dependency_order
+
+    with connect() as c:
+        order = _dependency_order(c, "main",
+                                  ["apply_queue", "job_postings", "reminders",
+                                   "applications"])
+    assert order.index("job_postings") < order.index("apply_queue")
+    assert order.index("applications") < order.index("reminders")
+
+
+def test_an_export_keeps_its_links_intact(tmp_path):
+    """Export copies ids verbatim, so the backup is internally consistent and
+    can be read back on its own."""
+    _make_account("u1")
+    _linked_rows()
+    path = str(tmp_path / "o.db")
+    export_user("u1", path, tables=None)
+    with sqlite3.connect(path) as f:
+        row = f.execute("SELECT q.posting_id, p.company FROM apply_queue q "
+                        "JOIN job_postings p ON p.id = q.posting_id").fetchone()
+    assert row is not None and row[1] == "Acme"
+
+
+def test_sessions_are_never_transferred(tmp_path):
+    """Credentials, not content — and their parent `users` row is not part of a
+    user's data, so exporting them could only make a dangling reference."""
+    from app import auth
+
+    _make_account("u1")
+    auth.create_session("u1")
+    t = export_user("u1", str(tmp_path / "o.db"), tables=None)
+    assert "sessions" not in t.counts
+    assert t.complete   # deliberately excluded, so not a gap
+
+
+def test_import_refuses_to_invent_parent_links(tmp_path):
+    """Dropping 'id' is what makes import safe against a populated database, but
+    it renumbers the parents. A child row's stored id would then point at
+    whichever row happens to hold that number — plausible and wrong."""
+    _make_account("u1")
+    _linked_rows()
+    path = str(tmp_path / "o.db")
+    export_user("u1", path, tables=None)
+
+    t = import_user(path, "u2", tables=None)
+    assert t.counts["job_postings"] == 1      # directly user-scoped: fine
+    assert "apply_queue" in t.skipped_tables
+    assert "renumbered" in t.skipped_tables["apply_queue"]
+    assert not t.complete                     # and the restore says so
+
+
+def test_the_brain_subset_still_round_trips_cleanly(tmp_path):
+    """BRAIN_TABLES was chosen to be free of this problem; that must stay true."""
+    _make_account("u1")
+    _linked_rows()
+    path = str(tmp_path / "b.db")
+    assert export_user("u1", path, tables=BRAIN_TABLES).complete
+    assert import_user(path, "u2", tables=BRAIN_TABLES).complete
