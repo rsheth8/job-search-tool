@@ -317,8 +317,15 @@ release, and macOS runners bill at 10x.
   survived the filter and were then scored as noise — worse than being dropped,
   because they land in the feed looking like bad matches.
 - **A posting is scored once, at discovery.** `relevance_score` is persisted and
-  never recomputed, so a scorer change only affects postings found after it.
-  Existing accounts keep their old numbers until the rows age out.
+  never recomputed, so a scorer change or a profile edit only affects postings
+  found after it. `scripts.rescore` is the escape hatch — free heuristic only,
+  never the paid scorer, so it is safe to run on prod.
+- **`SCHEMA` runs before `_migrate_schema`.** So `SCHEMA` may only name columns
+  its own `CREATE TABLE` guarantees. Indexing a migration-added column works on
+  a fresh file and fails on every existing one — and since `conftest` hands
+  every test a new SQLite file, the suite cannot see it. That combination took
+  production down for over an hour. `tests/test_migrations.py` upgrades
+  old-shaped databases and asserts the rule directly.
 - **`.env.example` is tracked** — never put live secrets there.
 - **`scripts/` must stay OUT of `.dockerignore`** (operational scripts on Fly).
 - **Use `.venv/bin/python`**, not bare `python`.
