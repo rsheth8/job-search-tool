@@ -57,14 +57,14 @@ def _draft_question_answers_via_claude(
     questions: list[str], company: str, title: str, description: str | None,
     background: str, identity_block: str, knowledge_block: str = "",
 ) -> list[str]:
-    import anthropic
+    from . import llm_health
 
     from . import llm_budget
 
-    if not llm_budget.consume():
+    if not llm_budget.consume(feature="draft"):
         raise RuntimeError("llm user daily cap")
     s = get_settings()
-    client = anthropic.Anthropic(api_key=s.anthropic_api_key)
+    client = llm_health.client(s.anthropic_api_key)
     desc = (description or "").strip()[:1100]
     listing = "\n".join(f"[{i}] {q}" for i, q in enumerate(questions))
     resp = client.messages.create(
@@ -153,14 +153,14 @@ def _answer_question_via_claude(
     question: str, company: str, title: str, description: str | None,
     background: str, identity_block: str, knowledge_block: str = "",
 ) -> str:
-    import anthropic
+    from . import llm_health
 
     from . import llm_budget
 
-    if not llm_budget.consume():
+    if not llm_budget.consume(feature="draft"):
         raise RuntimeError("llm user daily cap")
     s = get_settings()
-    client = anthropic.Anthropic(api_key=s.anthropic_api_key)
+    client = llm_health.client(s.anthropic_api_key)
     desc = (description or "").strip()[:1000]
     resp = client.messages.create(
         model=s.anthropic_model,
@@ -207,14 +207,14 @@ def _draft_application_template(company: str, title: str, background: str) -> st
 def _draft_application_via_claude(
     company: str, title: str, description: str | None, background: str
 ) -> str:
-    import anthropic
+    from . import llm_health
 
     from . import llm_budget
 
-    if not llm_budget.consume():
+    if not llm_budget.consume(feature="draft"):
         raise RuntimeError("llm user daily cap")
     s = get_settings()
-    client = anthropic.Anthropic(api_key=s.anthropic_api_key)
+    client = llm_health.client(s.anthropic_api_key)
     desc = (description or "").strip()[:1200]
     resp = client.messages.create(
         model=s.anthropic_model,

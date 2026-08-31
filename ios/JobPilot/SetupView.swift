@@ -17,6 +17,11 @@ struct SetupView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var step: QuizStep = .welcome
+    // Horizon's onboarding coaching (see Agent/HorizonCoach.swift).
+    @State private var showCoach = false
+    @State private var coachText = ""
+    @State private var coachBusy = false
+    @State private var coachOnDevice = false
     @State private var roles = ""
     @State private var locations = ""
     @State private var keywords = ""
@@ -141,6 +146,7 @@ struct SetupView: View {
                 if isDemo { syncPreviewScore() }
             }
             .sheet(isPresented: $showStepJump) { stepJumpSheet }
+            .sheet(isPresented: $showCoach) { coachSheet }
         }
     }
 
@@ -148,6 +154,7 @@ struct SetupView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 stepCounter
+                askHorizonButton
                 Spacer()
                 if isDemo {
                     Button("Exit") { dismiss() }
@@ -184,6 +191,88 @@ struct SetupView: View {
         }
         .padding(.horizontal, Theme.spaceL)
         .padding(.top, Theme.spaceM)
+    }
+
+    /// Asks Horizon what this step is for. Grounded in the real step and in
+    /// what's still empty, so the answer names actual fields instead of giving
+    /// generic job-board advice.
+    private var askHorizonButton: some View {
+        Button {
+            showCoach = true
+            Task { await loadCoach() }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 9, weight: .bold))
+                Text("Ask Horizon")
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(Theme.accent)
+        }
+        .buttonStyle(PressableButtonStyle())
+        .padding(.leading, Theme.spaceS)
+        .accessibilityLabel("Ask Horizon about this step")
+    }
+
+    private var coachSheet: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.spaceM) {
+                    Text(step.title)
+                        .font(.headline)
+                    if coachBusy {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("Horizon is thinking\u{2026}")
+                                .font(.subheadline)
+                                .foregroundStyle(Theme.soft)
+                        }
+                    } else {
+                        Text(coachText)
+                            .font(.body)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Text(coachOnDevice
+                         ? "Answered on your device by Apple Intelligence."
+                         : "Built-in guidance \u{2014} Apple Intelligence isn\u{2019}t available here.")
+                        .font(.caption)
+                        .foregroundStyle(Theme.note)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(Theme.spaceL)
+            }
+            .navigationTitle("Horizon")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { showCoach = false }
+                        .accessibilityLabel("Close Horizon")
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    private func coachContext() -> HorizonCoach.Context {
+        HorizonCoach.Context(
+            stepTitle: step.title,
+            stepSubtitle: step.subtitle ?? "",
+            stepIndex: step.rawValue,
+            stepCount: QuizStep.allCases.count,
+            missing: displayedMissing,
+            score: displayedScore,
+            alreadyFilled: setup.status?.identity_have ?? [],
+            isSkippable: canSkip
+        )
+    }
+
+    private func loadCoach() async {
+        coachBusy = true
+        let out = await HorizonCoach.guidance(coachContext())
+        coachText = out.text
+        coachOnDevice = out.onDevice
+        coachBusy = false
     }
 
     @ViewBuilder

@@ -20,6 +20,7 @@ import re
 from . import context as ctx
 from . import conversation as convo
 from . import deadlines as deadlines_mod
+from . import horizon
 from . import discovery as discovery_mod
 from . import jobs_review
 from . import jobstore
@@ -319,7 +320,7 @@ def _start(user_id: str, p: ParsedMessage, raw: str) -> str:
     smalltalk = convo.smalltalk_reply(raw, name=voice.first_name(user_id))
     if smalltalk:
         return smalltalk
-    return _do_unknown(p, memory)
+    return _do_unknown(user_id, p, raw, memory)
 
 
 def _start_multi(user_id: str, actions: list[ParsedMessage], raw: str) -> str:
@@ -1672,14 +1673,43 @@ def _finish_identity(user_id: str, slots: dict) -> str:
     return f"Updated {label} to {shown}. I'll use that on forms."
 
 
-def _do_unknown(p: ParsedMessage, memory: dict) -> str:
-    if p.company:
+#: Sentence openers the router's company extractor mistakes for company names.
+#: It takes the first content token as the company when no role hint follows, so
+#: "Which of these should I do first?" parsed as company="Which" and answered
+#: 'Got "Which" but I'm not sure what to do' -- the same non-answer for every
+#: real question anyone would type. A leading interrogative or filler is never a
+#: company, and these turns are exactly the ones Horizon should get.
+_NOT_A_COMPANY = frozenset({
+    "actually", "also", "am", "and", "any", "anything", "anyway", "are", "but",
+    "can", "could", "did", "do", "does", "hello", "hey", "hi", "hmm", "honestly",
+    "how", "i", "is", "it", "just", "maybe", "me", "my", "ok", "okay", "please",
+    "should", "so", "tell", "that", "the", "then", "there", "these", "they",
+    "this", "those", "was", "were", "what", "when", "where", "which", "who",
+    "why", "would", "you", "your",
+})
+
+
+def _looks_like_a_company(name: str | None) -> bool:
+    head = (name or "").strip().split(" ")[0].lower()
+    return bool(head) and head not in _NOT_A_COMPANY
+
+
+def _do_unknown(user_id: str, p: ParsedMessage, raw: str, memory: dict) -> str:
+    if p.company and _looks_like_a_company(p.company):
         last = memory.get("last_company")
         anchor = f"\nLast mentioned: {last}." if last else ""
         return (
             f"Got '{p.company}' but I'm not sure what to do.\n"
             f"Did you mean to:\n1) apply  2) update status  3) add a note{anchor}"
         )
+    # Last stop before giving up. Horizon gets the turn with the person's real
+    # profile, matches and applications attached; questions this app has the
+    # facts to answer ("which should I do first?", "why this one?") used to die
+    # here. Returns None with no API key or once the daily chat slice is spent,
+    # which leaves the reply below exactly as it was.
+    grounded = horizon.answer(user_id, raw)
+    if grounded:
+        return grounded
     return (
         "I didn't fully understand that. Try “show new jobs”, "
         "“how do I autofill”, or “change my phone to …”. "

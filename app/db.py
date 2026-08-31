@@ -378,13 +378,18 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 CREATE INDEX IF NOT EXISTS idx_chat_messages_user ON chat_messages(user_id, id);
 
 -- Per-user paid LLM call log (daily cap). One row per consume().
+-- ``feature`` slices the cap so one caller can't spend the whole day (see
+-- app.llm_budget). Rows written before that column existed carry ''.
 CREATE TABLE IF NOT EXISTS llm_usage (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id    TEXT NOT NULL,
     day        TEXT NOT NULL,
+    feature    TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_llm_usage_user_day ON llm_usage(user_id, day);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_feature
+    ON llm_usage(user_id, day, feature);
 
 -- Invite-only beta feedback from the iOS app.
 CREATE TABLE IF NOT EXISTS feedback (
@@ -482,3 +487,12 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     fb_cols = {r[1] for r in conn.execute("PRAGMA table_info(feedback)")}
     if fb_cols and "context" not in fb_cols:
         conn.execute("ALTER TABLE feedback ADD COLUMN context TEXT")
+    usage_cols = {r[1] for r in conn.execute("PRAGMA table_info(llm_usage)")}
+    if usage_cols and "feature" not in usage_cols:
+        conn.execute(
+            "ALTER TABLE llm_usage ADD COLUMN feature TEXT NOT NULL DEFAULT ''"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_llm_usage_feature "
+            "ON llm_usage(user_id, day, feature)"
+        )

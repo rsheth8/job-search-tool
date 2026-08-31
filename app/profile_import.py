@@ -44,7 +44,11 @@ _GITHUB_RE = re.compile(
     re.I,
 )
 _CITY_STATE_RE = re.compile(
-    r"\b([A-Z][a-z]+(?:[\s\-][A-Z][a-z]+)*),\s*([A-Z]{2})\b"
+    # The separator must not cross a newline. `\s` did, so a resume with the
+    # name directly above the "City, ST" line -- the commonest header there is --
+    # parsed as city="Rahil Sheth\nChicago", which then became `location` and got
+    # typed into City on real applications.
+    r"\b([A-Z][a-z]+(?:[ \t\-][A-Z][a-z]+)*),\s*([A-Z]{2})\b"
 )
 _GRAD_YEAR_RE = re.compile(r"\b(20[1-3]\d)\b")
 _DEGREE_RE = re.compile(
@@ -53,13 +57,50 @@ _DEGREE_RE = re.compile(
     r"(?:\s+(?:of\s+)?(?:Science|Arts|Engineering|Computer Science))?)",
     re.I,
 )
+#: One capitalised word of an institution name.
+_NAME_WORD = r"[A-Z][A-Za-z.'\-]+"
+#: The rest of a name. Two fixes over a plain ``(?:\s+[A-Z]\w+)`` repeat:
+#:
+#: * lowercase connectives are allowed *between* capitalised words, so
+#:   "University of Illinois at Urbana-Champaign" no longer stops dead at "at".
+#:   A capitalised word must follow, so a trailing preposition can't end a name.
+#: * ``[ \t]`` instead of ``\s`` -- ``\s`` crossed newlines, so the section
+#:   header above the name joined it ("EDUCATION\nUniversity") and won the
+#:   alternation, losing the real name entirely. Same bug class as the
+#:   city/state header regex above.
+_NAME_TAIL = (rf"(?:[ \t]+(?:at|of|in|and|the)[ \t]+{_NAME_WORD}"
+              rf"|[ \t]+{_NAME_WORD})")
+
 _SCHOOL_RE = re.compile(
     r"\b("
-    r"University of [A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){0,4}"
-    r"|[A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){0,4}\s+"
+    rf"University of {_NAME_WORD}{_NAME_TAIL}{{0,4}}"
+    rf"|{_NAME_WORD}{_NAME_TAIL}{{0,4}}[ \t]+"
     r"(?:University|College|Institute|Polytechnic)"
+    # "Georgia Institute" / "Massachusetts Institute" stopped here, because the
+    # suffix word had to end the name. The trailing "of Technology" is part of
+    # both of those schools' actual names.
+    rf"(?:[ \t]+of[ \t]+{_NAME_WORD})?"
     r")\b"
 )
+# Seniority words in a job title, and years-of-experience claims. Without
+# these, an experienced resume leaves `seniority` empty and
+# app/eligibility.py:candidate_rank falls back to "entry" (rank 1) -- which
+# filters the candidate's own level out of discovery entirely.
+# The lookahead keeps a student's "senior year"/"senior design project" from
+# reading as a job level.
+_TITLE_LEVEL_RE = re.compile(
+    r"\b(principal|staff|senior|sr|lead|mid[-\s]level|architect)\b"
+    r"(?!\s+(?:year|design|project|thesis|capstone|seminar|class))",
+    re.I,
+)
+_LEVEL_WORD_RANK = {
+    "mid level": 2, "mid-level": 2,
+    "senior": 3, "sr": 3, "lead": 3, "architect": 3,
+    "staff": 4, "principal": 4,
+}
+_RANK_LABEL = {2: "Mid", 3: "Senior", 4: "Staff"}
+_YEARS_EXP_RE = re.compile(r"\b(\d{1,2})\+?\s*years?\b", re.I)
+
 _GPA_RE = re.compile(
     r"\b(?:GPA|G\.P\.A\.?)\s*[:\-]?\s*([0-4](?:\.\d{1,2})?)\b", re.I
 )
@@ -383,14 +424,21 @@ _DEGREE_TOKEN = re.compile(
 )
 
 
+#: Every continuation word used to require a capital, so the name stopped at the
+#: first lowercase connective: "University of Illinois at Urbana-Champaign" came
+#: out as "University of Illinois". This ran on the LLM overlay's output too, so
+#: even a correct paid extraction got truncated back. Lowercase connectives are
+#: now allowed *between* capitalised words; a trailing degree is still trimmed
+#: downstream by _DEGREE_TOKEN, which is what keeps "... B.S. Computer Science"
+#: out of the school name.
+_UNI_NAME_RE = re.compile(rf"(University of {_NAME_WORD}{_NAME_TAIL}{{0,4}})")
+
+
 def _clean_school(name: str) -> str:
     name = _clean_text(name)
     if not name:
         return ""
-    uni = re.search(
-        r"(University of [A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){0,4})",
-        name,
-    )
+    uni = _UNI_NAME_RE.search(name)
     if uni:
         name = uni.group(1)
     words = name.split()
@@ -527,6 +575,23 @@ def _roles_and_seniority(blob: str, grad_year: str) -> dict:
         seniority.append("Internship")
     if has_newgrad:
         seniority.append("New grad")
+    if not has_intern and not has_newgrad:
+        # Highest level named in a title wins; else infer from years claimed.
+        ranks = [
+            _LEVEL_WORD_RANK[w]
+            for w in (m.group(1).lower()
+                      for m in _TITLE_LEVEL_RE.finditer(head))
+            if w in _LEVEL_WORD_RANK
+        ]
+        rank = max(ranks) if ranks else None
+        if rank is None:
+            years = max((int(y) for y in _YEARS_EXP_RE.findall(head)), default=0)
+            if years >= 6:
+                rank = 3
+            elif years >= 3:
+                rank = 2
+        if rank in _RANK_LABEL:
+            seniority.append(_RANK_LABEL[rank])
     out: dict = {}
     if roles:
         out["roles"] = ", ".join(dict.fromkeys(roles))
@@ -715,11 +780,11 @@ def _llm_parse(text: str) -> dict | None:
         return None
     from . import llm_budget
 
-    if not llm_budget.consume():
+    if not llm_budget.consume(feature="parse"):
         return None
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=s.anthropic_api_key)
+        from . import llm_health
+        client = llm_health.client(s.anthropic_api_key)
         snippet = text[:MAX_PARSE_CHARS]
         resp = client.messages.create(
             model=s.anthropic_model,

@@ -19,6 +19,11 @@ async def lifespan(app: FastAPI):
     # import) so a bare `import app.main` in tests doesn't spin up a real
     # scheduler. No-op if apscheduler isn't installed.
     _init_sentry()
+    # A broken key or model degrades every AI feature to heuristics silently.
+    # Log it at boot so it's caught before testers get the build.
+    from .llm_health import warn_if_misconfigured
+
+    warn_if_misconfigured()
     from .scheduler import start_scheduler
 
     start_scheduler()
@@ -335,9 +340,14 @@ async def apply_pass(request: Request) -> dict:
     body = await request.json()
     uid = _resolve_user(request, body.get("user"))
     pid = int(body["posting_id"])
+    # Report honestly, like /apply/snooze and /apply/applied do. This returned
+    # ok:True even for a posting that isn't this user's (the write was already
+    # correctly skipped), so the client couldn't tell "dismissed" from "not
+    # yours" and would cross it off the list anyway.
+    if jobstore.get_posting(uid, pid) is None:
+        return {"ok": False}
     apply_queue.remove(uid, pid)
-    if jobstore.get_posting(uid, pid) is not None:
-        jobstore.mark_posting_status(pid, "dismissed")
+    jobstore.mark_posting_status(pid, "dismissed")
     return {"ok": True}
 
 
@@ -756,17 +766,41 @@ def health() -> dict:
 
     from .errors import ping_db
 
+    from . import llm_health
+
     s = get_settings()
     router = get_router()
     db_ok = ping_db()
+    llm_problem = llm_health.config_problem()
     info = {
         "status": "ok" if db_ok else "degraded",
         "router": router.name,
-        "chat_router": "heuristic",
+        # Intent parsing is still always heuristic, but Horizon answers the
+        # turns the grammar can't -- reporting a bare "heuristic" here hid that.
+        "chat_router": "heuristic+horizon" if s.use_llm_router else "heuristic",
         "model": s.anthropic_model if s.use_llm_router else None,
         "db": s.database_path,
         "db_ok": db_ok,
     }
+    # Whether paid calls are actually *working*, not just configured. Counters
+    # are per-process, so they reset on deploy and each machine reports its own.
+    info["llm"] = {
+        "configured": s.use_llm_router,
+        "model_valid": llm_health.model_looks_valid(s.anthropic_model),
+        "problem": llm_problem,
+        **llm_health.snapshot(),
+        "caps": {
+            "per_user_per_day": s.llm_max_calls_per_user_per_day,
+            "chat": s.llm_cap_chat,
+            "discovery": s.llm_cap_discovery,
+            "draft": s.llm_cap_draft,
+            "parse": s.llm_cap_parse,
+            "quiz": s.llm_cap_quiz,
+        },
+    }
+    if llm_problem and s.anthropic_api_key.strip():
+        # Misconfigured-but-keyed is a mistake worth flagging in the top line.
+        info["status"] = "degraded"
     # Surface token usage so cost/efficiency is observable at a glance.
     if hasattr(router, "usage"):
         info["usage"] = router.usage
@@ -813,8 +847,71 @@ def health() -> dict:
             and bool(s.allowed_emails)
             and info["reminder_delivery"] == "app"
         ),
+        # Separate from invite_ready on purpose: a misconfigured model is a
+        # quality problem, not a security one. Both should be true before
+        # handing out builds. GET /health/llm proves the key actually works.
+        "llm_ready": llm_problem is None,
     }
+    info["dependencies"] = _dependency_report()
+    if info["dependencies"]["missing"]:
+        info["status"] = "degraded"
     return info
+
+
+def _dependency_report() -> dict:
+    """Optional deps that enabled features hard-depend on.
+
+    Resume tailoring and cover letters are on by default and need both pypdf
+    and tectonic. Without them the app logs and skips -- correct, but silent, so
+    "why did resumes stop working" was only answerable from log archaeology.
+    Push needs pyjwt + cryptography for the APNs token.
+    """
+    import importlib.util
+
+    from .resume_tailor import resolve_tectonic
+
+    s = get_settings()
+
+    def have(mod: str) -> bool:
+        try:
+            return importlib.util.find_spec(mod) is not None
+        except (ImportError, ValueError):
+            return False
+
+    # resolve_tectonic honours TECTONIC_BIN, $PATH, then the repo .cache -- a
+    # bare which("tectonic") would report the deploy image's binary as missing.
+    pypdf, tectonic = have("pypdf"), resolve_tectonic() is not None
+    jwt_ok, crypto_ok = have("jwt"), have("cryptography")
+    report = {
+        "pypdf": pypdf,
+        "tectonic": tectonic,
+        "pyjwt": jwt_ok,
+        "cryptography": crypto_ok,
+    }
+    missing = []
+    if (s.resume_tailor_enabled or s.cover_letter_enabled):
+        if not pypdf:
+            missing.append("pypdf (resume/cover PDFs will not be served)")
+        if not tectonic:
+            missing.append("tectonic (resume/cover PDFs cannot be compiled)")
+    if s.push_enabled and not (jwt_ok and crypto_ok):
+        missing.append("pyjwt+cryptography (push notifications cannot be signed)")
+    report["missing"] = missing
+    return report
+
+
+@app.get("/health/llm")
+def health_llm(request: Request) -> dict:
+    """Prove the Anthropic key and model actually work: one tiny real call.
+
+    Gated because it spends a request. Shape validation can't distinguish a
+    revoked key from a good one, so this is the check the launch checklist's
+    "valid ANTHROPIC_API_KEY" really needs.
+    """
+    from . import auth, llm_health
+
+    auth.require_apply_access(request)
+    return {"probe": llm_health.probe(), **llm_health.snapshot()}
 
 
 # ---------------------------------------------------------------------------

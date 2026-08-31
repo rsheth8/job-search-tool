@@ -39,6 +39,34 @@ enum OnDeviceSession {
         let result = try await session.respond(to: text, generating: OnDeviceTurn.self)
         return result.content.payload
     }
+
+    /// Free-form reply for Horizon's onboarding coaching. `classify` is guided
+    /// generation into an action; this one is prose, so the caller owns the whole
+    /// prompt (see `HorizonCoach`, which grounds it in real app facts and the
+    /// person's actual setup state).
+    ///
+    /// Returns nil on any failure — timeout, model still downloading, guardrail
+    /// refusal — so the caller can fall back to a written tip rather than show
+    /// an error during first-run setup.
+    static func coach(prompt: String, timeout: TimeInterval = 12) async -> String? {
+        do {
+            return try await withThrowingTaskGroup(of: String.self) { group in
+                group.addTask {
+                    let session = LanguageModelSession()
+                    return try await session.respond(to: prompt).content
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    throw CancellationError()
+                }
+                let first = try await group.next()
+                group.cancelAll()
+                return first
+            }
+        } catch {
+            return nil
+        }
+    }
 }
 
 @available(iOS 26, *)
