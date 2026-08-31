@@ -219,8 +219,26 @@ def _columns(conn: sqlite3.Connection, table: str) -> list[str]:
     return [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
 
 
-def _init_db_file(path: str) -> None:
-    """Create a schema-complete SQLite file (SCHEMA + migrations) at ``path``."""
+def _init_db_file(path: str, *, overwrite: bool = False) -> None:
+    """Create a schema-complete SQLite file (SCHEMA + migrations) at ``path``.
+
+    Refuses an existing file. The schema is built with ``CREATE TABLE IF NOT
+    EXISTS``, so writing into one that already has rows *appends* — which turns
+    a re-run into either a silently doubled backup or a confusing
+    ``UNIQUE constraint failed`` from the second copy of the same rows. Neither
+    is something a backup command should do quietly.
+    """
+    import os
+
+    if os.path.exists(path):
+        if not overwrite:
+            raise FileExistsError(
+                f"{path} already exists. Exporting into it would append to what "
+                f"is already there. Pass overwrite=True (CLI: --overwrite) or "
+                f"choose another path."
+            )
+        os.remove(path)
+
     from .db import _migrate_schema
 
     c = sqlite3.connect(path)
@@ -233,6 +251,7 @@ def _init_db_file(path: str) -> None:
 
 
 def export_user(user_id: str, out_path: str, *, tables=BRAIN_TABLES,
+                overwrite: bool = False,
                 conn: sqlite3.Connection | None = None) -> Transfer:
     """Copy ``user_id``'s rows into a standalone SQLite file at ``out_path``.
 
@@ -246,7 +265,7 @@ def export_user(user_id: str, out_path: str, *, tables=BRAIN_TABLES,
     ``Transfer`` rather than raising, so one retired table cannot take a whole
     backup down with it — but they are never silently dropped either.
     """
-    _init_db_file(out_path)
+    _init_db_file(out_path, overwrite=overwrite)
     own = conn is None
     if own:
         ctx = connect()
