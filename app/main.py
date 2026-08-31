@@ -781,6 +781,10 @@ def health() -> dict:
         "model": s.anthropic_model if s.use_llm_router else None,
         "db": s.database_path,
         "db_ok": db_ok,
+        # "wal" or the deployment is serialising every reader behind the
+        # discovery loop. Unverifiable without SSH otherwise, and it is a
+        # property of the *file* -- a restored snapshot can land without it.
+        "db_journal": _journal_mode_safe(),
     }
     # Whether paid calls are actually *working*, not just configured. Counters
     # are per-process, so they reset on deploy and each machine reports its own.
@@ -897,6 +901,15 @@ def health() -> dict:
     if info["dependencies"]["missing"]:
         info["status"] = "degraded"
     return info
+
+
+def _journal_mode_safe() -> str:
+    from .db import journal_mode
+
+    try:
+        return journal_mode()
+    except Exception:  # noqa: BLE001 - /health must answer even when the DB won't
+        return "unknown"
 
 
 def _dependency_report() -> dict:
