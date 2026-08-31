@@ -43,13 +43,51 @@ _GITHUB_RE = re.compile(
     r"([A-Za-z0-9](?:[A-Za-z0-9\-]{0,37}[A-Za-z0-9])?)\b",
     re.I,
 )
+#: Real USPS codes. Without this, "([A-Z]{2})" accepts any two capitals, and a
+#: resume that mentions "workshops on React, AI/ML" yields city="React",
+#: state="AI" -- which is then typed into City and State on real applications.
+#: Every other guard in this module (`_SKILLISH`, `_is_geo_location`) protects
+#: the `locations` search field; identity city/state was taken straight from
+#: this regex, ungated.
+_US_STATES = frozenset({
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID",
+    "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS",
+    "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK",
+    "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
+    "WI", "WY",
+    "DC", "PR", "VI", "GU", "AS", "MP",          # federal district + territories
+    "AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE", "QC", "SK",
+    "YT",                                         # Canadian provinces
+})
+
 _CITY_STATE_RE = re.compile(
     # The separator must not cross a newline. `\s` did, so a resume with the
     # name directly above the "City, ST" line -- the commonest header there is --
     # parsed as city="Rahil Sheth\nChicago", which then became `location` and got
     # typed into City on real applications.
-    r"\b([A-Z][a-z]+(?:[ \t\-][A-Z][a-z]+)*),\s*([A-Z]{2})\b"
+    #
+    # The trailing boundary is `(?![a-z])`, not `\b`. PDF text extraction runs a
+    # right-aligned date into the location it sits beside -- a real resume
+    # produced "Minneapolis, MNAug 2023 - Present" -- and `\b` finds no boundary
+    # between "MN" and "Aug", so the only genuine location in the document was
+    # missed while a false one further down was taken. Requiring the next
+    # character not to be lowercase accepts "MNAug" and still rejects
+    # "MNesota"; the state whitelist above is what makes that safe.
+    r"\b([A-Z][a-z]+(?:[ \t\-][A-Z][a-z]+)*),[ \t]*([A-Z]{2})(?![a-z])"
 )
+def _find_city_state(text: str) -> tuple[str, str] | None:
+    """First "City, ST" whose ST is a real state code. None if there isn't one.
+
+    Scanning for the *first valid* match rather than the first match is the
+    point: a resume that mentions a skill pair before it mentions where the
+    person lives would otherwise hand the skill pair to City and State.
+    """
+    for m in _CITY_STATE_RE.finditer(text or ""):
+        if m.group(2).upper() in _US_STATES:
+            return m.group(1), m.group(2).upper()
+    return None
+
+
 _GRAD_YEAR_RE = re.compile(r"\b(20[1-3]\d)\b")
 _DEGREE_RE = re.compile(
     r"\b((?:B\.?S\.?|B\.?A\.?|M\.?S\.?|M\.?Eng\.?|Ph\.?D\.?|MBA|"
@@ -612,7 +650,7 @@ def _is_geo_location(text: str) -> bool:
         if words & _SKILLISH or tok in _SKILLISH:
             skillish += 1
             continue
-        if _CITY_STATE_RE.search(part) or words & _GEO_WORDS:
+        if _find_city_state(part) or words & _GEO_WORDS:
             geo += 1
             continue
         if re.search(r"\b(city|area|county|metro)\b", tok):
@@ -681,10 +719,9 @@ def _heuristic_parse(text: str) -> dict:
     if gh:
         identity["github"] = f"https://github.com/{gh.group(1)}"
 
-    loc = _CITY_STATE_RE.search(blob[:2000])
+    loc = _find_city_state(blob[:2000])
     if loc:
-        identity["city"] = loc.group(1)
-        identity["state"] = loc.group(2)
+        identity["city"], identity["state"] = loc
 
     first, last = _name_from_header(blob)
     if first:
@@ -967,16 +1004,19 @@ def _split_name(full: str) -> tuple[str, str]:
 
 
 def _parse_location(raw: str) -> dict:
-    m = _CITY_STATE_RE.search(raw)
+    m = _find_city_state(raw)
     if m:
-        return {"city": m.group(1), "state": m.group(2)}
+        return {"city": m[0], "state": m[1]}
     if "," in raw:
         city, rest = raw.split(",", 1)
         city, rest = city.strip(), rest.strip()
         out = {}
         if city:
             out["city"] = city
-        if len(rest) == 2 and rest.isalpha():
+        # Same whitelist as the regex path. Without it this fallback re-opens
+        # the hole the regex just closed: "React, AI" splits into a two-letter
+        # alphabetic remainder and becomes a state again.
+        if len(rest) == 2 and rest.upper() in _US_STATES:
             out["state"] = rest.upper()
         elif rest:
             out["country"] = rest
