@@ -13,3 +13,9 @@ ios/.derivedData/
 ios/*.xcodeproj/xcuserdata/
 ios/*.xcodeproj/project.xcworkspace/xcuserdata/
 simulator_screenshot*.png
+
+# Apple signing keys. A .p8 is a private key: it belongs in a secret store
+# (fly secrets set APNS_KEY_PEM), never in the repo. It arrives from Apple
+# named AuthKey_<KEYID>.p8 and lands in whatever directory you downloaded it
+# to, which is how one ends up committed.
+*.p8

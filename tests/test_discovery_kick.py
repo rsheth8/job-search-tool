@@ -134,12 +134,30 @@ def test_health_names_the_missing_apns_settings(monkeypatch):
     monkeypatch.setenv("APNS_TEAM_ID", "t")
     monkeypatch.setenv("APNS_BUNDLE_ID", "com.rahil.jobpilot")
     monkeypatch.setenv("APNS_KEY_PATH", "")
+    monkeypatch.setenv("APNS_KEY_PEM", "")
     config.get_settings.cache_clear()
 
     push = TestClient(app).get("/health").json()["push"]
     assert push["enabled"] is True
     assert push["active"] is False
-    assert push["missing"] == ["APNS_KEY_PATH"]
+    # Either setting satisfies the key, so neither name alone is "missing".
+    assert push["missing"] == ["APNS_KEY_PEM (or APNS_KEY_PATH)"]
+    assert push["key_source"] == ""
+
+
+def test_health_reports_which_form_the_signing_key_arrived_in(monkeypatch):
+    """`key_source` is how you tell "the secret landed" from "the volume still
+    has the old .p8" without an SSH session."""
+    for key, value in (("PUSH_ENABLED", "true"), ("APNS_KEY_ID", "k"),
+                       ("APNS_TEAM_ID", "t"), ("APNS_BUNDLE_ID", "com.rahil.jobpilot"),
+                       ("APNS_KEY_PATH", ""), ("APNS_KEY_PEM", "-----BEGIN-----")):
+        monkeypatch.setenv(key, value)
+    config.get_settings.cache_clear()
+
+    push = TestClient(app).get("/health").json()["push"]
+    assert push["missing"] == []
+    assert push["active"] is True
+    assert push["key_source"] == "pem"
 
 
 def test_health_push_is_clean_once_every_apns_value_is_set(monkeypatch):
