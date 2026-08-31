@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     llm_cap_chat: int = 30       # Horizon answering questions
     llm_cap_discovery: int = 30  # matcher job<->profile scoring
     llm_cap_draft: int = 20      # cover letters, outreach, resume tailoring
-    llm_cap_parse: int = 8       # resume / LinkedIn extraction
+    llm_cap_parse: int = 25      # resume / LinkedIn extraction
     llm_cap_quiz: int = 8        # onboarding answer polish
 
     default_followup_days: int = 7
