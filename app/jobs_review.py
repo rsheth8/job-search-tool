@@ -105,7 +105,7 @@ def continue_review(user_id: str, pending: Pending, text: str) -> str:
     elif _APPLY.match(text.strip()):
         pass
     elif _SKIP.match(text.strip()):
-        jobstore.mark_posting_status(row["id"], "dismissed")
+        jobstore.mark_posting_status(user_id, row["id"], "dismissed")
         pending.slots["dismissed"] = pending.slots.get("dismissed", 0) + 1
         return _advance(user_id, pending)
     else:
@@ -117,7 +117,7 @@ def continue_review(user_id: str, pending: Pending, text: str) -> str:
         posting.title or "Role",
         source=f"discovery:{posting.source}",
     )
-    jobstore.mark_posting_status(row["id"], "applied")
+    jobstore.mark_posting_status(user_id, row["id"], "applied")
     pending.slots["applied"] = pending.slots.get("applied", 0) + 1
     link = f"\n{posting.url}" if posting.url else ""
     next_msg = _advance(user_id, pending)

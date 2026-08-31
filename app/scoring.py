@@ -89,7 +89,7 @@ def rank_followups(
     for a in apps:
         if a["status"] in TERMINAL_STATUSES:
             continue
-        has_recruiter = store.has_recruiter_signal(a["id"])
+        has_recruiter = store.has_recruiter_signal(user_id, a["id"])
         total, breakdown = score_application(
             a, now=now, has_recruiter=has_recruiter
         )

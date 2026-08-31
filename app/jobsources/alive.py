@@ -289,7 +289,7 @@ def close_dead_shortlist(user_id: str, *, today_n: int = 5, get=None) -> int:
     for pid, url in targets:
         if check_apply_url(url, get=get):
             continue
-        jobstore.mark_posting_status(pid, "closed")
+        jobstore.mark_posting_status(user_id, pid, "closed")
         apply_queue.remove(user_id, pid)
         closed += 1
         logger.info("alive: closed posting %s (%s)", pid, url)

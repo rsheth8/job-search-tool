@@ -324,7 +324,7 @@ def test_snooze_then_resurfaces_after_expiry():
     assert "no jobs in your queue" in handle_sms("u", "any new jobs").lower()
     # Force the snooze into the past → it wakes and shows again.
     past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-    jobstore.snooze_posting(row["id"], past)
+    jobstore.snooze_posting("u", row["id"], past)
     assert "Backend Engineer" in handle_sms("u", "any new jobs")
 
 

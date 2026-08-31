@@ -44,16 +44,16 @@ def test_undo_status_reverts_stage_and_drops_event():
     app = store.find_application("u", "Stripe")
     assert app["status"] == "Applied"
     # The reverted status event is gone — history stays honest.
-    assert not any(e["type"] == "status" for e in store.list_events(app["id"]))
+    assert not any(e["type"] == "status" for e in store.list_events("u", app["id"]))
 
 
 def test_undo_note_removes_the_note():
     handle_sms("u", "applied stripe swe")
     handle_sms("u", "note stripe recruiter was great")
     app = store.find_application("u", "Stripe")
-    assert any(e["type"] == "note" for e in store.list_events(app["id"]))
+    assert any(e["type"] == "note" for e in store.list_events("u", app["id"]))
     handle_sms("u", "undo")
-    assert not any(e["type"] == "note" for e in store.list_events(app["id"]))
+    assert not any(e["type"] == "note" for e in store.list_events("u", app["id"]))
 
 
 def test_undo_edit_restores_prior_fields():

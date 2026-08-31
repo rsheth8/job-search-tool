@@ -56,7 +56,7 @@ def test_staleness_dominates_ranking():
 def test_terminal_statuses_excluded():
     keep = store.create_application("u", "OpenCo", None)
     gone = store.create_application("u", "ClosedCo", None)
-    store.update_status(gone["id"], "Rejected")
+    store.update_status("u", gone["id"], "Rejected")
     companies = [a["company"] for a, _, _ in scoring.rank_followups("u")]
     assert "OpenCo" in companies
     assert "ClosedCo" not in companies
@@ -64,6 +64,6 @@ def test_terminal_statuses_excluded():
 
 def test_recruiter_signal_from_notes():
     app = store.create_application("u", "RecruiterCo", None)
-    assert store.has_recruiter_signal(app["id"]) is False
-    store.add_note(app["id"], "their recruiter reached out on LinkedIn")
-    assert store.has_recruiter_signal(app["id"]) is True
+    assert store.has_recruiter_signal("u", app["id"]) is False
+    store.add_note("u", app["id"], "their recruiter reached out on LinkedIn")
+    assert store.has_recruiter_signal("u", app["id"]) is True

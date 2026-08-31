@@ -23,8 +23,8 @@ def test_status_change_recomputes_followup():
         "u", "Stripe", "SWE", applied_at=datetime.now(timezone.utc) - timedelta(days=30)
     )
     old = app["next_follow_up_at"]
-    store.update_status(app["id"], "Phone screen")
-    fresh = store.get_application(app["id"])
+    store.update_status("u", app["id"], "Phone screen")
+    fresh = store.get_application("u", app["id"])
     assert fresh["next_follow_up_at"] != old
     # Recomputed off "now", so it should be ~7 days out.
     assert _parse(fresh["next_follow_up_at"]) > datetime.now(timezone.utc) + timedelta(days=6)
@@ -32,16 +32,16 @@ def test_status_change_recomputes_followup():
 
 def test_terminal_status_clears_followup():
     app = store.create_application("u", "Stripe", "SWE")
-    store.update_status(app["id"], "Rejected")
-    assert store.get_application(app["id"])["next_follow_up_at"] is None
+    store.update_status("u", app["id"], "Rejected")
+    assert store.get_application("u", app["id"])["next_follow_up_at"] is None
 
 
 def test_note_resets_the_followup_clock():
     app = store.create_application(
         "u", "Stripe", "SWE", applied_at=datetime.now(timezone.utc) - timedelta(days=30)
     )
-    store.add_note(app["id"], "left a voicemail")
-    fresh = store.get_application(app["id"])
+    store.add_note("u", app["id"], "left a voicemail")
+    fresh = store.get_application("u", app["id"])
     assert _parse(fresh["next_follow_up_at"]) > datetime.now(timezone.utc) + timedelta(days=6)
 
 

@@ -196,8 +196,8 @@ def test_outcome_weighting_credits_peak_stage_not_current():
 
     _seed_label("u1", "applied", ext="1", title="Software Engineer")
     app = store.create_application("u1", "Acme", "Software Engineer", status="Applied")
-    store.update_status(app["id"], "Onsite")
-    store.update_status(app["id"], "Rejected")  # ends rejected, but reached onsite
+    store.update_status("u1", app["id"], "Onsite")
+    store.update_status("u1", app["id"], "Rejected")  # ends rejected, but reached onsite
 
     grade = reranker._outcome_grader("u1")
     assert grade("Acme", "Software Engineer") == reranker._OUTCOME_WEIGHTS["Onsite"]
