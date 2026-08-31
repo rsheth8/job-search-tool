@@ -7,6 +7,8 @@ mid-quiz does not dismiss the quiz — only an explicit complete does.
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime, timezone
 
 from . import applicant, knowledge, profile
 
@@ -171,6 +173,21 @@ def quiz_draft(user_id: str, *, polish: bool = False) -> dict:
     return draft
 
 
+def _has_graduated(grad_year) -> bool:
+    """True when the graduation year is safely in the past.
+
+    The bio said "studying" whenever a school and degree were present, so
+    someone who finished in 2019 with six years of experience introduced
+    themselves as a student on every application. A graduation year in the
+    current year stays ambiguous (they may still be enrolled), so only strictly
+    earlier years flip the tense.
+    """
+    m = re.search(r"(19|20)\d{2}", str(grad_year or ""))
+    if not m:
+        return False
+    return int(m.group(0)) < datetime.now(timezone.utc).year
+
+
 def _about_template(ident: dict, prof: dict) -> str:
     name = (ident.get("first_name") or ident.get("full_name") or "").strip()
     school = (ident.get("school") or "").strip()
@@ -178,11 +195,16 @@ def _about_template(ident: dict, prof: dict) -> str:
     disc = (ident.get("discipline") or "").strip()
     roles = (prof.get("roles") or "software engineering roles").strip()
     who = f"I'm {name}" if name else "I'm a candidate"
-    edu = ", ".join(p for p in (degree, disc) if p)
+    # "B.S., Computer Science from X" read like a list; "B.S. in Computer
+    # Science" works in both the graduated and still-studying phrasings.
+    edu = " in ".join(p for p in (degree, disc) if p)
+    graduated = _has_graduated(ident.get("grad_year"))
     if school and edu:
-        lead = f"{who}, studying {edu} at {school}."
+        lead = (f"{who}, {edu} from {school}." if graduated
+                else f"{who}, studying {edu} at {school}.")
     elif school:
-        lead = f"{who} at {school}."
+        lead = (f"{who}, {school} alum." if graduated
+                else f"{who} at {school}.")
     else:
         lead = f"{who}."
     return f"{lead} I'm looking for {roles}."
@@ -218,7 +240,7 @@ def _llm_polish_quiz(
     from . import llm_budget
 
     llm_budget.set_user(user_id)
-    if not llm_budget.consume(user_id):
+    if not llm_budget.consume(user_id, feature="quiz"):
         return None
     facts = []
     for item in items[:12]:
@@ -229,8 +251,8 @@ def _llm_polish_quiz(
         facts.append(f"- {cat}: {text[:280]}")
     blob = "\n".join(facts) or "(no stored facts yet)"
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=s.anthropic_api_key)
+        from . import llm_health
+        client = llm_health.client(s.anthropic_api_key)
         resp = client.messages.create(
             model=s.anthropic_model,
             max_tokens=700,

@@ -105,6 +105,15 @@ def _terms(profile: sqlite3.Row | None) -> set[str]:
     return {t.strip().lower() for t in _SPLIT.split(raw) if t.strip()}
 
 
+def _roles(profile: sqlite3.Row | None) -> set[str]:
+    """Just the target roles. Scoring weights a role match in the *title* far
+    above any single skill keyword; merged into ``_terms`` it was worth exactly
+    as much as "docker"."""
+    if profile is None:
+        return set()
+    return {t.strip().lower() for t in _SPLIT.split(profile["roles"] or "") if t.strip()}
+
+
 def _match_terms(profile: sqlite3.Row | None) -> set[str]:
     """Broad term set for the free pre-filter gate: clause phrases + individual
     word tokens + expanded abbreviations (so a bare "swe" still surfaces
@@ -165,13 +174,58 @@ def prefilter(postings: list[JobPosting], profile: sqlite3.Row | None) -> list[J
 # Scoring
 # ---------------------------------------------------------------------------
 
-def _heuristic_score(p: JobPosting, terms: set[str], locations: list[str]) -> float:
+# How many matched skill concepts read as full skill coverage. Without a cap,
+# the score was `matched / len(terms)`, so every extra skill a user listed
+# lowered the score of every job: the same "Senior Platform Engineer" posting
+# scored 0.650 against a 4-term profile and 0.332 against an 11-term one. With
+# the alert threshold at 0.6, thoroughly filling in your profile meant nothing
+# surfaced at all.
+_SKILL_SATURATION = 4
+#: Weight on "is this my job title" vs "does it use my skills". At 0.5 a title
+#: match with no skill overlap scores exactly 0.5 -- under the 0.6 alert bar.
+_ROLE_WEIGHT = 0.5
+
+
+def _coverage(skills: set[str], text: str) -> float:
+    """How much of the skill list the posting mentions, saturating.
+
+    Whole-word, like prefilter: plain ``t in text`` credited "ai" for "email"
+    and "ml" for "HTML", the exact bug ``_term_in`` exists to stop. Saturating
+    at ``_SKILL_SATURATION`` keeps a thorough profile from scoring *worse* --
+    a plain ``matched / len(skills)`` ratio meant every skill someone added
+    dragged every job's score down.
+    """
+    matched = sum(1 for t in skills if _term_in(t, text))
+    return min(1.0, matched / min(len(skills), _SKILL_SATURATION))
+
+
+def _heuristic_score(p: JobPosting, terms: set[str], locations: list[str],
+                     *, roles: set[str] | frozenset[str] = frozenset()) -> float:
     text = _haystack(p)
-    if not terms:
-        base = 0.5
+    # Roles get their own axis below. Leaving them in the skill denominator too
+    # counted each role twice, which let a title match with zero skill overlap
+    # ("Software Engineer -- legacy maintenance", for a Kubernetes profile)
+    # reach 0.70 and clear the alert threshold.
+    skills = set(terms) - set(roles)
+    if roles and skills:
+        in_title = any(_term_in(r, (p.title or "").lower()) for r in roles)
+        anywhere = in_title or any(_term_in(r, text) for r in roles)
+        role_component = 1.0 if in_title else (0.45 if anywhere else 0.0)
+        # A title match alone lands at _ROLE_WEIGHT -- deliberately just under
+        # the 0.6 alert bar, so "right title, wrong stack" stays a browse, not
+        # a notification. Skills carry it the rest of the way.
+        base = (_ROLE_WEIGHT * role_component
+                + (1 - _ROLE_WEIGHT) * _coverage(skills, text))
+    elif skills:
+        base = _coverage(skills, text)
+    elif terms:
+        # Roles but no skills beyond them: the profile is titles only, so there
+        # is nothing to weigh a title match *against*. Weighting it here would
+        # score every same-titled posting 1.0 however little else lines up, so
+        # every term counts equally instead.
+        base = _coverage(terms, text)
     else:
-        matched = sum(1 for t in terms if t in text)
-        base = matched / len(terms)
+        base = 0.5
     if locations:
         if any(loc in text for loc in locations):
             base += 0.15
@@ -214,10 +268,10 @@ _llm_limiter: TokenBucket | None = None
 def _get_llm():
     global _llm_client, _llm_limiter
     if _llm_client is None:
-        import anthropic  # lazy: offline/test paths never import it
+        from . import llm_health  # lazy: offline/test paths skip anthropic
 
         s = get_settings()
-        _llm_client = anthropic.Anthropic(api_key=s.anthropic_api_key)
+        _llm_client = llm_health.client(s.anthropic_api_key)
         _llm_limiter = TokenBucket(s.llm_rate_limit_per_min)
     return _llm_client, _llm_limiter
 
@@ -245,7 +299,7 @@ def _llm_score_chunk(postings: list[JobPosting], profile_block: str) -> dict[int
     if not limiter.allow():
         raise RuntimeError("llm rate limited")
     from . import llm_budget
-    if not llm_budget.consume():
+    if not llm_budget.consume(feature="discovery"):
         raise RuntimeError("llm user daily cap")
     listing = "\n".join(
         f"[{i}] {p.title} — {p.location or 'n/a'} | {p.description[:_DESC_CHARS]}"
@@ -297,6 +351,7 @@ def score(
     if not postings:
         return []
     terms, locations = _terms(profile), _locations(profile)
+    roles = _roles(profile)
 
     use_llm = llm is not None or (allow_llm and get_settings().use_llm_router)
     if use_llm:
@@ -306,9 +361,9 @@ def score(
             return [
                 (p, round(float(llm_scores[i]), 3))
                 if i in llm_scores
-                else (p, _heuristic_score(p, terms, locations))
+                else (p, _heuristic_score(p, terms, locations, roles=roles))
                 for i, p in enumerate(postings)
             ]
         except Exception:  # noqa: BLE001 — never block discovery on the LLM
             logger.warning("LLM scoring failed; using heuristic", exc_info=True)
-    return [(p, _heuristic_score(p, terms, locations)) for p in postings]
+    return [(p, _heuristic_score(p, terms, locations, roles=roles)) for p in postings]
