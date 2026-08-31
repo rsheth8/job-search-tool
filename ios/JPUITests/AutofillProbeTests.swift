@@ -9,6 +9,9 @@ final class AutofillProbeTests: XCTestCase {
 
     func testAutofillProbe() throws {
         let app = XCUIApplication()
+        // The launch sequence is 1.75s of cinematic before the first tappable
+        // control exists. Tests are not the audience for it.
+        app.launchArguments += ["-JobPilotSkipLaunch"]
         app.launch()
 
         // Land on Apply with the staged match.

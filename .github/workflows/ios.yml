@@ -1,0 +1,65 @@
+# Compile the iPhone app.
+#
+# Until this existed, no CI job touched `ios/` at all: a Swift compile error
+# reached main and was found by whoever next opened Xcode. pytest cannot catch
+# it — the rules-parity tests read Autofill.swift as *text*, so a file that
+# doesn't build still passes them.
+#
+# This builds, and does not run, the UI tests. They drive a booted simulator
+# against a live backend, which is a different kind of job with a different
+# failure rate; compiling them here still catches the rot that actually happens
+# — a renamed screen or a changed accessibility identifier — in seconds rather
+# than at the next manual run.
+name: iOS
+
+on:
+  pull_request:
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+  push:
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+
+jobs:
+  build:
+    name: xcodebuild
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      # The shipping spec. CODE_SIGNING_ALLOWED=NO so no signing identity or
+      # DEVELOPMENT_TEAM secret is needed to prove the code compiles.
+      - name: Build the app
+        working-directory: ios
+        run: |
+          xcodegen generate
+          xcodebuild \
+            -project JobPilot.xcodeproj \
+            -scheme JobPilot \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      # The test-only spec. Never ship a build from it (it enables
+      # UIFileSharingEnabled); compiling it keeps the UI tests honest and proves
+      # the spec still lists every source file.
+      - name: Build the UI tests
+        working-directory: ios
+        run: |
+          xcodegen generate --spec .uitest.yml
+          xcodebuild \
+            -project JobPilotUITest.xcodeproj \
+            -scheme JPUITests \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build-uitest \
+            CODE_SIGNING_ALLOWED=NO \
+            build-for-testing

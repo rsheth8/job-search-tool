@@ -186,6 +186,11 @@ Three rules in there that were each a real wrong-answer bug:
 
 ## 5. Outstanding beta items
 
+0. **Run the preflight first** — `.venv/bin/python -m scripts.beta_preflight
+   --url https://job-search-tool.fly.dev`. It grades everything in this section
+   off `/health`, separates blockers (isolation) from advisories (a degraded
+   feature), and exits 1 on a blocker. `--token … --spend` adds the one live
+   Anthropic call.
 1. **Fly secrets** (see `deploy/BETA.md`): `APPLY_API_TOKEN`, `AUTH_ALLOWED_EMAILS`,
    `APPLE_CLIENT_IDS`, `SENTRY_DSN`, valid `ANTHROPIC_API_KEY`.
    **Verify it, don't assume it.** Every paid call site fails open to a heuristic,
@@ -205,7 +210,10 @@ Three rules in there that were each a real wrong-answer bug:
    a no-op until the per-class label minimums are met, so nothing to do unless
    you're importing trained labels via `scripts.import_user` from local dev.
 3. **Base resumes** on volume: `swe.tex` + `aiml.tex` → `/data/resumes/`.
+   `/health.resume` now lists what is actually on the volume, so "did the upload
+   land?" is answerable without SSH.
 4. **Push:** `PUSH_ENABLED` + all `APNS_*`; `APNS_USE_SANDBOX=false` for TestFlight.
+   `/health.push` names which `APNS_*` values are still blank.
 5. **Dogfood:** one real Greenhouse/Lever/Ashby apply via Autofill; résumé manual attach.
 
 ---
@@ -232,6 +240,14 @@ Three rules in there that were each a real wrong-answer bug:
 
 `tests/conftest.py` forces offline mode and uses a temp DB. Flag overrides need
 `monkeypatch.setenv(...)` then `config.get_settings.cache_clear()`.
+
+**CI:** `pytest.yml` runs the Python suite; `ios.yml` (macOS) compiles both the
+shipping spec and the test-only `.uitest.yml`, which is the only thing standing
+between a Swift compile error and main — pytest cannot catch one, because the
+rules-parity tests read `Autofill.swift` as text. The UI tests are built but not
+run in CI; run them locally with the command at the top of `ios/.uitest.yml`.
+The Fly deploy is gated on pytest only: a Swift error should not block a backend
+release, and macOS runners bill at 10x.
 
 ---
 
@@ -290,6 +306,19 @@ Three rules in there that were each a real wrong-answer bug:
 - **The launch animation runs off one clock**, not chained `withAnimation`
   blocks. `simctl launch … -JobPilotLaunchFreeze 0.45` pins it at a given second
   for inspection; `-JobPilotSkipLaunch` skips it (UI tests use this).
+- **Roles are alternatives, not a checklist.** Scoring a titles-only profile as
+  `matched_roles / total_roles` gave every role-matching posting the same 0.5
+  base, so ranking collapsed onto the location bonus: on a real 239-posting
+  feed, 62% of it sat in one bucket and the whole apply queue tied at 0.65.
+  `_title_focus` is the tie-breaker; `_role_variants` is why an intern posting
+  no longer scores like an unrelated one.
+- **The prefilter and the scorer must agree on term expansion.** They didn't:
+  the gate expanded intern/co-op variants and scoring did not, so those postings
+  survived the filter and were then scored as noise — worse than being dropped,
+  because they land in the feed looking like bad matches.
+- **A posting is scored once, at discovery.** `relevance_score` is persisted and
+  never recomputed, so a scorer change only affects postings found after it.
+  Existing accounts keep their old numbers until the rows age out.
 - **`.env.example` is tracked** — never put live secrets there.
 - **`scripts/` must stay OUT of `.dockerignore`** (operational scripts on Fly).
 - **Use `.venv/bin/python`**, not bare `python`.

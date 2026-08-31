@@ -38,9 +38,19 @@ in chat. `JOB_ALERT_USER` (also `usr_…`) pins discovery digests to your accoun
 Push: `PUSH_ENABLED`, `APNS_*`, and **`APNS_USE_SANDBOX=false`** for TestFlight
 (Release entitlements use the production APNs host).
 
-Confirm: `curl -s https://job-search-tool.fly.dev/health | jq '{auth, beta, reminder_delivery, db_ok, status}'`
-must show `fail_open: false`, `dev_login: false`, `invite_ready: true`, `db_ok: true`,
-and `reminder_delivery: "app"`. If `invite_ready` is false, do not invite anyone.
+Confirm with the preflight rather than by eye — it grades every item below and
+exits non-zero on anything that would let one tester reach another's data:
+
+```bash
+.venv/bin/python -m scripts.beta_preflight --url https://job-search-tool.fly.dev
+```
+
+Blockers: `fail_open: false`, `dev_login: false`, an `AUTH_ALLOWED_EMAILS`
+allowlist, `invite_ready: true`, `db_ok: true`, `reminder_delivery: "app"`.
+Advisories (the beta works, that feature is on a fallback): the Anthropic key,
+base résumés on the volume, APNs, Sentry. Add `--token "$APPLY_API_TOKEN"
+--spend` to make one real Anthropic call — the only way to tell a revoked key
+from a good one, since every paid call site fails open silently.
 
 ## TestFlight
 

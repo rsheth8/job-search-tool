@@ -354,8 +354,13 @@ def test_tune_sets_threshold_value():
 
 
 def test_tune_threshold_is_honored_in_tick(monkeypatch):
-    # Two-term profile so a single-term hit scores ~0.5 (below an 0.8 bar).
-    profile.set_profile("u", roles="swe, backend", keywords="swe, backend")
+    # This test is about the TUNE threshold, not about scoring, so it just needs
+    # a posting that lands below the bar. It used to get there with a two-role,
+    # no-skill profile on the assumption that matching one of two roles scores
+    # ~0.5 — but roles are alternatives, not a checklist: wanting "swe" OR
+    # "backend" doesn't make a perfect SWE posting a half match. Skills the
+    # posting lacks are the honest way to sit mid-range.
+    profile.set_profile("u", roles="swe", keywords="swe, kubernetes, terraform")
     profile.set_min_relevance("u", 0.8)
     jobstore.add_tracked_company("u", "greenhouse", "acme", "Acme")
 
@@ -375,8 +380,8 @@ def test_tune_threshold_is_honored_in_tick(monkeypatch):
 
     # Drop the bar; a fresh full-match posting now alerts.
     profile.set_min_relevance("u", 0.4)
-    feed.append(JobPosting("greenhouse", "2", "Backend SWE", "https://x/2",
-                           company="Acme", description="swe backend"))
+    feed.append(JobPosting("greenhouse", "2", "SWE", "https://x/2",
+                           company="Acme", description="swe kubernetes terraform"))
     assert discovery.tick("u", sender=cap) == 1
 
 

@@ -15,6 +15,7 @@ Run with the project venv:
 | `build_ats_boards.py` | Probe candidate slugs and rebuild `data/ats_boards.json`. |
 | `build_company_catalog.py` | Rebuild `data/company_catalog.json` (CMS hospitals, US universities, listed companies + known ATS tokens). |
 | `validate_ats_boards.py` | Validate `data/ats_boards.json` or probe one slug on all ATS types. |
+| `beta_preflight.py` | Check a live deployment against the invite-beta checklist. Exits 1 on a blocker. |
 
 ### Examples
 
@@ -26,6 +27,13 @@ fly ssh console -a job-search-tool -C "cd /app && python -m scripts.import_user 
 
 # Merge split accounts:
 .venv/bin/python -m scripts.migrate_user local usr_abc123 --dry-run
+
+# Before inviting anyone — every paid path fails open, so a bad key or an
+# empty /data/resumes degrades the product without turning /health red:
+.venv/bin/python -m scripts.beta_preflight --url https://job-search-tool.fly.dev
+# ...and to prove the Anthropic key is live (spends one tiny real call):
+.venv/bin/python -m scripts.beta_preflight --url https://job-search-tool.fly.dev \
+    --token "$APPLY_API_TOKEN" --spend
 ```
 
 On Fly, SSH lands in `/` — always `cd /app && python -m scripts.X …`.

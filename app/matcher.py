@@ -95,6 +95,33 @@ def _intern_variants(phrase: str) -> set[str]:
     }
 
 
+def _role_variants(phrase: str) -> set[str]:
+    """Every spelling a posting might use for one profile role.
+
+    The prefilter has always expanded these; scoring did not, and the gap was
+    the bug. "Software Engineering Intern, Summer 2027" passed the gate on a
+    "software intern" profile and then scored 0.15 — the same as an unrelated
+    marketing role — because neither raw role string appears in that title
+    verbatim. Surviving the filter only to be scored as noise is worse than
+    being filtered out: it lands in the feed looking like a bad match.
+    """
+    out = {phrase}
+    out |= _intern_variants(phrase)
+    # The other direction: a profile that says "software intern" against a
+    # posting that says "Software Engineering Intern".
+    if phrase.endswith(" intern"):
+        stem = phrase[: -len(" intern")]
+        out |= {
+            f"{stem} engineering intern",
+            f"{stem} engineer intern",
+            f"{stem} engineering internship",
+            f"{stem} internship",
+            f"{stem} engineering co-op",
+            f"{stem} engineering coop",
+        }
+    return out
+
+
 def _terms(profile: sqlite3.Row | None) -> set[str]:
     """Profile keyword *concepts* for relevance scoring (the heuristic ratio uses
     this as the denominator, so it stays close to what the user actually typed —
@@ -202,27 +229,38 @@ def _coverage(skills: set[str], text: str) -> float:
 def _heuristic_score(p: JobPosting, terms: set[str], locations: list[str],
                      *, roles: set[str] | frozenset[str] = frozenset()) -> float:
     text = _haystack(p)
+    title = (p.title or "").lower()
     # Roles get their own axis below. Leaving them in the skill denominator too
     # counted each role twice, which let a title match with zero skill overlap
     # ("Software Engineer -- legacy maintenance", for a Kubernetes profile)
     # reach 0.70 and clear the alert threshold.
     skills = set(terms) - set(roles)
-    if roles and skills:
-        in_title = any(_term_in(r, (p.title or "").lower()) for r in roles)
-        anywhere = in_title or any(_term_in(r, text) for r in roles)
+    # Match roles through their variants, exactly as the prefilter does. The two
+    # disagreeing is what let intern postings through the gate and then scored
+    # them as noise.
+    role_forms = {v for r in roles for v in _role_variants(r)}
+    if roles:
+        in_title = any(_term_in(v, title) for v in role_forms)
+        anywhere = in_title or any(_term_in(v, text) for v in role_forms)
         role_component = 1.0 if in_title else (0.45 if anywhere else 0.0)
-        # A title match alone lands at _ROLE_WEIGHT -- deliberately just under
-        # the 0.6 alert bar, so "right title, wrong stack" stays a browse, not
-        # a notification. Skills carry it the rest of the way.
-        base = (_ROLE_WEIGHT * role_component
-                + (1 - _ROLE_WEIGHT) * _coverage(skills, text))
+        if skills:
+            # A title match alone lands at _ROLE_WEIGHT -- deliberately just
+            # under the 0.6 alert bar, so "right title, wrong stack" stays a
+            # browse, not a notification. Skills carry it the rest of the way.
+            base = (_ROLE_WEIGHT * role_component
+                    + (1 - _ROLE_WEIGHT) * _coverage(skills, text))
+        else:
+            # Titles-only profile — the skills step is skippable, so this is a
+            # normal state, not an edge case. There is no skill axis to weigh
+            # the title against, and scoring on role presence alone gave every
+            # same-titled posting an identical number: a real run produced three
+            # distinct values across the whole feed and the top of it was a flat
+            # tie. Title focus is the one signal left that is free and honest.
+            base = (_ROLE_WEIGHT * role_component
+                    + (1 - _ROLE_WEIGHT) * _title_focus(role_forms, title))
     elif skills:
         base = _coverage(skills, text)
     elif terms:
-        # Roles but no skills beyond them: the profile is titles only, so there
-        # is nothing to weigh a title match *against*. Weighting it here would
-        # score every same-titled posting 1.0 however little else lines up, so
-        # every term counts equally instead.
         base = _coverage(terms, text)
     else:
         base = 0.5
@@ -234,6 +272,27 @@ def _heuristic_score(p: JobPosting, terms: set[str], locations: list[str],
         else:
             base -= 0.15
     return round(max(0.0, min(1.0, base)), 3)
+
+
+def _title_focus(role_forms: set[str], title: str) -> float:
+    """How much of the posting's title the matched role accounts for.
+
+    Only used when the profile is titles-only. "Software Engineer" is a closer
+    answer to a "software engineer" profile than "Software Engineer, ML
+    Developer Experience, Ray Core" — the extra clauses are specialisation the
+    person never asked for. Ranking on this is a claim about *closeness to the
+    stated role*, which is all a titles-only profile has said.
+    """
+    words = _WORD.findall(title)
+    if not words:
+        return 0.0
+    longest = max(
+        (len(_WORD.findall(v)) for v in role_forms if _term_in(v, title)),
+        default=0,
+    )
+    if not longest:
+        return 0.0
+    return min(1.0, longest / len(words))
 
 
 _SCORE_SCHEMA = {

@@ -996,6 +996,17 @@ struct UpNextCard: View {
             .disabled(busy)
             .frame(maxWidth: .infinity)
 
+            // The same dial face also shows identity Coverage on You and on the
+            // quiz's last step — and the quiz hands straight over to this screen,
+            // so an unlabelled number here read as the coverage figure carried
+            // forward. Both faces are captioned now; neither is bare.
+            Text("Match")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.horizon)
+                .textCase(.uppercase)
+                .tracking(0.8)
+                .accessibilityHidden(true)
+
             VStack(spacing: 4) {
                 Text(item.company ?? "Company")
                     .font(.body.weight(.semibold))

@@ -857,6 +857,42 @@ def health() -> dict:
         # handing out builds. GET /health/llm proves the key actually works.
         "llm_ready": llm_problem is None,
     }
+    # Two of the remaining beta blockers — base résumés on the volume and APNs
+    # — were not observable from outside the machine at all, so "did the upload
+    # land?" was answered by SSH and guesswork. Both fail soft at runtime (a
+    # missing .tex skips tailoring, an incomplete APNS_* set makes push a
+    # no-op), which is exactly why they need to be visible here.
+    from .resume_tailor import _VARIANTS, resume_dir
+
+    tex_dir = resume_dir()
+    try:
+        present = sorted(
+            f"{v}.tex" for v in _VARIANTS if (tex_dir / f"{v}.tex").is_file()
+        )
+    except OSError:
+        present = []
+    info["resume"] = {
+        "enabled": s.resume_tailor_enabled,
+        "dir": str(tex_dir),
+        "bases": present,
+        "expected": sorted(f"{v}.tex" for v in _VARIANTS),
+    }
+
+    apns_missing = sorted(
+        name for name, value in (
+            ("APNS_KEY_ID", s.apns_key_id),
+            ("APNS_TEAM_ID", s.apns_team_id),
+            ("APNS_BUNDLE_ID", s.apns_bundle_id),
+            ("APNS_KEY_PATH", s.apns_key_path),
+        ) if not value.strip()
+    )
+    info["push"] = {
+        "enabled": s.push_enabled,
+        "active": s.push_active,
+        "sandbox": s.apns_use_sandbox,
+        "missing": apns_missing,
+    }
+
     info["dependencies"] = _dependency_report()
     if info["dependencies"]["missing"]:
         info["status"] = "degraded"

@@ -188,3 +188,87 @@ def test_score_allow_llm_false_uses_heuristic(monkeypatch):
     prof = _profile(roles="software engineer")
     out = matcher.score([_p("Software Engineer")], prof, allow_llm=False)
     assert len(out) == 1 and 0.0 <= out[0][1] <= 1.0  # heuristic ran, no crash
+
+
+# ---------------------------------------------------------------------------
+# Titles-only profiles — the skills step is skippable, so this is normal
+# ---------------------------------------------------------------------------
+
+def _score(prof, posting):
+    return matcher._heuristic_score(
+        posting, matcher._terms(prof), matcher._locations(prof),
+        roles=matcher._roles(prof),
+    )
+
+
+def test_an_intern_posting_matches_an_intern_profile():
+    """Regression: the prefilter expanded intern variants and scoring did not.
+
+    "Software Engineering Intern" survived the gate on a "software intern"
+    profile and then scored 0.15 — the same as an unrelated marketing role —
+    because neither raw role string appears in that title verbatim.
+    """
+    prof = _profile(roles="software engineer, software intern", locations="chicago, remote")
+    intern = _p("Software Engineering Intern, Summer 2027", location="Chicago")
+    marketing = _p("Marketing Coordinator", location="Remote")
+    assert _score(prof, intern) > 0.8
+    assert _score(prof, intern) > _score(prof, marketing) + 0.5
+
+
+def test_engineering_intern_matches_an_engineer_profile_too():
+    prof = _profile(roles="software engineer")
+    assert _score(prof, _p("Software Engineering Intern")) > 0.5
+
+
+def test_a_titles_only_feed_does_not_collapse_into_one_score():
+    """A real run produced three distinct values across the whole feed, and the
+    top of it was a flat tie — nothing to rank on."""
+    prof = _profile(roles="software engineer, software intern", locations="chicago, remote")
+    feed = [
+        _p("Software Engineer", location="Remote"),
+        _p("Software Engineer, Product", location="Remote"),
+        _p("Software Engineer, ML Developer Experience", location="Remote"),
+        _p("Software Engineer II, Ads Ranking Platform, Monetization", location="Chicago"),
+        _p("Software Engineering Intern, Summer 2027", location="Chicago"),
+    ]
+    scores = {_score(prof, p) for p in feed}
+    assert len(scores) >= 4, f"feed collapsed into {sorted(scores)}"
+
+
+def test_a_plain_title_outranks_a_heavily_qualified_one():
+    """For a profile that only said "software engineer", the posting that is
+    exactly that is the closest answer; extra clauses are specialisation the
+    person never asked for."""
+    prof = _profile(roles="software engineer")
+    plain = _score(prof, _p("Software Engineer"))
+    qualified = _score(prof, _p("Software Engineer II, Ads Ranking Platform, Monetization"))
+    assert plain > qualified
+
+
+def test_roles_are_alternatives_not_a_checklist():
+    """Wanting "swe" OR "backend" must not make a perfect SWE posting a half
+    match — that conjunction is what flattened every titles-only feed."""
+    prof = _profile(roles="swe, backend")
+    one_role = _score(prof, _p("SWE", desc="swe role"))
+    assert one_role > 0.8
+
+
+def test_an_unrelated_role_still_scores_low_without_skills():
+    prof = _profile(roles="software engineer", locations="chicago")
+    assert _score(prof, _p("Marketing Coordinator", location="Chicago")) < 0.3
+
+
+def test_skills_still_gate_a_title_match_when_the_profile_has_them():
+    """The titles-only path must not leak into profiles that do list skills:
+    "right title, wrong stack" stays below the 0.6 alert bar."""
+    prof = _profile(roles="software engineer", keywords="kubernetes, terraform")
+    wrong_stack = _score(prof, _p("Software Engineer", desc="COBOL maintenance"))
+    assert wrong_stack < 0.6
+    right_stack = _score(prof, _p("Software Engineer", desc="kubernetes terraform"))
+    assert right_stack > wrong_stack
+
+
+def test_role_variants_cover_both_directions():
+    assert "software engineering intern" in matcher._role_variants("software engineer")
+    assert "software engineering intern" in matcher._role_variants("software intern")
+    assert "software engineer" in matcher._role_variants("software engineer")
