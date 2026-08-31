@@ -17,6 +17,7 @@ Safe by construction:
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass, field
 
 from .db import SCHEMA, connect
 
@@ -34,6 +35,78 @@ BRAIN_TABLES = (
     "job_postings",         # surfaced/labeled postings (applied/dismissed feed too)
     "reranker_models",      # the trained model itself
 )
+
+
+@dataclass(frozen=True)
+class Transfer:
+    """What a cross-database move actually carried — and what it could not.
+
+    The counts alone are not enough to trust an export. Two databases of
+    different ages do not have the same shape: production outlives tables the
+    code has since dropped, and a table gains columns between releases. Anything
+    that cannot cross has to be *named*, because the failure mode of a silent
+    skip is a backup that looks complete and isn't.
+    """
+
+    counts: dict[str, int] = field(default_factory=dict)
+    skipped_tables: dict[str, str] = field(default_factory=dict)
+    dropped_columns: dict[str, list[str]] = field(default_factory=dict)
+
+    @property
+    def rows(self) -> int:
+        return sum(self.counts.values())
+
+    @property
+    def complete(self) -> bool:
+        """True when every requested table crossed with all of its columns."""
+        return not self.skipped_tables and not self.dropped_columns
+
+
+def _tables_in(conn: sqlite3.Connection, schema: str) -> set[str]:
+    return {r[0] for r in conn.execute(
+        f"SELECT name FROM {schema}.sqlite_master WHERE type = 'table'")}
+
+
+def _columns_in(conn: sqlite3.Connection, schema: str, table: str) -> list[str]:
+    return [r[1] for r in conn.execute(f"PRAGMA {schema}.table_info({table})")]
+
+
+def _plan(conn: sqlite3.Connection, src_schema: str, dst_schema: str, tables):
+    """Work out what can actually cross between two attached databases.
+
+    Returns ``(plan, skipped, dropped)`` where plan is a list of
+    ``(table, shared_columns)``. Both directions matter: a table the source has
+    and the destination lacks cannot be written, and one the destination has but
+    the source lacks cannot be read.
+
+    ``tables=None`` means "every user-scoped table in the source".
+    """
+    src_tables, dst_tables = _tables_in(conn, src_schema), _tables_in(conn, dst_schema)
+    if tables is None:
+        tables = [t for t in sorted(src_tables)
+                  if t not in _SKIP and "user_id" in _columns_in(conn, src_schema, t)]
+
+    plan, skipped, dropped = [], {}, {}
+    for t in tables:
+        if t not in src_tables:
+            skipped[t] = "not present in the source database"
+            continue
+        if t not in dst_tables:
+            # The usual cause: a long-lived database still carries a table the
+            # current schema no longer creates (fill_requests, unmatched_fields).
+            skipped[t] = "not present in the destination schema"
+            continue
+        src_cols = _columns_in(conn, src_schema, t)
+        dst_cols = set(_columns_in(conn, dst_schema, t))
+        shared = [c for c in src_cols if c in dst_cols]
+        if not shared:
+            skipped[t] = "no columns in common"
+            continue
+        missing = [c for c in src_cols if c not in dst_cols]
+        if missing:
+            dropped[t] = missing
+        plan.append((t, shared))
+    return plan, skipped, dropped
 
 
 def user_tables(conn: sqlite3.Connection) -> list[str]:
@@ -105,10 +178,19 @@ def _init_db_file(path: str) -> None:
 
 
 def export_user(user_id: str, out_path: str, *, tables=BRAIN_TABLES,
-                conn: sqlite3.Connection | None = None) -> dict[str, int]:
-    """Copy ``user_id``'s rows from the brain tables into a standalone, schema-
-    complete SQLite file at ``out_path`` (ready to ship to another machine).
-    Returns ``{table: rows}``."""
+                conn: sqlite3.Connection | None = None) -> Transfer:
+    """Copy ``user_id``'s rows into a standalone SQLite file at ``out_path``.
+
+    ``tables=None`` exports *every* user-scoped table — use that for a backup;
+    the default ``BRAIN_TABLES`` is the portable subset worth carrying between
+    machines.
+
+    The destination is built from the current schema, which is not necessarily a
+    superset of the source: a database that has been alive across releases still
+    carries tables the code has since dropped. Those are reported in the returned
+    ``Transfer`` rather than raising, so one retired table cannot take a whole
+    backup down with it — but they are never silently dropped either.
+    """
     _init_db_file(out_path)
     own = conn is None
     if own:
@@ -118,10 +200,11 @@ def export_user(user_id: str, out_path: str, *, tables=BRAIN_TABLES,
         conn.execute("ATTACH DATABASE ? AS exp", (out_path,))
         counts: dict[str, int] = {}
         try:
-            for t in tables:
-                cols = ", ".join(_columns(conn, t))
+            plan, skipped, dropped = _plan(conn, "main", "exp", tables)
+            for t, cols in plan:
+                names = ", ".join(cols)
                 cur = conn.execute(
-                    f"INSERT INTO exp.{t} ({cols}) SELECT {cols} FROM main.{t} "
+                    f"INSERT INTO exp.{t} ({names}) SELECT {names} FROM main.{t} "
                     f"WHERE user_id = ?",
                     (user_id,),
                 )
@@ -130,19 +213,25 @@ def export_user(user_id: str, out_path: str, *, tables=BRAIN_TABLES,
         finally:
             conn.commit()  # release the write txn before detaching
             conn.execute("DETACH DATABASE exp")
-        return counts
+        return Transfer(counts=counts, skipped_tables=skipped, dropped_columns=dropped)
     finally:
         if own:
             ctx.__exit__(None, None, None)
 
 
 def import_user(in_path: str, dst_user_id: str, *, tables=BRAIN_TABLES,
-                conn: sqlite3.Connection | None = None) -> dict[str, int]:
-    """Insert the brain rows from a file made by ``export_user`` into the current
-    database under ``dst_user_id``. ``INSERT OR IGNORE`` + dropping autoincrement
-    ``id`` columns means it never clobbers existing rows or collides with the
-    destination's id sequence — safe to run against a populated production DB.
-    Returns ``{table: rows_added}``."""
+                conn: sqlite3.Connection | None = None) -> Transfer:
+    """Insert rows from a file made by ``export_user`` under ``dst_user_id``.
+
+    ``INSERT OR IGNORE`` plus dropping autoincrement ``id`` columns means it
+    never clobbers existing rows or collides with the destination's id sequence,
+    so it is safe against a populated production database.
+
+    ``tables=None`` imports every user-scoped table the *file* contains. As in
+    ``export_user``, anything the two databases do not share is reported, not
+    silently skipped — an import that quietly dropped a table would look like a
+    successful restore.
+    """
     own = conn is None
     if own:
         ctx = connect()
@@ -151,10 +240,14 @@ def import_user(in_path: str, dst_user_id: str, *, tables=BRAIN_TABLES,
         conn.execute("ATTACH DATABASE ? AS imp", (in_path,))
         added: dict[str, int] = {}
         try:
-            for t in tables:
+            plan, skipped, dropped = _plan(conn, "imp", "main", tables)
+            for t, cols in plan:
                 # Drop a surrogate autoincrement 'id' so the destination assigns
                 # its own (avoids PK collisions); repoint user_id to dst.
-                cols = [c for c in _columns(conn, t) if c != "id"]
+                cols = [c for c in cols if c != "id"]
+                if not cols:
+                    skipped[t] = "no columns left after dropping the surrogate id"
+                    continue
                 select = ", ".join("?" if c == "user_id" else c for c in cols)
                 before = conn.execute(
                     f"SELECT COUNT(*) FROM main.{t} WHERE user_id = ?", (dst_user_id,)
@@ -172,7 +265,7 @@ def import_user(in_path: str, dst_user_id: str, *, tables=BRAIN_TABLES,
         finally:
             conn.commit()  # release the write txn before detaching
             conn.execute("DETACH DATABASE imp")
-        return added
+        return Transfer(counts=added, skipped_tables=skipped, dropped_columns=dropped)
     finally:
         if own:
             ctx.__exit__(None, None, None)

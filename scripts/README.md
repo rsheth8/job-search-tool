@@ -10,6 +10,7 @@ Run with the project venv:
 | Script | Purpose |
 |---|---|
 | `migrate_user.py` | Merge all rows from one user id into another (`local` → `usr_…`). `--dry-run` previews. |
+| `users.py` | **Accounts: list, show, orphans, export, import, merge, delete.** Start here. |
 | `export_user.py` | Export one user's "brain" (profile, identity, swipe labels, model) to a standalone SQLite file. |
 | `import_user.py` | Import a brain file into the current DB under a chosen user id (safe on prod — no overwrites). |
 | `build_ats_boards.py` | Probe candidate slugs and rebuild `data/ats_boards.json`. |
@@ -21,6 +22,15 @@ Run with the project venv:
 ### Examples
 
 ```bash
+# Who is in this database, and what do they own?
+.venv/bin/python -m scripts.users list
+.venv/bin/python -m scripts.users show usr_abc123
+.venv/bin/python -m scripts.users orphans      # rows whose user id has no account
+
+# Back one up, or remove one. `delete` backs up first and refuses without --yes.
+.venv/bin/python -m scripts.users export usr_abc123 backup.db
+.venv/bin/python -m scripts.users delete usr_abc123 --yes
+
 # Export local training data, import on Fly under your Apple user id:
 DATABASE_PATH=job_search.db .venv/bin/python -m scripts.export_user local brain.db
 fly ssh sftp put -a job-search-tool brain.db /data/brain.db
