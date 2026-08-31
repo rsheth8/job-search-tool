@@ -47,7 +47,12 @@ struct SignInView: View {
             .scrollBounceBehavior(.basedOnSize)
         }
         .onAppear { withAnimation(Theme.springSoft.delay(0.05)) { appeared = true } }
-        .sheet(item: $emailMode) { mode in
+        // Clearing on dismiss, not just on open: `lastError` is one shared
+        // published value, so an error raised inside the sheet (a wrong password,
+        // an address that is not on the invite list) stayed on the sign-in screen
+        // after the sheet was cancelled — an error about something the user just
+        // backed out of.
+        .sheet(item: $emailMode, onDismiss: { auth.lastError = nil }) { mode in
             EmailAuthView(mode: mode)
                 .environmentObject(auth)
                 .environmentObject(config)
