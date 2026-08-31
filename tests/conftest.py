@@ -40,6 +40,16 @@ def temp_db(monkeypatch):
     # Neutralize the .env fallback in get_settings so a real key in .env can't
     # pull tests onto the live (paid) API — tests must stay offline.
     monkeypatch.setattr("dotenv.dotenv_values", lambda *a, **k: {})
+    # ...and stop pydantic-settings reading .env itself, which is a separate
+    # path from dotenv_values above. The explicit setenv calls are a whitelist:
+    # every setting a developer might have in .env has to be remembered here, and
+    # APNS_USE_SANDBOX was not, so `test_production_is_the_default_host` failed
+    # on a checkout that has a .env and passed everywhere else — including CI,
+    # which has none. Cutting the file out entirely is what makes the suite
+    # depend on its own fixtures rather than on whose machine it runs on.
+    from app.config import Settings
+
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
 
     # Reset cached settings + router singleton so env changes take effect.
     from app import (
