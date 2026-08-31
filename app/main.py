@@ -839,6 +839,11 @@ def health() -> dict:
         "dev_login": s.auth_allow_dev_login,
         "sentry": bool(s.sentry_dsn.strip()),
         "llm_user_cap": s.llm_max_calls_per_user_per_day,
+        "email_signup": s.auth_allow_email_signup,
+        "methods": (
+            ["apple"] + (["email"] if s.auth_allow_email_signup else [])
+            + (["dev"] if s.auth_allow_dev_login else [])
+        ),
     }
     info["beta"] = {
         "invite_ready": (
@@ -934,6 +939,46 @@ async def auth_apple(request: Request) -> dict:
         email=(body.get("email") or None),
         display_name=(body.get("display_name") or body.get("name") or None),
     )
+
+
+@app.post("/auth/signup")
+async def auth_signup(request: Request) -> dict:
+    """Create an email + password account and return a session."""
+    from . import auth
+
+    body = await request.json()
+    return auth.sign_up_email(
+        (body.get("email") or "").strip(),
+        body.get("password") or "",
+        display_name=(body.get("display_name") or body.get("name") or None),
+    )
+
+
+@app.post("/auth/login")
+async def auth_login(request: Request) -> dict:
+    """Exchange email + password for a session."""
+    from . import auth
+
+    body = await request.json()
+    return auth.sign_in_email(
+        (body.get("email") or "").strip(),
+        body.get("password") or "",
+    )
+
+
+@app.post("/auth/password")
+async def auth_change_password(request: Request) -> dict:
+    """Rotate the password on an email account (session required)."""
+    from . import auth
+
+    uid = auth.require_user(request)
+    body = await request.json()
+    auth.change_password(
+        uid,
+        body.get("current_password") or "",
+        body.get("new_password") or "",
+    )
+    return {"ok": True}
 
 
 @app.post("/auth/dev")

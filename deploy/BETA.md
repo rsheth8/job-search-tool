@@ -2,7 +2,13 @@
 
 Closed TestFlight for you plus a handful of trusted testers. iOS + JSON APIs only.
 
-The tester path: **Sign in with Apple → setup → matches → ⚡ Autofill → I applied.**
+The tester path: **Sign in (Apple or email) → setup → matches → ⚡ Autofill → I applied.**
+
+Email accounts exist for testers whose device Apple ID isn't theirs (a shared
+beta iPhone) or who can't tell you their Private Relay address. They pass the
+same `AUTH_ALLOWED_EMAILS` gate, so add the address before they sign up — an
+uninvited sign-up is refused with a 403, not a silent empty account. Set
+`AUTH_ALLOW_EMAIL_SIGNUP=false` to close that door entirely.
 
 ## Prod secrets (Fly)
 

@@ -1,6 +1,6 @@
 # JobPilot — Engineering Handoff
 
-> Pick-up doc for a fresh session. Last updated **2026-08-30**.
+> Pick-up doc for a fresh session. Last updated **2026-08-31**.
 > **Invite-only iOS beta:** Sign in with Apple, session-scoped data, first-run setup,
 > TestFlight. See [`deploy/BETA.md`](deploy/BETA.md).
 
@@ -13,9 +13,16 @@ Testers sign in with Apple, finish a setup wizard (roles → identity → one pr
 then discover → prepare → ⚡ Autofill in the in-app browser → **Submit themselves**.
 In-app chat is the assistant; JSON apply APIs power the iOS Apply tab.
 
+**Two doors:** Sign in with Apple, or email + password (`POST /auth/signup` /
+`/auth/login`). Both mint the same session and both pass `AUTH_ALLOWED_EMAILS`.
+Passwords are scrypt hashes (stdlib, no new dependency), never plaintext, never
+logged; failed sign-ins are throttled per address. Apple rows keep a NULL
+`password_hash`, and an Apple user who shares an address is a *different*
+account — `get_user_by_email` only ever returns password accounts.
+
 **Isolation:** JSON APIs prefer the Bearer session and ignore `?user=` when auth is
 on. Production sets `AUTH_FAIL_OPEN=false`. `AUTH_ALLOWED_EMAILS` is the invite list.
-User ids are `usr_…` (Apple sign-in).
+User ids are `usr_…` (Apple sign-in or email sign-up).
 
 **Autofill:** iOS WebView only. Rules come from `GET /apply/rules` (`fieldmatch.py`).
 Human always clicks Submit. Résumé attach is manual (WKWebView cannot set file inputs).
@@ -154,7 +161,8 @@ Three rules in there that were each a real wrong-answer bug:
 ## 3. Key endpoints
 
 - `GET /health` (flags + discovery stats)
-- `POST /auth/apple` · `GET /auth/me` · `POST /auth/logout`
+- `POST /auth/apple` · `POST /auth/signup` · `POST /auth/login` ·
+  `POST /auth/password` · `GET /auth/me` · `POST /auth/logout`
 - `GET /chat/history` · `POST /chat`
 - `GET /apply/data` · `POST /apply/stage|package|mark|applied|remove|pass`
 - `GET /apply/resume` (PDF) · `GET /apply/cover` (optional letter) · `POST /apply/answer/save|redraft`
@@ -206,6 +214,8 @@ Three rules in there that were each a real wrong-answer bug:
 
 `RERANKER_ENABLED` (**true**) · `RERANKER_OUTCOME_WEIGHTING` (true) ·
 `GHOST_FILTER_ENABLED` (true) · `ELIGIBILITY_FILTER_ENABLED` (true) ·
+`AUTH_ALLOW_EMAIL_SIGNUP` (**true**) · `AUTH_MIN_PASSWORD_LENGTH` (8) ·
+`AUTH_MAX_LOGIN_ATTEMPTS` (8) · `AUTH_LOGIN_LOCKOUT_SECONDS` (900) ·
 `JOB_RELEVANCE_THRESHOLD` (0.6) ·
 `JOB_AUTO_QUEUE_THRESHOLD` (0.0 = off) · `JOB_ALERT_MODE` (digest) ·
 `JOB_ALERT_USER` ("") · `RESUME_TAILOR_ENABLED` (true) · `APPLY_API_TOKEN` ("") ·
@@ -216,7 +226,7 @@ Three rules in there that were each a real wrong-answer bug:
 ## 7. Run / test locally
 
 ```bash
-.venv/bin/python -m pytest -q          # full suite (~750 tests)
+.venv/bin/python -m pytest -q          # full suite (~1,050 tests)
 .venv/bin/uvicorn app.main:app --reload
 ```
 
@@ -268,6 +278,18 @@ Three rules in there that were each a real wrong-answer bug:
   pattern, `IdentityDraft` (property + `load` + `payload` + `fullPayload`), and
   a quiz step that actually asks. `grad_month` and `intern_season` each had the
   rules and the picker but no question, so they were dead keys.
+- **A `TextField` placeholder is parsed as markdown.** `TextField("you@example.com")`
+  autolinks — the placeholder renders as a tinted link while every neighbouring
+  one stays grey. Use `prompt: Text(verbatim:)` for any placeholder containing
+  `@` or `://`, and keep a label builder so VoiceOver still has a name.
+- **`FIELD_RULES` is first-match-wins, and order is load-bearing.** The
+  authorisation rules sit above the location block because "Are you authorized
+  to work in this **country**?" otherwise resolved to the country field. Any new
+  rule with a common word in it needs the same thought — and the same edit to
+  the bundled copy in `Autofill.swift`, which `test_rules_parity.py` pins.
+- **The launch animation runs off one clock**, not chained `withAnimation`
+  blocks. `simctl launch … -JobPilotLaunchFreeze 0.45` pins it at a given second
+  for inspection; `-JobPilotSkipLaunch` skips it (UI tests use this).
 - **`.env.example` is tracked** — never put live secrets there.
 - **`scripts/` must stay OUT of `.dockerignore`** (operational scripts on Fly).
 - **Use `.venv/bin/python`**, not bare `python`.

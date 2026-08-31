@@ -160,6 +160,17 @@ class Settings(BaseSettings):
     # On first Apple sign-in, fold this legacy user id into the new account
     # (one-shot via usermerge). Empty = no migration.
     auth_legacy_user_id: str = ""
+    # Email + password accounts, offered next to Sign in with Apple. Testers on
+    # a shared iPad, or anyone without an Apple ID on the device, need a way in
+    # that doesn't depend on the Apple account signed into the OS.
+    auth_allow_email_signup: bool = True
+    # Below this we reject at signup. Long enough to matter, short enough that a
+    # passphrase-averse tester still gets in.
+    auth_min_password_length: int = 8
+    # Failed sign-ins per email before a cool-off. Blunt, in-memory, per process
+    # — enough to stop a script guessing a tester's password.
+    auth_max_login_attempts: int = 8
+    auth_login_lockout_seconds: int = 900
 
     @property
     def allowed_emails(self) -> set[str]:

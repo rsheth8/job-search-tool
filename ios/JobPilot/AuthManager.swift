@@ -62,6 +62,48 @@ final class AuthManager: NSObject, ObservableObject {
         controller.performRequests()
     }
 
+    // MARK: Email + password
+    //
+    // The second door. Sign in with Apple needs the Apple ID signed into the
+    // device; on a shared test iPhone, or a simulator where the Apple sheet
+    // stalls, that is a wall with nothing behind it.
+
+    /// Create an account. Errors carry the server's own sentence.
+    func signUp(email: String, password: String, displayName: String) async -> Bool {
+        await run {
+            try await APIClient(config: Config.shared).authSignUp(
+                email: email.trimmingCharacters(in: .whitespacesAndNewlines),
+                password: password,
+                displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+    }
+
+    func logIn(email: String, password: String) async -> Bool {
+        await run {
+            try await APIClient(config: Config.shared).authLogIn(
+                email: email.trimmingCharacters(in: .whitespacesAndNewlines),
+                password: password
+            )
+        }
+    }
+
+    /// Shared shape for every credential path: busy on, error cleared, session
+    /// applied on success. Returns whether it worked so the caller can dismiss.
+    private func run(_ work: () async throws -> AuthSession) async -> Bool {
+        busy = true
+        lastError = nil
+        defer { busy = false }
+        do {
+            apply(try await work())
+            return true
+        } catch {
+            if APIClient.isCancellation(error) { return false }
+            lastError = APIClient.userMessage(for: error)
+            return false
+        }
+    }
+
     /// Local-only escape hatch when the backend has AUTH_ALLOW_DEV_LOGIN (simulator).
     /// Always reuses ``Config.simulatorDevUserId`` so queue/identity/knowledge stay
     /// on one account across relaunches and Dev sign-ins (a bare /auth/dev mints a

@@ -1407,19 +1407,180 @@ struct CoverageMeter: View {
     }
 }
 
+/// Full-screen wait. A spinning propeller inside a sweeping radar arc, over a
+/// pulse that leaves the hub on a slow beat.
+///
+/// `notes` turns a wait into a report: when work takes more than a moment,
+/// naming what is happening ("Scanning job boards…", "Scoring matches…") reads
+/// as progress, while one frozen line reads as a hang. They rotate on a timer
+/// because the backend gives no per-stage signal — so the copy stays honestly
+/// generic rather than claiming a step it can't observe.
 struct PreparingView: View {
     var message: String = "Just a moment…"
+    var notes: [String] = []
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var noteIndex = 0
+
+    private let noteInterval: TimeInterval = 2.6
 
     var body: some View {
-        VStack(spacing: Theme.spaceM) {
-            PropellerIcon(speed: .medium, size: 36)
-                .foregroundStyle(Theme.accent)
-            Text(message)
-                .font(.subheadline)
-                .foregroundStyle(Theme.soft)
+        VStack(spacing: Theme.spaceL) {
+            ZStack {
+                PulseRings()
+                RadarSweep()
+                PropellerIcon(speed: .medium, size: 40)
+                    .foregroundStyle(Theme.accent)
+            }
+            .frame(width: 120, height: 120)
+
+            VStack(spacing: 6) {
+                Text(message)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Theme.ink)
+
+                if !notes.isEmpty {
+                    Text(notes[noteIndex % notes.count])
+                        .font(.caption)
+                        .foregroundStyle(Theme.soft)
+                        .id(noteIndex)
+                        .transition(.opacity)
+                        .multilineTextAlignment(.center)
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ambientScreen()
+        .task {
+            guard notes.count > 1 else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(noteInterval))
+                if Task.isCancelled { return }
+                withAnimation(.easeInOut(duration: 0.35)) { noteIndex += 1 }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(message)
+        .accessibilityAddTraits(.updatesFrequently)
+    }
+}
+
+/// Two rings leaving the hub, half a cycle apart, fading as they grow.
+struct PulseRings: View {
+    var color: Color = Theme.cockpit
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private let period: Double = 2.8
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: reduceMotion ? 120 : 1.0 / 30.0,
+                                paused: reduceMotion)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            ZStack {
+                ForEach(0..<2, id: \.self) { i in
+                    let phase = ((t / period) + Double(i) * 0.5).truncatingRemainder(dividingBy: 1)
+                    let eased = 1 - pow(1 - phase, 2)
+                    Circle()
+                        .strokeBorder(color.opacity(0.28 * (1 - phase)), lineWidth: 1.5)
+                        .frame(width: 52 + 66 * eased, height: 52 + 66 * eased)
+                }
+            }
+            .opacity(reduceMotion ? 0 : 1)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// A conic wedge orbiting the hub — the "we are looking" cue.
+struct RadarSweep: View {
+    var color: Color = Theme.horizon
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private let period: Double = 2.2
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: reduceMotion ? 120 : 1.0 / 30.0,
+                                paused: reduceMotion)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            let angle = (t.truncatingRemainder(dividingBy: period) / period) * 360
+            Circle()
+                .fill(
+                    AngularGradient(
+                        colors: [color.opacity(0.0), color.opacity(0.0),
+                                 color.opacity(0.22), color.opacity(0.0)],
+                        center: .center
+                    )
+                )
+                .frame(width: 104, height: 104)
+                .rotationEffect(.degrees(angle))
+                .opacity(reduceMotion ? 0 : 1)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// Placeholder rows with a light sweeping across them. Used where the shape of
+/// the content is already known — a list that is about to arrive reads better
+/// as its own silhouette than as a spinner in an empty rectangle.
+struct SkeletonList: View {
+    var rows: Int = 3
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(spacing: Theme.spaceM) {
+            ForEach(0..<rows, id: \.self) { i in
+                SkeletonRow()
+                    .opacity(1 - Double(i) * 0.18)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading")
+    }
+}
+
+struct SkeletonRow: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            bar(width: 0.45, height: 13)
+            bar(width: 0.85, height: 11)
+            bar(width: 0.62, height: 11)
+        }
+        .padding(Theme.spaceM)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .fill(Theme.cardFill)
+        )
+        .overlay {
+            if !reduceMotion {
+                GeometryReader { geo in
+                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                        let t = context.date.timeIntervalSinceReferenceDate
+                        let p = (t / 1.6).truncatingRemainder(dividingBy: 1)
+                        LinearGradient(
+                            colors: [.clear, Color.white.opacity(0.55), .clear],
+                            startPoint: .leading, endPoint: .trailing
+                        )
+                        .frame(width: geo.size.width * 0.4)
+                        .offset(x: -geo.size.width * 0.4 + geo.size.width * 1.8 * p)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+                .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func bar(width: CGFloat, height: CGFloat) -> some View {
+        GeometryReader { geo in
+            Capsule()
+                .fill(Theme.cloud.opacity(0.6))
+                .frame(width: geo.size.width * width, height: height)
+        }
+        .frame(height: height)
     }
 }
 

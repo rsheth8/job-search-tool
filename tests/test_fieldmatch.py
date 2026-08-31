@@ -343,3 +343,42 @@ def test_an_exact_option_wins_before_any_heuristic():
     assert fieldmatch.select_value(["Summer 2026", "Summer 2027"], "Summer 2027") == (
         "Summer 2027")
     assert fieldmatch.select_value(["Remote", "Hybrid"], "remote") == "Remote"
+
+
+# ---------------------------------------------------------------------------
+# Authorisation questions are not address questions
+# ---------------------------------------------------------------------------
+
+def test_work_authorization_in_this_country_is_not_the_country_field():
+    """The commonest work-auth phrasing on a US form contains "country".
+
+    FIELD_RULES is first-match-wins, and `country` used to be checked first, so
+    this Yes/No question resolved to the country identity value — filling
+    "United States" into a Yes/No control, or leaving it blank.
+    """
+    assert fieldmatch.match_key("Are you authorized to work in this country?") == "work_authorized"
+    assert fieldmatch.match_key(
+        "Are you legally authorized to work in this country without sponsorship?"
+    ) in ("work_authorized", "needs_sponsorship")
+
+
+def test_sponsorship_question_mentioning_country_is_sponsorship():
+    assert fieldmatch.match_key(
+        "Do you require visa sponsorship to work in this country?"
+    ) == "needs_sponsorship"
+
+
+def test_plain_country_fields_still_match_country():
+    for label in ("Country", "Country of residence", "Which country do you live in?"):
+        assert fieldmatch.match_key(label) == "country", label
+
+
+def test_authorized_to_work_remotely_is_still_authorization():
+    """`work_arrangement` deliberately avoids a bare "remote" so it can't steal
+    this; hoisting the auth rules above it must not undo that."""
+    assert fieldmatch.match_key("Are you authorized to work remotely?") == "work_authorized"
+
+
+def test_work_arrangement_questions_are_unaffected():
+    assert fieldmatch.match_key("What is your preferred work location?") == "work_arrangement"
+    assert fieldmatch.match_key("Remote or hybrid?") == "work_arrangement"

@@ -195,7 +195,9 @@ struct SettingsView: View {
                         settingsExpand("Advanced") {
                             VStack(alignment: .leading, spacing: 12) {
                                 fieldLabel("Base URL")
-                                TextField("https://…", text: $config.baseURL)
+                                TextField(text: $config.baseURL, prompt: Text(verbatim: "https://…")) {
+                                    Text("Base URL")
+                                }
                                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                                     .keyboardType(.URL)
                                     .padding(12)

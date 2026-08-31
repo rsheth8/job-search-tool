@@ -9,17 +9,31 @@ struct JobPilotApp: App {
     @StateObject private var auth = AuthManager.shared
     @StateObject private var setup = SetupGate.shared
 
+    /// The launch sequence doubles as cover for the session check: `auth.refresh()`
+    /// runs underneath it, so a returning tester never sees the sign-in screen
+    /// flash before their session resolves.
+    @State private var launching = !ProcessInfo.processInfo.arguments.contains("-JobPilotSkipLaunch")
+
     var body: some Scene {
         WindowGroup {
-            Group {
-                if auth.isSignedIn {
-                    if setup.needsSetup {
-                        SetupView()
+            ZStack {
+                Group {
+                    if auth.isSignedIn {
+                        if setup.needsSetup {
+                            SetupView()
+                        } else {
+                            RootView()
+                        }
                     } else {
-                        RootView()
+                        SignInView()
                     }
-                } else {
-                    SignInView()
+                }
+                .opacity(launching ? 0 : 1)
+
+                if launching {
+                    LaunchView { withAnimation(.easeOut(duration: 0.35)) { launching = false } }
+                        .transition(.opacity)
+                        .zIndex(2)
                 }
             }
             .environmentObject(config)

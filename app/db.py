@@ -487,6 +487,16 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     fb_cols = {r[1] for r in conn.execute("PRAGMA table_info(feedback)")}
     if fb_cols and "context" not in fb_cols:
         conn.execute("ALTER TABLE feedback ADD COLUMN context TEXT")
+    # Email + password accounts alongside Sign in with Apple. Apple rows keep a
+    # NULL password_hash; the partial unique index only constrains the email
+    # accounts, so existing Apple users with a shared/NULL email are untouched.
+    user_cols = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
+    if user_cols and "password_hash" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_password "
+        "ON users(lower(email)) WHERE password_hash IS NOT NULL"
+    )
     usage_cols = {r[1] for r in conn.execute("PRAGMA table_info(llm_usage)")}
     if usage_cols and "feature" not in usage_cols:
         conn.execute(

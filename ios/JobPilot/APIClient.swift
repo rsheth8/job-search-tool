@@ -137,6 +137,19 @@ struct APIClient {
                                    requestId: String, path: String) -> APIError {
         let detail = jsonDetail(data)
         let err: APIError
+        // Email sign-in / sign-up answer in sentences meant for the person
+        // ("Wrong email or password.", "Try again in 15 minute(s).").
+        // The generic table below would replace those with "Session expired"
+        // and "Too many requests", which is worse and, for 401, a lie.
+        if Self.isEmailAuthPath(path), let detail, !detail.isEmpty {
+            err = .message(detail)
+            let msg = userMessage(for: err)
+            Task { @MainActor in
+                Diagnostics.shared.record(
+                    path: path, status: code, requestId: requestId, error: msg)
+            }
+            return err
+        }
         switch code {
         case 401:
             // Sign-in 401 is almost never an expired session — it's usually
@@ -346,6 +359,32 @@ struct APIClient {
         if let displayName, !displayName.isEmpty { body["display_name"] = displayName }
         let data = try await request("POST", "/auth/apple", body: body)
         return try JSONDecoder().decode(AuthSession.self, from: data)
+    }
+
+    /// Paths whose own error copy is better than the generic status table.
+    static func isEmailAuthPath(_ path: String) -> Bool {
+        path.hasPrefix("/auth/login")
+            || path.hasPrefix("/auth/signup")
+            || path.hasPrefix("/auth/password")
+    }
+
+    func authSignUp(email: String, password: String,
+                    displayName: String?) async throws -> AuthSession {
+        var body: [String: Any] = ["email": email, "password": password]
+        if let displayName, !displayName.isEmpty { body["display_name"] = displayName }
+        let data = try await request("POST", "/auth/signup", body: body)
+        return try JSONDecoder().decode(AuthSession.self, from: data)
+    }
+
+    func authLogIn(email: String, password: String) async throws -> AuthSession {
+        let data = try await request("POST", "/auth/login",
+                                     body: ["email": email, "password": password])
+        return try JSONDecoder().decode(AuthSession.self, from: data)
+    }
+
+    func authChangePassword(current: String, new: String) async throws {
+        _ = try await request("POST", "/auth/password",
+                              body: ["current_password": current, "new_password": new])
     }
 
     func authDev(displayName: String? = nil, userId: String? = nil) async throws -> AuthSession {
