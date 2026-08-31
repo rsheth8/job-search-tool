@@ -146,6 +146,11 @@ class Settings(BaseSettings):
     apns_team_id: str = ""
     apns_bundle_id: str = ""
     apns_key_path: str = ""
+    # The .p8 itself, PEM and all, as an alternative to a path. APNS_KEY_PATH
+    # means getting a file onto the Fly volume over SSH; this is one
+    # `fly secrets set`, and a secret is the right home for a signing key
+    # anyway. Path wins when both are set, so nothing already deployed moves.
+    apns_key_pem: str = ""
     apns_use_sandbox: bool = False
 
     # --- Sign in with Apple + in-app chat ---------------------------------
@@ -214,13 +219,22 @@ class Settings(BaseSettings):
         return seen
 
     @property
+    def apns_key_source(self) -> str:
+        """Where the signing key comes from: "path", "pem", or "" for neither."""
+        if self.apns_key_path.strip():
+            return "path"
+        if self.apns_key_pem.strip():
+            return "pem"
+        return ""
+
+    @property
     def push_active(self) -> bool:
         return bool(
             self.push_enabled
             and self.apns_key_id.strip()
             and self.apns_team_id.strip()
             and self.apns_bundle_id.strip()
-            and self.apns_key_path.strip()
+            and self.apns_key_source
         )
 
 

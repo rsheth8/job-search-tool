@@ -222,3 +222,55 @@ def test_device_registration_stores_timezone():
     })
     from app import voice
     assert voice.timezone_for("u1") == "America/New_York"
+
+
+# --- the key can arrive as a secret, not only as a file ----------------------
+#
+# APNS_KEY_PATH means getting a .p8 onto the Fly volume over SSH. APNS_KEY_PEM
+# is one `fly secrets set`, which is both easier and a better home for a signing
+# key. Both must work, and a deployment already using the path must not move.
+
+_PEM = "-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n-----END PRIVATE KEY-----"
+
+
+def test_pem_alone_configures_push(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path, APNS_KEY_PATH="", APNS_KEY_PEM=_PEM)
+    assert push.configured() is True
+    assert config.get_settings().apns_key_source == "pem"
+
+
+def test_neither_key_form_leaves_push_dark(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path, APNS_KEY_PATH="", APNS_KEY_PEM="")
+    assert push.configured() is False
+    assert config.get_settings().apns_key_source == ""
+
+
+def test_a_path_still_wins_so_nothing_deployed_moves(monkeypatch, tmp_path):
+    """An existing deployment sets only the path; adding the new setting later
+    must not quietly start signing with something else."""
+    _configure(monkeypatch, tmp_path, APNS_KEY_PEM="ignored-pem")
+    s = config.get_settings()
+    assert s.apns_key_source == "path"
+    assert "not-a-real-key" in push._signing_key(s)
+    assert "ignored-pem" not in push._signing_key(s)
+
+
+def test_pem_is_read_verbatim(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path, APNS_KEY_PATH="", APNS_KEY_PEM=_PEM)
+    assert push._signing_key(config.get_settings()) == _PEM + "\n"
+
+
+def test_an_escaped_pem_is_unfolded(monkeypatch, tmp_path):
+    """A shell that escapes the newlines produces a PEM that looks right in
+    `fly secrets` and fails deep inside PyJWT. Unfold it rather than making
+    someone debug that."""
+    _configure(monkeypatch, tmp_path, APNS_KEY_PATH="",
+               APNS_KEY_PEM=_PEM.replace("\n", "\\n"))
+    assert push._signing_key(config.get_settings()) == _PEM + "\n"
+
+
+def test_a_junk_pem_does_not_raise(monkeypatch, tmp_path):
+    """Same contract as a junk file: signing throws, the caller never sees it."""
+    _configure(monkeypatch, tmp_path, APNS_KEY_PATH="", APNS_KEY_PEM="not a pem")
+    push.register_device("u1", "tok-a")
+    assert push.send("u1", "Title", "Body") == 0

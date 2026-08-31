@@ -211,9 +211,43 @@ Three rules in there that were each a real wrong-answer bug:
    you're importing trained labels via `scripts.import_user` from local dev.
 3. **Base resumes** on volume: `swe.tex` + `aiml.tex` → `/data/resumes/`.
    `/health.resume` now lists what is actually on the volume, so "did the upload
-   land?" is answerable without SSH.
-4. **Push:** `PUSH_ENABLED` + all `APNS_*`; `APNS_USE_SANDBOX=false` for TestFlight.
-   `/health.push` names which `APNS_*` values are still blank.
+   land?" is answerable without SSH. **Both are present on prod** (verified
+   2026-08-31) — this one is done.
+4. **Push:** `PUSH_ENABLED` + `APNS_KEY_ID` + `APNS_TEAM_ID` + `APNS_BUNDLE_ID` +
+   the signing key; `APNS_USE_SANDBOX=false` for TestFlight (a sandbox host means
+   every push to a TestFlight build is silently rejected). `/health.push` names
+   what is still blank and reports `key_source`.
+
+   The key can come from **either** `APNS_KEY_PATH` (a `.p8` on the volume) or
+   `APNS_KEY_PEM` (the file's contents as a secret). Prefer the secret — it is
+   one command instead of an SSH copy, it survives a volume being recreated, and
+   a signing key belongs in a secret store:
+
+   ```
+   fly secrets set -a job-search-tool APNS_KEY_PEM="$(cat AuthKey_XXXXXXXX.p8)"
+   ```
+
+   `APNS_KEY_PATH` wins when both are set, so an existing deployment does not
+   move. As of 2026-08-31 prod has `APNS_BUNDLE_ID` only.
+
+   **Then verify it, because push fails silently.** `send` is fail-open by
+   design, so a wrong key id, a bundle mismatch, or the wrong APNs environment
+   all look exactly like "nobody had anything to notify". `/health.push` can only
+   see that the settings are *present*. `scripts.push_check` runs on the machine,
+   where the secrets and the device tokens both are, sends one real notification
+   and prints what Apple actually said:
+
+   ```
+   fly ssh console -a job-search-tool -C "cd /app && python -m scripts.push_check --list"
+   fly ssh console -a job-search-tool -C "cd /app && python -m scripts.push_check --user usr_… --check"
+   fly ssh console -a job-search-tool -C "cd /app && python -m scripts.push_check --user usr_…"
+   ```
+
+   `--check` inspects and stops; without it one alert goes out. Exit code is 0
+   only when the thing you asked for actually worked. The reason strings it
+   translates are the ones that cost hours: `BadDeviceToken` is nearly always
+   `APNS_USE_SANDBOX` disagreeing with the build, and `InvalidProviderToken` is
+   an `APNS_KEY_ID` that doesn't match the `.p8`.
 5. **Dogfood:** one real Greenhouse/Lever/Ashby apply via Autofill; résumé manual attach.
 
 ---
@@ -227,7 +261,8 @@ Three rules in there that were each a real wrong-answer bug:
 `JOB_RELEVANCE_THRESHOLD` (0.6) ·
 `JOB_AUTO_QUEUE_THRESHOLD` (0.0 = off) · `JOB_ALERT_MODE` (digest) ·
 `JOB_ALERT_USER` ("") · `RESUME_TAILOR_ENABLED` (true) · `APPLY_API_TOKEN` ("") ·
-`PUSH_ENABLED` (false) + `APNS_*` · auth allowlist flags.
+`PUSH_ENABLED` (false) + `APNS_*` (key via `APNS_KEY_PEM` **or** `APNS_KEY_PATH`) ·
+auth allowlist flags.
 
 ---
 

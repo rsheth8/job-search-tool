@@ -89,7 +89,8 @@ def configured() -> bool:
     s = get_settings()
     return bool(
         getattr(s, "push_enabled", False)
-        and s.apns_key_id and s.apns_team_id and s.apns_bundle_id and s.apns_key_path
+        and s.apns_key_id and s.apns_team_id and s.apns_bundle_id
+        and s.apns_key_source
     )
 
 
@@ -158,6 +159,20 @@ def _post(token: str, payload: dict, auth: str) -> bool:
 _token_cache: tuple[str, float] | None = None
 
 
+def _signing_key(s) -> str:
+    """The .p8 contents, from a file or straight out of the environment.
+
+    A secret is a better home for a signing key than a file on a volume, and it
+    is one command rather than an SSH copy. `fly secrets set` folds the literal
+    "\\n" when a shell escapes it, which produces a PEM that looks right and
+    fails inside PyJWT with an unhelpful error, so unfold it here.
+    """
+    if s.apns_key_path.strip():
+        with open(s.apns_key_path, "r", encoding="utf-8") as fh:
+            return fh.read()
+    return s.apns_key_pem.replace("\\n", "\n").strip() + "\n"
+
+
 def _auth_header() -> str:
     """A signed APNs bearer token, cached.
 
@@ -171,8 +186,7 @@ def _auth_header() -> str:
     import jwt  # lazy: PyJWT + cryptography are only needed when push is on
 
     s = get_settings()
-    with open(s.apns_key_path, "r", encoding="utf-8") as fh:
-        key = fh.read()
+    key = _signing_key(s)
     token = jwt.encode(
         {"iss": s.apns_team_id, "iat": int(time.time())},
         key, algorithm="ES256", headers={"kid": s.apns_key_id},
