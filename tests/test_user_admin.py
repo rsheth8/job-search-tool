@@ -594,3 +594,65 @@ def test_the_brain_subset_still_round_trips_cleanly(tmp_path):
     path = str(tmp_path / "b.db")
     assert export_user("u1", path, tables=BRAIN_TABLES).complete
     assert import_user(path, "u2", tables=BRAIN_TABLES).complete
+
+
+# --- exporting onto an existing file ----------------------------------------
+#
+# Hit while backing up production. The first export died on the foreign-key bug
+# above, leaving a partial file; the retry then said
+#
+#     sqlite3.IntegrityError: UNIQUE constraint failed: applications.id
+#
+# because the schema is built with CREATE TABLE IF NOT EXISTS, so the second run
+# appended to the first run's rows. The error at least stopped it. Without the
+# primary keys it would have produced a quietly doubled backup.
+
+def test_export_refuses_to_append_to_an_existing_file(tmp_path):
+    _make_account("u1")
+    _give_postings("u1", 2)
+    path = str(tmp_path / "o.db")
+    export_user("u1", path, tables=None)
+
+    with pytest.raises(FileExistsError, match="already exists"):
+        export_user("u1", path, tables=None)
+
+
+def test_overwrite_replaces_rather_than_appends(tmp_path):
+    """Not merely 'does not raise' — the result must be one copy, not two."""
+    _make_account("u1")
+    _give_postings("u1", 3)
+    path = str(tmp_path / "o.db")
+    export_user("u1", path, tables=None)
+    export_user("u1", path, tables=None, overwrite=True)
+    with sqlite3.connect(path) as f:
+        assert f.execute("SELECT COUNT(*) FROM job_postings").fetchone()[0] == 3
+
+
+def test_the_cli_surfaces_the_refusal(tmp_path, capsys):
+    _make_account("u1")
+    _give_postings("u1", 1)
+    path = str(tmp_path / "o.db")
+    _run(["export", "u1", path], capsys)
+    with pytest.raises(FileExistsError):
+        _run(["export", "u1", path], capsys)
+
+
+def test_the_cli_can_overwrite_on_request(tmp_path, capsys):
+    _make_account("u1")
+    _give_postings("u1", 1)
+    path = str(tmp_path / "o.db")
+    _run(["export", "u1", path], capsys)
+    code, _ = _run(["export", "u1", path, "--overwrite"], capsys)
+    assert code == 0
+
+
+def test_deletes_own_backup_is_not_blocked_by_a_stale_file(tmp_path, capsys):
+    """delete writes its backup itself, so it must not be stopped by leftovers
+    from an earlier attempt — that would make a retry impossible."""
+    _make_account("u1")
+    _give_postings("u1", 2)
+    path = str(tmp_path / "b.db")
+    export_user("u1", path, tables=None)          # a stale file in the way
+    code, _ = _run(["delete", "u1", "--yes", "--backup", path], capsys)
+    assert code == 0
+    assert users.get_account("u1") is None

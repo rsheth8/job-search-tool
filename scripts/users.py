@@ -112,7 +112,8 @@ def cmd_orphans(args) -> int:
 
 def cmd_export(args) -> int:
     tables = BRAIN_TABLES if args.brain else None
-    t = export_user(args.user, args.out, tables=tables)
+    t = export_user(args.user, args.out, tables=tables,
+                    overwrite=args.overwrite)
     print(f"Exported '{args.user}' -> {args.out}"
           f"{' (brain subset)' if args.brain else ' (everything)'}:")
     return _report(t)
@@ -157,7 +158,7 @@ def cmd_delete(args) -> int:
         return 1
 
     if args.backup:
-        t = export_user(args.user, args.backup, tables=None)
+        t = export_user(args.user, args.backup, tables=None, overwrite=True)
         print(f"\nBacked up {t.rows} row(s) -> {args.backup}")
         if not t.complete:
             print("  WARNING: the backup is incomplete —")
@@ -200,6 +201,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("out")
     p.add_argument("--brain", action="store_true",
                    help="only the portable subset (profile, labels, postings, model)")
+    p.add_argument("--overwrite", action="store_true",
+                   help="replace the output file if it already exists")
     p.set_defaults(fn=cmd_export)
 
     p = sub.add_parser("import", help="read a file made by export into an account")
