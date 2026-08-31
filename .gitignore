@@ -19,3 +19,9 @@ simulator_screenshot*.png
 # named AuthKey_<KEYID>.p8 and lands in whatever directory you downloaded it
 # to, which is how one ends up committed.
 *.p8
+
+# Database backups pulled off the Fly volume. Real user data — never commit.
+backups/
+
+# Cursor debug logs.
+.cursor/*.log
