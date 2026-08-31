@@ -867,7 +867,8 @@ def _dependency_report() -> dict:
     Push needs pyjwt + cryptography for the APNs token.
     """
     import importlib.util
-    import shutil
+
+    from .resume_tailor import resolve_tectonic
 
     s = get_settings()
 
@@ -877,7 +878,9 @@ def _dependency_report() -> dict:
         except (ImportError, ValueError):
             return False
 
-    pypdf, tectonic = have("pypdf"), bool(shutil.which("tectonic"))
+    # resolve_tectonic honours TECTONIC_BIN, $PATH, then the repo .cache -- a
+    # bare which("tectonic") would report the deploy image's binary as missing.
+    pypdf, tectonic = have("pypdf"), resolve_tectonic() is not None
     jwt_ok, crypto_ok = have("jwt"), have("cryptography")
     report = {
         "pypdf": pypdf,

@@ -211,7 +211,7 @@ def test_health_goes_degraded_on_a_bad_model(monkeypatch):
 
     _keyed(monkeypatch, model="sonnet")
     body = TestClient(app).get("/health").json()
-    assert body["status"] == "degraded"
+    assert body["status"] == "degraded"  # caused by the LLM, asserted below
     assert body["llm"]["model_valid"] is False
     assert body["beta"]["llm_ready"] is False
     assert "sonnet" in body["llm"]["problem"]
@@ -226,8 +226,12 @@ def test_health_without_a_key_is_not_degraded(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     config.get_settings.cache_clear()
     body = TestClient(app).get("/health").json()
-    assert body["status"] == "ok"
+    # Deliberately not asserting the global status: it also reflects missing
+    # optional binaries, and CI has no tectonic while a dev box does.
     assert body["llm"]["configured"] is False
+    assert body["llm"]["problem"] is not None
+    assert "not set" in body["llm"]["problem"]
+    assert body["beta"]["llm_ready"] is False
     assert body["chat_router"] == "heuristic"
 
 
