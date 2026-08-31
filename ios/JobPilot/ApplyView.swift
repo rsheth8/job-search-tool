@@ -24,7 +24,11 @@ struct ApplyView: View {
                     secondary: { PushManager.shared.openDeepLink("settings:feedback", fromHorizon: true) }
                 )
             } else {
-                PreparingView(message: "Preparing application…")
+                PreparingView(
+                    message: "Preparing application…",
+                    notes: ["Reading the posting", "Drafting your answers",
+                            "Tailoring your résumé to one page"]
+                )
             }
         }
         // Hide the floating dock for the whole apply flow (including loading),

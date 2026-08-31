@@ -28,6 +28,16 @@ FIELD_RULES: list[tuple[str, str]] = [
     ("github", r"git.?hub"),
     ("portfolio", r"portfolio|personal (web)?site|^\s*website\s*$|^url$|other url|"
                   r"personal url|home ?page|personal page"),
+    # Before the location block, for the same reason `work_arrangement` is:
+    # "Are you authorized to work in this country?" contains "country", and
+    # first-match-wins sent the commonest work-authorisation question on any US
+    # form to the country field — so a Yes/No control got "United States", or
+    # was left blank. An authorisation question is never an address question.
+    ("work_authorized", r"authori[sz]ed to work|work authori[sz]ation|legally.{0,16}work|"
+                        r"eligible to work|right to work|work eligibility"),
+    ("needs_sponsorship", r"sponsor(ship)?|require.{0,20}visa|visa.{0,16}status|"
+                          r"immigration status|now or in the future.{0,24}sponsor"),
+
     # Before location — "preferred work location" contains "location".
     # Don't use a bare "remote": it steals "authorized to work remotely".
     ("work_arrangement", r"preferred work (location|arrangement)|"
@@ -72,10 +82,6 @@ FIELD_RULES: list[tuple[str, str]] = [
                    r"when (can|could|are) you (start|available)|date available|notice period|"
                    r"availability date"),
     ("willing_to_relocate", r"willing to relocate|open to relocat|able to relocate|relocat"),
-    ("work_authorized", r"authori[sz]ed to work|work authori[sz]ation|legally.{0,16}work|"
-                        r"eligible to work|right to work|work eligibility"),
-    ("needs_sponsorship", r"sponsor(ship)?|require.{0,20}visa|visa.{0,16}status|"
-                          r"immigration status|now or in the future.{0,24}sponsor"),
     ("background_check", r"background check|criminal (background|history|record)|background screening"),
     ("drug_test", r"drug (test|screen|screening)|substance (test|screen)"),
     ("over_18", r"over 18|18 years|at least 18|age 18|legal age|18 years of age"),

@@ -385,6 +385,25 @@ struct CrystalCover: View {
     }
 }
 
+/// Point on a circle: `center` offset by `radius` at `radians`.
+///
+/// Every dial call site used to inline `cos(a) * radius` with a `Double` angle
+/// and a `CGFloat` radius. Swift bridges CGFloat and Double implicitly, so in an
+/// expression that mixes them the compiler has more than one valid reading of
+/// `cos` — some toolchains pick one, others call it ambiguous and refuse. An
+/// arm64-only local build was happy; CI was not. Doing the trig once, in a
+/// CGFloat-typed place, removes the ambiguity instead of relying on the
+/// compiler's mood.
+private func dialPoint(_ center: CGPoint, _ radians: Double, _ radius: CGFloat) -> CGPoint {
+    CGPoint(x: center.x + CGFloat(cos(radians)) * radius,
+            y: center.y + CGFloat(sin(radians)) * radius)
+}
+
+/// Unit vector at `radians`, as CGFloat — same reason as `dialPoint`.
+private func dialVector(_ radians: Double) -> CGVector {
+    CGVector(dx: CGFloat(cos(radians)), dy: CGFloat(sin(radians)))
+}
+
 /// 270° HUD airspeed dial. Annular radar fill, needle lives in the band so the score stays clear.
 struct InstrumentDial: View {
     var progress: Double
@@ -407,7 +426,7 @@ struct InstrumentDial: View {
             let end = Angle.degrees(startDeg + sweepDeg)
             let valueEnd = Angle.degrees(startDeg + sweepDeg * clamped)
             let a = startDeg * .pi / 180 + clamped * sweepDeg * .pi / 180
-            let tip = CGPoint(x: c.x + cos(a) * (rOuter - 2), y: c.y + sin(a) * (rOuter - 2))
+            let tip = dialPoint(c, a, rOuter - 2)
 
             var bezel = Path()
             bezel.addEllipse(in: CGRect(x: 1, y: 1, width: s - 2, height: s - 2))
@@ -431,8 +450,7 @@ struct InstrumentDial: View {
                         .init(color: color.opacity(0.16), location: 0),
                         .init(color: color.opacity(0.36), location: 1)
                     ]),
-                    startPoint: CGPoint(x: c.x + cos(startDeg * .pi / 180) * rKeep,
-                                        y: c.y + sin(startDeg * .pi / 180) * rKeep),
+                    startPoint: dialPoint(c, startDeg * .pi / 180, rKeep),
                     endPoint: tip
                 ))
 
@@ -469,7 +487,7 @@ struct InstrumentDial: View {
     private func tick(ctx: GraphicsContext, center: CGPoint, value: Double,
                        rOuter: CGFloat, major: Bool) {
         let a = angle(for: value)
-        let n = CGVector(dx: cos(a), dy: sin(a))
+        let n = dialVector(a)
         let len: CGFloat = major ? 10 : 4
         var p = Path()
         p.move(to: CGPoint(x: center.x + n.dx * rOuter, y: center.y + n.dy * rOuter))
@@ -482,7 +500,7 @@ struct InstrumentDial: View {
     private func numeral(ctx: GraphicsContext, center: CGPoint, value: Double,
                           radius: CGFloat, size: CGFloat) {
         let a = angle(for: value)
-        let pt = CGPoint(x: center.x + cos(a) * radius, y: center.y + sin(a) * radius)
+        let pt = dialPoint(center, a, radius)
         let fontSize: CGFloat = size >= 200 ? 10 : 8
         let text = Text("\(Int(value))")
             .font(.system(size: fontSize, weight: .medium, design: .rounded).monospacedDigit())
@@ -493,8 +511,8 @@ struct InstrumentDial: View {
     private func needle(ctx: GraphicsContext, center: CGPoint, value: Double,
                          rKeep: CGFloat, rOuter: CGFloat) {
         let a = startDeg * .pi / 180 + value * sweepDeg * .pi / 180
-        let n = CGVector(dx: cos(a), dy: sin(a))
-        let t = CGVector(dx: -sin(a), dy: cos(a))
+        let n = dialVector(a)
+        let t = CGVector(dx: -n.dy, dy: n.dx)
         let shaft: CGFloat = 1.8
         let tipLen: CGFloat = max(12, size * 0.055)
         let tipR = rOuter - 2
@@ -996,6 +1014,17 @@ struct UpNextCard: View {
             .disabled(busy)
             .frame(maxWidth: .infinity)
 
+            // The same dial face also shows identity Coverage on You and on the
+            // quiz's last step — and the quiz hands straight over to this screen,
+            // so an unlabelled number here read as the coverage figure carried
+            // forward. Both faces are captioned now; neither is bare.
+            Text("Match")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.horizon)
+                .textCase(.uppercase)
+                .tracking(0.8)
+                .accessibilityHidden(true)
+
             VStack(spacing: 4) {
                 Text(item.company ?? "Company")
                     .font(.body.weight(.semibold))
@@ -1407,19 +1436,180 @@ struct CoverageMeter: View {
     }
 }
 
+/// Full-screen wait. A spinning propeller inside a sweeping radar arc, over a
+/// pulse that leaves the hub on a slow beat.
+///
+/// `notes` turns a wait into a report: when work takes more than a moment,
+/// naming what is happening ("Scanning job boards…", "Scoring matches…") reads
+/// as progress, while one frozen line reads as a hang. They rotate on a timer
+/// because the backend gives no per-stage signal — so the copy stays honestly
+/// generic rather than claiming a step it can't observe.
 struct PreparingView: View {
     var message: String = "Just a moment…"
+    var notes: [String] = []
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var noteIndex = 0
+
+    private let noteInterval: TimeInterval = 2.6
 
     var body: some View {
-        VStack(spacing: Theme.spaceM) {
-            PropellerIcon(speed: .medium, size: 36)
-                .foregroundStyle(Theme.accent)
-            Text(message)
-                .font(.subheadline)
-                .foregroundStyle(Theme.soft)
+        VStack(spacing: Theme.spaceL) {
+            ZStack {
+                PulseRings()
+                RadarSweep()
+                PropellerIcon(speed: .medium, size: 40)
+                    .foregroundStyle(Theme.accent)
+            }
+            .frame(width: 120, height: 120)
+
+            VStack(spacing: 6) {
+                Text(message)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Theme.ink)
+
+                if !notes.isEmpty {
+                    Text(notes[noteIndex % notes.count])
+                        .font(.caption)
+                        .foregroundStyle(Theme.soft)
+                        .id(noteIndex)
+                        .transition(.opacity)
+                        .multilineTextAlignment(.center)
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ambientScreen()
+        .task {
+            guard notes.count > 1 else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(noteInterval))
+                if Task.isCancelled { return }
+                withAnimation(.easeInOut(duration: 0.35)) { noteIndex += 1 }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(message)
+        .accessibilityAddTraits(.updatesFrequently)
+    }
+}
+
+/// Two rings leaving the hub, half a cycle apart, fading as they grow.
+struct PulseRings: View {
+    var color: Color = Theme.cockpit
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private let period: Double = 2.8
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: reduceMotion ? 120 : 1.0 / 30.0,
+                                paused: reduceMotion)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            ZStack {
+                ForEach(0..<2, id: \.self) { i in
+                    let phase = ((t / period) + Double(i) * 0.5).truncatingRemainder(dividingBy: 1)
+                    let eased = 1 - pow(1 - phase, 2)
+                    Circle()
+                        .strokeBorder(color.opacity(0.28 * (1 - phase)), lineWidth: 1.5)
+                        .frame(width: 52 + 66 * eased, height: 52 + 66 * eased)
+                }
+            }
+            .opacity(reduceMotion ? 0 : 1)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// A conic wedge orbiting the hub — the "we are looking" cue.
+struct RadarSweep: View {
+    var color: Color = Theme.horizon
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private let period: Double = 2.2
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: reduceMotion ? 120 : 1.0 / 30.0,
+                                paused: reduceMotion)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            let angle = (t.truncatingRemainder(dividingBy: period) / period) * 360
+            Circle()
+                .fill(
+                    AngularGradient(
+                        colors: [color.opacity(0.0), color.opacity(0.0),
+                                 color.opacity(0.22), color.opacity(0.0)],
+                        center: .center
+                    )
+                )
+                .frame(width: 104, height: 104)
+                .rotationEffect(.degrees(angle))
+                .opacity(reduceMotion ? 0 : 1)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// Placeholder rows with a light sweeping across them. Used where the shape of
+/// the content is already known — a list that is about to arrive reads better
+/// as its own silhouette than as a spinner in an empty rectangle.
+struct SkeletonList: View {
+    var rows: Int = 3
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(spacing: Theme.spaceM) {
+            ForEach(0..<rows, id: \.self) { i in
+                SkeletonRow()
+                    .opacity(1 - Double(i) * 0.18)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading")
+    }
+}
+
+struct SkeletonRow: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            bar(width: 0.45, height: 13)
+            bar(width: 0.85, height: 11)
+            bar(width: 0.62, height: 11)
+        }
+        .padding(Theme.spaceM)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .fill(Theme.cardFill)
+        )
+        .overlay {
+            if !reduceMotion {
+                GeometryReader { geo in
+                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                        let t = context.date.timeIntervalSinceReferenceDate
+                        let p = (t / 1.6).truncatingRemainder(dividingBy: 1)
+                        LinearGradient(
+                            colors: [.clear, Color.white.opacity(0.55), .clear],
+                            startPoint: .leading, endPoint: .trailing
+                        )
+                        .frame(width: geo.size.width * 0.4)
+                        .offset(x: -geo.size.width * 0.4 + geo.size.width * 1.8 * p)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+                .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func bar(width: CGFloat, height: CGFloat) -> some View {
+        GeometryReader { geo in
+            Capsule()
+                .fill(Theme.cloud.opacity(0.6))
+                .frame(width: geo.size.width * width, height: height)
+        }
+        .frame(height: height)
     }
 }
 

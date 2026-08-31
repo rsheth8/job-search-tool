@@ -839,6 +839,11 @@ def health() -> dict:
         "dev_login": s.auth_allow_dev_login,
         "sentry": bool(s.sentry_dsn.strip()),
         "llm_user_cap": s.llm_max_calls_per_user_per_day,
+        "email_signup": s.auth_allow_email_signup,
+        "methods": (
+            ["apple"] + (["email"] if s.auth_allow_email_signup else [])
+            + (["dev"] if s.auth_allow_dev_login else [])
+        ),
     }
     info["beta"] = {
         "invite_ready": (
@@ -852,6 +857,42 @@ def health() -> dict:
         # handing out builds. GET /health/llm proves the key actually works.
         "llm_ready": llm_problem is None,
     }
+    # Two of the remaining beta blockers — base résumés on the volume and APNs
+    # — were not observable from outside the machine at all, so "did the upload
+    # land?" was answered by SSH and guesswork. Both fail soft at runtime (a
+    # missing .tex skips tailoring, an incomplete APNS_* set makes push a
+    # no-op), which is exactly why they need to be visible here.
+    from .resume_tailor import _VARIANTS, resume_dir
+
+    tex_dir = resume_dir()
+    try:
+        present = sorted(
+            f"{v}.tex" for v in _VARIANTS if (tex_dir / f"{v}.tex").is_file()
+        )
+    except OSError:
+        present = []
+    info["resume"] = {
+        "enabled": s.resume_tailor_enabled,
+        "dir": str(tex_dir),
+        "bases": present,
+        "expected": sorted(f"{v}.tex" for v in _VARIANTS),
+    }
+
+    apns_missing = sorted(
+        name for name, value in (
+            ("APNS_KEY_ID", s.apns_key_id),
+            ("APNS_TEAM_ID", s.apns_team_id),
+            ("APNS_BUNDLE_ID", s.apns_bundle_id),
+            ("APNS_KEY_PATH", s.apns_key_path),
+        ) if not value.strip()
+    )
+    info["push"] = {
+        "enabled": s.push_enabled,
+        "active": s.push_active,
+        "sandbox": s.apns_use_sandbox,
+        "missing": apns_missing,
+    }
+
     info["dependencies"] = _dependency_report()
     if info["dependencies"]["missing"]:
         info["status"] = "degraded"
@@ -934,6 +975,46 @@ async def auth_apple(request: Request) -> dict:
         email=(body.get("email") or None),
         display_name=(body.get("display_name") or body.get("name") or None),
     )
+
+
+@app.post("/auth/signup")
+async def auth_signup(request: Request) -> dict:
+    """Create an email + password account and return a session."""
+    from . import auth
+
+    body = await request.json()
+    return auth.sign_up_email(
+        (body.get("email") or "").strip(),
+        body.get("password") or "",
+        display_name=(body.get("display_name") or body.get("name") or None),
+    )
+
+
+@app.post("/auth/login")
+async def auth_login(request: Request) -> dict:
+    """Exchange email + password for a session."""
+    from . import auth
+
+    body = await request.json()
+    return auth.sign_in_email(
+        (body.get("email") or "").strip(),
+        body.get("password") or "",
+    )
+
+
+@app.post("/auth/password")
+async def auth_change_password(request: Request) -> dict:
+    """Rotate the password on an email account (session required)."""
+    from . import auth
+
+    uid = auth.require_user(request)
+    body = await request.json()
+    auth.change_password(
+        uid,
+        body.get("current_password") or "",
+        body.get("new_password") or "",
+    )
+    return {"ok": True}
 
 
 @app.post("/auth/dev")

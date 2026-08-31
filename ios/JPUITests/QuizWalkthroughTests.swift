@@ -55,6 +55,9 @@ final class QuizWalkthroughTests: XCTestCase {
     }
 
     func testWalkQuiz() throws {
+        // The launch sequence is 1.75s of cinematic before the first tappable
+        // control exists. Tests are not the audience for it.
+        app.launchArguments += ["-JobPilotSkipLaunch"]
         app.launch()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
         Thread.sleep(forTimeInterval: 5)

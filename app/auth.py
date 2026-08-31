@@ -9,6 +9,11 @@ Identity flow:
 Sessions are opaque random tokens stored hashed in SQLite (so a DB leak isn't
 enough to impersonate). The plaintext token is shown once at login.
 
+Email accounts are the second door: ``POST /auth/signup`` / ``POST /auth/login``
+take an address and a password (stored as an scrypt hash, never plaintext) and
+mint the same kind of session. Both doors are gated by the same invite
+allowlist.
+
 Dev-only: when ``AUTH_ALLOW_DEV_LOGIN`` is on, ``POST /auth/dev`` mints a
 session without Apple — used by the test suite and local CLI.
 """
@@ -17,6 +22,8 @@ from __future__ import annotations
 import hashlib
 import logging
 import secrets
+import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -409,6 +416,256 @@ def sign_in_dev(*, display_name: str | None = None, user_id: str | None = None) 
 
 
 def reset_for_tests() -> None:
-    """Drop the cached JWKS client between tests."""
+    """Drop the cached JWKS client and the login throttle between tests."""
     global _jwks_client
     _jwks_client = None
+    reset_login_throttle()
+
+
+# ---------------------------------------------------------------------------
+# Email + password accounts
+# ---------------------------------------------------------------------------
+#
+# Sign in with Apple depends on the Apple ID signed into the device. That is
+# fine on a personal iPhone and awkward everywhere else: a shared test device,
+# a tester who hid their email and can't tell us the relay address, a simulator
+# where the Apple sheet stalls. Email accounts are the second door.
+#
+# Passwords are stored as scrypt hashes (memory-hard, stdlib, no new
+# dependency), never in plaintext and never logged. The stored string carries
+# its own parameters so the cost can be raised later without stranding the rows
+# already written.
+
+_SCRYPT_N = 1 << 14   # 16 MiB of memory per verification
+_SCRYPT_R = 8
+_SCRYPT_P = 1
+_SCRYPT_DKLEN = 32
+
+#: Rejected before hashing. scrypt on an unbounded string is a free CPU burn
+#: for anyone who can POST, and no real password needs 200 characters.
+MAX_PASSWORD_LENGTH = 128
+
+#: Failed attempts per email, in memory, per process. Not a substitute for a
+#: real WAF — just enough that guessing a tester's password isn't free.
+_login_failures: dict[str, list[float]] = {}
+_login_lock = threading.Lock()
+
+
+def hash_password(password: str) -> str:
+    """scrypt hash, self-describing so the cost parameters can change later."""
+    salt = secrets.token_bytes(16)
+    dk = hashlib.scrypt(
+        password.encode("utf-8"),
+        salt=salt,
+        n=_SCRYPT_N,
+        r=_SCRYPT_R,
+        p=_SCRYPT_P,
+        dklen=_SCRYPT_DKLEN,
+    )
+    return f"scrypt${_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}${salt.hex()}${dk.hex()}"
+
+
+def verify_password(password: str, stored: str | None) -> bool:
+    """Constant-time check. False (never an exception) on any malformed row."""
+    if not stored or not password:
+        return False
+    try:
+        scheme, n_s, r_s, p_s, salt_hex, hash_hex = stored.split("$")
+        if scheme != "scrypt":
+            return False
+        dk = hashlib.scrypt(
+            password.encode("utf-8"),
+            salt=bytes.fromhex(salt_hex),
+            n=int(n_s),
+            r=int(r_s),
+            p=int(p_s),
+            dklen=len(bytes.fromhex(hash_hex)),
+        )
+    except (ValueError, TypeError, MemoryError):
+        return False
+    return secrets.compare_digest(dk.hex(), hash_hex)
+
+
+def normalize_email(email: str | None) -> str:
+    return (email or "").strip().lower()
+
+
+def _looks_like_email(email: str) -> bool:
+    """Deliberately loose. The address either receives mail or it doesn't, and
+    we don't send any — this only catches obvious typos and empty input."""
+    if len(email) > 254 or " " in email:
+        return False
+    local, sep, domain = email.partition("@")
+    return bool(local and sep and "." in domain and not domain.startswith("."))
+
+
+def get_user_by_email(email: str) -> dict | None:
+    """The password account for this address, if there is one.
+
+    Scoped to rows that actually have a password: an Apple user who happens to
+    share the address is a different account and must not be signed into here.
+    """
+    norm = normalize_email(email)
+    if not norm:
+        return None
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE lower(email) = ? AND password_hash IS NOT NULL",
+            (norm,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _password_problem(password: str) -> str | None:
+    s = get_settings()
+    if len(password) < s.auth_min_password_length:
+        return f"Password must be at least {s.auth_min_password_length} characters."
+    if len(password) > MAX_PASSWORD_LENGTH:
+        return f"Password must be at most {MAX_PASSWORD_LENGTH} characters."
+    return None
+
+
+def _throttle_key(email: str) -> str:
+    return normalize_email(email)
+
+
+def _login_locked(email: str) -> int:
+    """Seconds remaining on the cool-off, or 0 when the caller may try."""
+    s = get_settings()
+    if s.auth_max_login_attempts <= 0:
+        return 0
+    now = time.monotonic()
+    window = float(s.auth_login_lockout_seconds)
+    key = _throttle_key(email)
+    with _login_lock:
+        hits = [t for t in _login_failures.get(key, []) if now - t < window]
+        if hits:
+            _login_failures[key] = hits
+        else:
+            _login_failures.pop(key, None)
+        if len(hits) >= s.auth_max_login_attempts:
+            return max(1, int(window - (now - hits[0])))
+    return 0
+
+
+def _record_login_failure(email: str) -> None:
+    now = time.monotonic()
+    with _login_lock:
+        _login_failures.setdefault(_throttle_key(email), []).append(now)
+
+
+def _clear_login_failures(email: str) -> None:
+    with _login_lock:
+        _login_failures.pop(_throttle_key(email), None)
+
+
+def _session_payload(user: dict) -> dict:
+    token = create_session(user["id"])
+    return {
+        "token": token,
+        "user": {
+            "id": user["id"],
+            "email": user.get("email"),
+            "display_name": user.get("display_name"),
+        },
+    }
+
+
+def sign_up_email(
+    email: str,
+    password: str,
+    *,
+    display_name: str | None = None,
+) -> dict:
+    """Create an email account and mint a session. Same invite gate as Apple."""
+    s = get_settings()
+    if not s.auth_allow_email_signup:
+        raise HTTPException(status_code=403, detail="email sign-up is disabled")
+
+    norm = normalize_email(email)
+    if not _looks_like_email(norm):
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+    problem = _password_problem(password or "")
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+    if not email_is_allowed(norm):
+        raise HTTPException(
+            status_code=403,
+            detail="This beta is invite-only. Ask the host to add your email.",
+        )
+    if get_user_by_email(norm) is not None:
+        # Explicit, not an enumeration leak worth hiding: the allowlist already
+        # means only invited addresses reach this line.
+        raise HTTPException(
+            status_code=409,
+            detail="An account already exists for that email. Sign in instead.",
+        )
+
+    uid = new_user_id()
+    now = _iso(_utcnow())
+    name = (display_name or "").strip() or norm.split("@")[0]
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO users (id, apple_sub, email, display_name, password_hash, "
+            "created_at, updated_at) VALUES (?, NULL, ?, ?, ?, ?, ?)",
+            (uid, norm, name, hash_password(password), now, now),
+        )
+    _maybe_migrate_legacy(uid)
+    user = get_user(uid)
+    assert user is not None
+    logger.info("email signup %s", uid)
+    return _session_payload(user)
+
+
+def sign_in_email(email: str, password: str) -> dict:
+    """Verify an email account and mint a session."""
+    norm = normalize_email(email)
+    wait = _login_locked(norm)
+    if wait:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many attempts. Try again in {max(1, wait // 60)} minute(s).",
+        )
+
+    user = get_user_by_email(norm)
+    # Hash even when the account is missing, so a wrong address and a wrong
+    # password take the same time and neither can be told apart by timing.
+    stored = user.get("password_hash") if user else None
+    ok = verify_password(password or "", stored)
+    if not ok and user is None:
+        verify_password(password or "", hash_password("timing-equalizer"))
+
+    if not user or not ok:
+        _record_login_failure(norm)
+        raise HTTPException(status_code=401, detail="Wrong email or password.")
+    if not email_is_allowed(user.get("email")):
+        raise HTTPException(
+            status_code=403,
+            detail="This beta is invite-only. Ask the host to add your email.",
+        )
+
+    _clear_login_failures(norm)
+    return _session_payload(user)
+
+
+def change_password(user_id: str, current: str, new: str) -> None:
+    """Rotate a password. Revokes every other session on success."""
+    user = get_user(user_id)
+    if not user or not user.get("password_hash"):
+        raise HTTPException(status_code=400, detail="This account has no password.")
+    if not verify_password(current or "", user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Current password is wrong.")
+    problem = _password_problem(new or "")
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+    with connect() as conn:
+        conn.execute(
+            "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+            (hash_password(new), _iso(_utcnow()), user_id),
+        )
+
+
+def reset_login_throttle() -> None:
+    """Test hook — the failure counters live in module state."""
+    with _login_lock:
+        _login_failures.clear()

@@ -534,7 +534,10 @@ private struct LinkedInImportSheet: View {
                 )
 
                 FocusCard {
-                    TextField("https://linkedin.com/in/…", text: $value)
+                    TextField(text: $value,
+                              prompt: Text(verbatim: "https://linkedin.com/in/…")) {
+                        Text("LinkedIn URL")
+                    }
                         .font(.body)
                         .foregroundStyle(Theme.ink)
                         .textInputAutocapitalization(.never)

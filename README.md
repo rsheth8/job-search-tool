@@ -1,7 +1,7 @@
 # JobPilot
 
 A personal, conversational job-application engine. **Invite-only iOS beta:** Sign in
-with Apple, discover and rank roles, prepare answers and a tailored resume, and
+with Apple *or an email and password*, discover and rank roles, prepare answers and a tailored resume, and
 ⚡ Autofill Greenhouse / Lever / Ashby forms in the in-app browser — **you always
 click Submit**. Built as a high-speed personal execution engine.
 
@@ -123,6 +123,9 @@ for this classification/extraction task. Built for low token spend:
 |---|---|
 | `POST /chat` | In-app assistant (Bearer session) |
 | `POST /auth/apple` | Exchange an Apple identity token for a session |
+| `POST /auth/signup` | Create an email + password account (same invite gate) |
+| `POST /auth/login` | Exchange email + password for a session |
+| `POST /auth/password` | Rotate an email account's password (session) |
 | `POST /feedback` | Tester feedback (session) |
 | `GET /apply/setup` | First-run wizard status |
 | `GET /apply/data` | Staged matches + identity (session) |
@@ -225,7 +228,7 @@ Apply tab    ──> GET /apply/* + GET /apply/rules (WKWebView autofill)
 | File | Role |
 |---|---|
 | `app/main.py` | FastAPI app; chat + apply JSON APIs, `/health`; scheduler on startup. |
-| `app/auth.py` | Sign in with Apple, session tokens, invite allowlist. |
+| `app/auth.py` | Sign in with Apple **and** email + password (scrypt), session tokens, invite allowlist. |
 | `app/chat.py` | Chat transcript + send path (reminders/digests land here too). |
 | `app/engine.py` | The brain: slot filling, confirmations, corrections, multi-action, undo, all `_do_*` actions. |
 | `app/router.py` | Intent extraction: `HeuristicRouter` + `AnthropicRouter` (Claude Haiku 4.5). |
@@ -267,7 +270,7 @@ Rejected, Ghosted.
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q     # full pytest suite (~750 tests, fully offline)
+.venv/bin/python -m pytest -q     # full pytest suite (~1,050 tests, fully offline)
 ```
 
 `conftest.py` forces the offline heuristic router, neutralizes live API keys

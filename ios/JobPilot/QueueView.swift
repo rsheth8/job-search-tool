@@ -49,7 +49,11 @@ struct QueueView: View {
         NavigationStack(path: $path) {
             Group {
                 if loading && queue.isEmpty && matches.isEmpty && filed.isEmpty && error == nil {
-                    PreparingView(message: "Finding matches…")
+                    PreparingView(
+                        message: "Finding matches…",
+                        notes: ["Scanning job boards", "Filtering out dead listings",
+                                "Scoring against your profile", "Ranking what fits best"]
+                    )
                 } else if let error, queue.isEmpty && matches.isEmpty && filed.isEmpty {
                     EmptyStateView(
                         title: "Couldn't load matches",
@@ -61,7 +65,11 @@ struct QueueView: View {
                     )
                     .instrumentEnter()
                 } else if searching && queue.isEmpty && matches.isEmpty && filed.isEmpty {
-                    PreparingView(message: "Finding matches…")
+                    PreparingView(
+                        message: "Finding matches…",
+                        notes: ["Scanning job boards", "Filtering out dead listings",
+                                "Scoring against your profile", "Ranking what fits best"]
+                    )
                         .instrumentEnter()
                 } else if queue.isEmpty && matches.isEmpty && filed.isEmpty {
                     emptyHome

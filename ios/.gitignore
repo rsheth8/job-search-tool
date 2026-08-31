@@ -8,5 +8,7 @@ JobPilot/Info.plist
 xcuserdata/
 *.xcuserstate
 build/
+# derived data from the .uitest.yml spec
+build-uitest/
 DerivedData/
 .DS_Store

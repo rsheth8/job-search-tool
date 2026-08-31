@@ -1,6 +1,6 @@
 # JobPilot — Engineering Handoff
 
-> Pick-up doc for a fresh session. Last updated **2026-08-30**.
+> Pick-up doc for a fresh session. Last updated **2026-08-31**.
 > **Invite-only iOS beta:** Sign in with Apple, session-scoped data, first-run setup,
 > TestFlight. See [`deploy/BETA.md`](deploy/BETA.md).
 
@@ -13,9 +13,16 @@ Testers sign in with Apple, finish a setup wizard (roles → identity → one pr
 then discover → prepare → ⚡ Autofill in the in-app browser → **Submit themselves**.
 In-app chat is the assistant; JSON apply APIs power the iOS Apply tab.
 
+**Two doors:** Sign in with Apple, or email + password (`POST /auth/signup` /
+`/auth/login`). Both mint the same session and both pass `AUTH_ALLOWED_EMAILS`.
+Passwords are scrypt hashes (stdlib, no new dependency), never plaintext, never
+logged; failed sign-ins are throttled per address. Apple rows keep a NULL
+`password_hash`, and an Apple user who shares an address is a *different*
+account — `get_user_by_email` only ever returns password accounts.
+
 **Isolation:** JSON APIs prefer the Bearer session and ignore `?user=` when auth is
 on. Production sets `AUTH_FAIL_OPEN=false`. `AUTH_ALLOWED_EMAILS` is the invite list.
-User ids are `usr_…` (Apple sign-in).
+User ids are `usr_…` (Apple sign-in or email sign-up).
 
 **Autofill:** iOS WebView only. Rules come from `GET /apply/rules` (`fieldmatch.py`).
 Human always clicks Submit. Résumé attach is manual (WKWebView cannot set file inputs).
@@ -154,7 +161,8 @@ Three rules in there that were each a real wrong-answer bug:
 ## 3. Key endpoints
 
 - `GET /health` (flags + discovery stats)
-- `POST /auth/apple` · `GET /auth/me` · `POST /auth/logout`
+- `POST /auth/apple` · `POST /auth/signup` · `POST /auth/login` ·
+  `POST /auth/password` · `GET /auth/me` · `POST /auth/logout`
 - `GET /chat/history` · `POST /chat`
 - `GET /apply/data` · `POST /apply/stage|package|mark|applied|remove|pass`
 - `GET /apply/resume` (PDF) · `GET /apply/cover` (optional letter) · `POST /apply/answer/save|redraft`
@@ -178,6 +186,11 @@ Three rules in there that were each a real wrong-answer bug:
 
 ## 5. Outstanding beta items
 
+0. **Run the preflight first** — `.venv/bin/python -m scripts.beta_preflight
+   --url https://job-search-tool.fly.dev`. It grades everything in this section
+   off `/health`, separates blockers (isolation) from advisories (a degraded
+   feature), and exits 1 on a blocker. `--token … --spend` adds the one live
+   Anthropic call.
 1. **Fly secrets** (see `deploy/BETA.md`): `APPLY_API_TOKEN`, `AUTH_ALLOWED_EMAILS`,
    `APPLE_CLIENT_IDS`, `SENTRY_DSN`, valid `ANTHROPIC_API_KEY`.
    **Verify it, don't assume it.** Every paid call site fails open to a heuristic,
@@ -197,7 +210,10 @@ Three rules in there that were each a real wrong-answer bug:
    a no-op until the per-class label minimums are met, so nothing to do unless
    you're importing trained labels via `scripts.import_user` from local dev.
 3. **Base resumes** on volume: `swe.tex` + `aiml.tex` → `/data/resumes/`.
+   `/health.resume` now lists what is actually on the volume, so "did the upload
+   land?" is answerable without SSH.
 4. **Push:** `PUSH_ENABLED` + all `APNS_*`; `APNS_USE_SANDBOX=false` for TestFlight.
+   `/health.push` names which `APNS_*` values are still blank.
 5. **Dogfood:** one real Greenhouse/Lever/Ashby apply via Autofill; résumé manual attach.
 
 ---
@@ -206,6 +222,8 @@ Three rules in there that were each a real wrong-answer bug:
 
 `RERANKER_ENABLED` (**true**) · `RERANKER_OUTCOME_WEIGHTING` (true) ·
 `GHOST_FILTER_ENABLED` (true) · `ELIGIBILITY_FILTER_ENABLED` (true) ·
+`AUTH_ALLOW_EMAIL_SIGNUP` (**true**) · `AUTH_MIN_PASSWORD_LENGTH` (8) ·
+`AUTH_MAX_LOGIN_ATTEMPTS` (8) · `AUTH_LOGIN_LOCKOUT_SECONDS` (900) ·
 `JOB_RELEVANCE_THRESHOLD` (0.6) ·
 `JOB_AUTO_QUEUE_THRESHOLD` (0.0 = off) · `JOB_ALERT_MODE` (digest) ·
 `JOB_ALERT_USER` ("") · `RESUME_TAILOR_ENABLED` (true) · `APPLY_API_TOKEN` ("") ·
@@ -216,12 +234,20 @@ Three rules in there that were each a real wrong-answer bug:
 ## 7. Run / test locally
 
 ```bash
-.venv/bin/python -m pytest -q          # full suite (~750 tests)
+.venv/bin/python -m pytest -q          # full suite (~1,050 tests)
 .venv/bin/uvicorn app.main:app --reload
 ```
 
 `tests/conftest.py` forces offline mode and uses a temp DB. Flag overrides need
 `monkeypatch.setenv(...)` then `config.get_settings.cache_clear()`.
+
+**CI:** `pytest.yml` runs the Python suite; `ios.yml` (macOS) compiles both the
+shipping spec and the test-only `.uitest.yml`, which is the only thing standing
+between a Swift compile error and main — pytest cannot catch one, because the
+rules-parity tests read `Autofill.swift` as text. The UI tests are built but not
+run in CI; run them locally with the command at the top of `ios/.uitest.yml`.
+The Fly deploy is gated on pytest only: a Swift error should not block a backend
+release, and macOS runners bill at 10x.
 
 ---
 
@@ -268,6 +294,38 @@ Three rules in there that were each a real wrong-answer bug:
   pattern, `IdentityDraft` (property + `load` + `payload` + `fullPayload`), and
   a quiz step that actually asks. `grad_month` and `intern_season` each had the
   rules and the picker but no question, so they were dead keys.
+- **A `TextField` placeholder is parsed as markdown.** `TextField("you@example.com")`
+  autolinks — the placeholder renders as a tinted link while every neighbouring
+  one stays grey. Use `prompt: Text(verbatim:)` for any placeholder containing
+  `@` or `://`, and keep a label builder so VoiceOver still has a name.
+- **`FIELD_RULES` is first-match-wins, and order is load-bearing.** The
+  authorisation rules sit above the location block because "Are you authorized
+  to work in this **country**?" otherwise resolved to the country field. Any new
+  rule with a common word in it needs the same thought — and the same edit to
+  the bundled copy in `Autofill.swift`, which `test_rules_parity.py` pins.
+- **The launch animation runs off one clock**, not chained `withAnimation`
+  blocks. `simctl launch … -JobPilotLaunchFreeze 0.45` pins it at a given second
+  for inspection; `-JobPilotSkipLaunch` skips it (UI tests use this).
+- **Roles are alternatives, not a checklist.** Scoring a titles-only profile as
+  `matched_roles / total_roles` gave every role-matching posting the same 0.5
+  base, so ranking collapsed onto the location bonus: on a real 239-posting
+  feed, 62% of it sat in one bucket and the whole apply queue tied at 0.65.
+  `_title_focus` is the tie-breaker; `_role_variants` is why an intern posting
+  no longer scores like an unrelated one.
+- **The prefilter and the scorer must agree on term expansion.** They didn't:
+  the gate expanded intern/co-op variants and scoring did not, so those postings
+  survived the filter and were then scored as noise — worse than being dropped,
+  because they land in the feed looking like bad matches.
+- **A posting is scored once, at discovery.** `relevance_score` is persisted and
+  never recomputed, so a scorer change or a profile edit only affects postings
+  found after it. `scripts.rescore` is the escape hatch — free heuristic only,
+  never the paid scorer, so it is safe to run on prod.
+- **`SCHEMA` runs before `_migrate_schema`.** So `SCHEMA` may only name columns
+  its own `CREATE TABLE` guarantees. Indexing a migration-added column works on
+  a fresh file and fails on every existing one — and since `conftest` hands
+  every test a new SQLite file, the suite cannot see it. That combination took
+  production down for over an hour. `tests/test_migrations.py` upgrades
+  old-shaped databases and asserts the rule directly.
 - **`.env.example` is tracked** — never put live secrets there.
 - **`scripts/` must stay OUT of `.dockerignore`** (operational scripts on Fly).
 - **Use `.venv/bin/python`**, not bare `python`.

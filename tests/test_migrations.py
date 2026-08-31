@@ -35,6 +35,7 @@ MIGRATION_ADDED: dict[str, tuple[str, ...]] = {
     "device_tokens": ("timezone",),
     "feedback": ("context",),
     "llm_usage": ("feature",),
+    "users": ("password_hash",),
 }
 
 

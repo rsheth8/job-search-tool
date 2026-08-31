@@ -403,7 +403,9 @@ struct SetupView: View {
             }
             Divider().background(Theme.accent.opacity(0.08))
             labeled("Email") {
-                TextField("you@school.edu", text: $identity.email)
+                TextField(text: $identity.email, prompt: Text(verbatim: "you@school.edu")) {
+                    Text("Email")
+                }
                     .keyboardType(.emailAddress)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -447,14 +449,20 @@ struct SetupView: View {
     private var linkFields: some View {
         card {
             labeled("LinkedIn URL") {
-                TextField("https://linkedin.com/in/…", text: $identity.linkedin)
+                TextField(text: $identity.linkedin,
+                          prompt: Text(verbatim: "https://linkedin.com/in/…")) {
+                    Text("LinkedIn URL")
+                }
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
             }
             Divider().background(Theme.accent.opacity(0.08))
             labeled("GitHub URL") {
-                TextField("https://github.com/…", text: $identity.github)
+                TextField(text: $identity.github,
+                          prompt: Text(verbatim: "https://github.com/…")) {
+                    Text("GitHub URL")
+                }
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
