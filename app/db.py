@@ -1,8 +1,16 @@
 """SQLite access layer.
 
-Plain sqlite3 (no ORM) keeps the personal-use MVP dependency-light and fast.
-Connections are short-lived and created per call; SQLite handles this well for
-a single-user workload.
+Plain sqlite3 (no ORM) keeps the dependency surface small and the queries
+readable. Connections are short-lived and created per call, and no transaction
+here spans a network call — which is what makes one file on one volume a
+defensible choice for a small multi-user deployment rather than a liability.
+
+The concurrency that has to work: uvicorn runs sync route handlers in a thread
+pool, and APScheduler runs the reminder and discovery loops on their own threads
+in the *same* process. So there are genuinely concurrent readers and writers, and
+under the default rollback journal a writer takes an exclusive lock on the whole
+database — blocking readers, not just other writers. WAL is what makes those two
+groups stop fighting; see ``_configure``.
 """
 from __future__ import annotations
 
@@ -427,11 +435,23 @@ CREATE INDEX IF NOT EXISTS idx_fill_skips_user ON fill_skips(user_id, last_seen)
 """
 
 
+# How long a connection waits for a lock before raising "database is locked".
+# Python's default is 5s. Writes here are short (no transaction spans a network
+# call), so anything approaching this ceiling means something is wrong rather
+# than merely busy -- but a scheduler tick and a phone refresh landing together
+# should queue, never fail.
+BUSY_TIMEOUT_MS = 5000
+
+
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(get_settings().database_path)
+    conn = sqlite3.connect(get_settings().database_path,
+                           timeout=BUSY_TIMEOUT_MS / 1000)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Cheap (a no-op read once the file is already in WAL) and per-connection,
+    # unlike journal_mode which is a property of the file.
+    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     try:
         yield conn
         conn.commit()
@@ -439,8 +459,39 @@ def connect() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _configure(conn: sqlite3.Connection) -> None:
+    """One-time, file-level settings. Both survive in the database itself.
+
+    ``journal_mode=WAL`` lets readers and one writer proceed at the same time.
+    Without it SQLite uses a rollback journal, where a writer holds an EXCLUSIVE
+    lock over the entire file: with one user that is invisible, and with a dozen
+    it is the scheduler's discovery pass making every phone in the beta wait on
+    it. WAL is a property of the database file, so setting it once here applies
+    to every connection afterwards, including ones opened by scripts.
+
+    ``synchronous=NORMAL`` is the standard companion. In WAL it still cannot
+    corrupt the database on a crash; it trades the possibility of losing the
+    last commits on *power loss* for not fsyncing on every one of them. On a
+    Fly volume that is the right trade for a write-heavy discovery loop.
+    """
+    # WAL needs shared memory, which some filesystems (and :memory:) don't
+    # provide. Falling back to the default is correct there, not fatal.
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+    except sqlite3.DatabaseError:  # pragma: no cover - filesystem-dependent
+        pass
+
+
+def journal_mode() -> str:
+    """The database file's current journal mode, for /health and tests."""
+    with connect() as conn:
+        return conn.execute("PRAGMA journal_mode").fetchone()[0]
+
+
 def init_db() -> None:
     with connect() as conn:
+        _configure(conn)
         conn.executescript(SCHEMA)
         _migrate_schema(conn)
 
