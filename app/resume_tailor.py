@@ -273,15 +273,15 @@ def _edit_via_claude(
     if not get_settings().use_llm_router:
         return base_tex
     try:
-        import anthropic
+        from . import llm_health
 
         from . import llm_budget
 
-        if not llm_budget.consume():
+        if not llm_budget.consume(feature="draft"):
             return base_tex
 
         s = get_settings()
-        client = anthropic.Anthropic(api_key=s.anthropic_api_key)
+        client = llm_health.client(s.anthropic_api_key)
         desc = (description or "").strip()[:2000]
         resp = client.messages.create(
             model=s.anthropic_model,

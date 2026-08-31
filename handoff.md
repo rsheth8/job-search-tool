@@ -180,6 +180,18 @@ Three rules in there that were each a real wrong-answer bug:
 
 1. **Fly secrets** (see `deploy/BETA.md`): `APPLY_API_TOKEN`, `AUTH_ALLOWED_EMAILS`,
    `APPLE_CLIENT_IDS`, `SENTRY_DSN`, valid `ANTHROPIC_API_KEY`.
+   **Verify it, don't assume it.** Every paid call site fails open to a heuristic,
+   so a wrong key or a bad `ANTHROPIC_MODEL` degrades every AI feature silently.
+   - `GET /health` → `llm.problem` (null when fine), `llm.ok` / `llm.failed`
+     counters, `beta.llm_ready`, and `dependencies.missing`. `status` reports
+     `degraded` when a key is set but unusable, or an enabled feature's
+     dependency is absent.
+   - `GET /health/llm` (needs a session or `X-Apply-Token`) spends **one** tiny
+     real call and reports the actual result — the only way to tell a revoked
+     key from a good one.
+   - `ANTHROPIC_MODEL` must be a real id such as `claude-haiku-4-5`. An alias
+     like `sonnet` is rejected and disables the paid path rather than 404ing on
+     every request. Beware a stray `ANTHROPIC_MODEL` exported in your shell.
 2. **Personalized re-ranker** is already on (`reranker_enabled` defaults to
    **true** in `app/config.py`; the test suite forces it off). It cold-starts as
    a no-op until the per-class label minimums are met, so nothing to do unless

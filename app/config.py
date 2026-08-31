@@ -15,19 +15,31 @@ class Settings(BaseSettings):
 
     database_path: str = "job_search.db"
 
-    # Claude Haiku for scoring / outreach / resume drafts — never for chat NLU.
-    # Chat and POST /agent always use the heuristic router (and on-device
-    # classification on Apple Intelligence devices).
+    # Claude Haiku for scoring / outreach / resume drafts, and for Horizon's
+    # answer when a chat turn falls outside the command grammar. Intent
+    # *parsing* stays heuristic + on-device: paying a model to classify
+    # "applied stripe" is waste, paying it to answer "which of my matches
+    # should I do first" is not.
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-haiku-4-5"
 
     # Token-saving guards for paid Anthropic calls (scoring / drafts).
     llm_rate_limit_per_min: int = 30   # token-bucket cap on paid API calls
     llm_max_sms_chars: int = 480       # truncate inbound text before sending
-    # Per-user daily cap on paid Anthropic calls (discovery scoring + drafts).
+    # Per-user daily cap on paid Anthropic calls, across every feature.
     # 0 = unlimited. Testers share one key; this keeps one chatty account from
     # starving everyone else's scoring budget.
     llm_max_calls_per_user_per_day: int = 80
+    # Per-feature slices of that cap. Seven modules call Claude; sharing one
+    # pool meant a chatty Horizon session could spend the whole day's budget
+    # and leave discovery scoring on heuristics. The global cap above is still
+    # the hard ceiling — these only stop one feature from eating everything.
+    # 0 = that feature is bounded only by the global cap.
+    llm_cap_chat: int = 30       # Horizon answering questions
+    llm_cap_discovery: int = 30  # matcher job<->profile scoring
+    llm_cap_draft: int = 20      # cover letters, outreach, resume tailoring
+    llm_cap_parse: int = 8       # resume / LinkedIn extraction
+    llm_cap_quiz: int = 8        # onboarding answer polish
 
     default_followup_days: int = 7
 
@@ -159,7 +171,19 @@ class Settings(BaseSettings):
 
     @property
     def use_llm_router(self) -> bool:
-        return bool(self.anthropic_api_key.strip())
+        """True when a paid call could actually succeed.
+
+        Also requires a plausible model id. ANTHROPIC_MODEL comes straight from
+        the environment, and a bare alias like "sonnet" is not a real id -- every
+        call would 404 and fail open, leaving the whole app on heuristics with
+        nothing but a log line to say why. Better to skip the paid path outright
+        and report the reason (see app.llm_health).
+        """
+        if not self.anthropic_api_key.strip():
+            return False
+        from .llm_health import model_looks_valid
+
+        return model_looks_valid(self.anthropic_model)
 
     @property
     def job_alert_mode_normalized(self) -> str:
@@ -201,4 +225,8 @@ def get_settings() -> Settings:
         from_file = dotenv_values(".env").get("ANTHROPIC_API_KEY")
         if from_file:
             s.anthropic_api_key = from_file
+    # The model id is sent verbatim to the API, so surrounding whitespace from a
+    # shell export or Fly secret would 404. Strip it here rather than at each of
+    # the ten call sites -- and so validation checks the value actually sent.
+    s.anthropic_model = (s.anthropic_model or "").strip()
     return s

@@ -11,6 +11,10 @@ def temp_db(monkeypatch):
     os.close(fd)
     monkeypatch.setenv("DATABASE_PATH", path)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")  # force offline heuristic router
+    # Pin the model: it's read from the environment, so a developer shell with
+    # ANTHROPIC_MODEL set leaked into the suite. Tests that enable the LLM need a
+    # plausible id, since use_llm_router now rejects aliases like "sonnet".
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-haiku-4-5")
     monkeypatch.setenv("RERANKER_ENABLED", "false")  # opt-in; tests enable explicitly
     monkeypatch.setenv("ELIGIBILITY_FILTER_ENABLED", "false")  # opt-in; tests enable explicitly
     monkeypatch.setenv("JOB_VERIFY_APPLY_URLS", "false")  # never hit the network
@@ -51,6 +55,8 @@ def temp_db(monkeypatch):
     matcher._llm_client = None  # nor a matcher LLM client/limiter
     matcher._llm_limiter = None
     llm_budget.set_user("")
+    from app import llm_health
+    llm_health.reset_for_tests()  # per-process counters must not leak across tests
     from app import catalog
     catalog.reset_cache()
     from app.jobsources import alive

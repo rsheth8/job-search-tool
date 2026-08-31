@@ -176,14 +176,14 @@ def _draft_via_claude(
     company: str, title: str, description: str,
     ident_block: str, know: str, background: str,
 ) -> LetterCopy | None:
-    import anthropic
+    from . import llm_health
 
     from . import llm_budget
 
-    if not llm_budget.consume():
+    if not llm_budget.consume(feature="draft"):
         return None
     s = get_settings()
-    client = anthropic.Anthropic(api_key=s.anthropic_api_key)
+    client = llm_health.client(s.anthropic_api_key)
     desc = (description or "").strip()[:1600]
     resp = client.messages.create(
         model=s.anthropic_model,

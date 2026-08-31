@@ -1159,10 +1159,10 @@ class AnthropicRouter:
     name = "anthropic"
 
     def __init__(self) -> None:
-        import anthropic  # lazy import so the offline path needs no install
+        from . import llm_health  # lazy so the offline path needs no anthropic
 
         settings = get_settings()
-        self._client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        self._client = llm_health.client(settings.anthropic_api_key)
         self._model = settings.anthropic_model
         self._max_chars = settings.llm_max_sms_chars
         # Cache the static instruction block. cache_control only *engages* once
@@ -1193,7 +1193,7 @@ class AnthropicRouter:
             self.usage["fallbacks"] += 1
             return self._fallback.parse_actions(text)
         from . import llm_budget
-        if not llm_budget.consume():
+        if not llm_budget.consume(feature="chat"):
             self.usage["fallbacks"] += 1
             return self._fallback.parse_actions(text)
 
