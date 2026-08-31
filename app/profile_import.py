@@ -203,6 +203,7 @@ def import_github(user_id: str, handle: str) -> dict:
 def import_linkedin(user_id: str, *, url: str = "", text: str = "",
                     filename: str = "", data: bytes | None = None) -> dict:
     extracted = {"identity": {}, "profile": {}, "knowledge": []}
+    warning = ""
     slug_url = linkedin_url(url)
     if slug_url:
         extracted["identity"]["linkedin"] = slug_url
@@ -211,10 +212,15 @@ def import_linkedin(user_id: str, *, url: str = "", text: str = "",
         raw = _text_from_bytes(filename, data) or raw
     if raw:
         parsed = parse_document(raw)
+        warning = parsed.get("warning") or ""
         extracted = _merge_extracted(extracted, parsed)
         if slug_url:
             extracted["identity"]["linkedin"] = slug_url
     extracted = _sanitize_extracted(extracted)
+    # _merge_extracted and _sanitize_extracted both keep only the three known
+    # keys, so the warning has to be reattached rather than carried through.
+    if warning:
+        extracted["warning"] = warning
     if not extracted["identity"] and not extracted["knowledge"] and not extracted["profile"]:
         raise ProfileImportError(
             "Paste a LinkedIn profile URL, or upload a LinkedIn PDF "
@@ -311,12 +317,28 @@ def apply_extracted(user_id: str, extracted: dict, *, source: str) -> dict:
     }
 
 
+#: Surfaced when the paid overlay did not run. Falling back to the heuristics
+#: is by design, but the result is measurably worse, and saying nothing is how
+#: a regex-only parse reaches the user looking exactly as confident as a good
+#: one -- which is how "React"/"AI" got saved as somebody's city and state.
+_SKIP_WARNINGS = {
+    "budget": "Today's AI parsing limit is used up, so this was read with the "
+              "basic parser. Double-check the fields it filled.",
+    "error": "AI parsing wasn't available, so this was read with the basic "
+             "parser. Double-check the fields it filled.",
+}
+
+
 def parse_document(text: str) -> dict:
     """Heuristic extract, then Claude overlay when a key is available."""
     heur = _heuristic_parse(text)
-    llm = _llm_parse(text)
+    llm, skipped = _llm_parse(text)
     merged = _merge_extracted(heur, llm) if llm else heur
-    return _sanitize_extracted(merged)
+    out = _sanitize_extracted(merged)
+    # After the sanitizer, which rebuilds the dict from known keys only.
+    if skipped in _SKIP_WARNINGS:
+        out["warning"] = _SKIP_WARNINGS[skipped]
+    return out
 
 
 def github_username(raw: str) -> str:
@@ -422,14 +444,38 @@ def _text_from_bytes(filename: str, data: bytes) -> str:
         return data.decode("latin-1", errors="ignore")
 
 
+def _page_text(page) -> str:
+    """One page of text, layout mode first.
+
+    pypdf's default extraction emits glyphs in content-stream order, which
+    throws away the page's column geometry. A right-aligned date then arrives
+    welded to the last word of its line -- "Minneapolis, MNAug 2023" -- and a
+    letter-spaced heading arrives split, "EDUCA TION & LEADERSHIP". The second
+    is the expensive one: no section regex matches it, so every field under
+    that heading gets looked up against the whole document instead of its own
+    section, and picks up whatever it finds first.
+
+    Layout mode keeps the columns apart. It is slower and can fail on
+    generators pypdf cannot model, so plain extraction stays as the fallback --
+    per page, because one odd page should not cost us the rest of the resume.
+    """
+    for kwargs in ({"extraction_mode": "layout"}, {}):
+        try:
+            text = page.extract_text(**kwargs) or ""
+        except Exception:  # noqa: BLE001 -- try plain, then give this page up
+            logger.info("pdf page extract failed (%s)", kwargs or "plain",
+                        exc_info=True)
+            continue
+        if text.strip():
+            return text
+    return ""
+
+
 def _pdf_text(data: bytes) -> str:
     try:
         from pypdf import PdfReader
         reader = PdfReader(BytesIO(data))
-        parts = []
-        for page in reader.pages[:12]:
-            parts.append(page.extract_text() or "")
-        return "\n".join(parts).strip()
+        return "\n".join(_page_text(p) for p in reader.pages[:12]).strip()
     except Exception:  # noqa: BLE001 — fall through to decode
         logger.info("pdf text extract failed", exc_info=True)
         return ""
@@ -438,9 +484,10 @@ def _pdf_text(data: bytes) -> str:
 def _education_block(blob: str) -> str:
     return _section_after(
         blob,
-        r"(?:^|\n)\s*(?:education|academic background|academics)\s*\n",
-        r"\n\s*(?:experience|projects?|skills|leadership|work history|"
-        r"professional experience|employment)\s*\n",
+        _heading_re("education", "academic background", "academics"),
+        _heading_re("professional experience", "work experience", "work history",
+                    "experience", "employment", "key projects", "projects?",
+                    "skills", "leadership"),
     )
 
 
@@ -811,14 +858,18 @@ _EXTRACT_SCHEMA = {
 }
 
 
-def _llm_parse(text: str) -> dict | None:
+def _llm_parse(text: str) -> tuple[dict | None, str]:
     s = get_settings()
     if not s.use_llm_router:
-        return None
+        # No key configured: heuristics are the whole design here, not a
+        # degraded mode, so there is nothing to warn anyone about.
+        return None, ""
     from . import llm_budget
 
     if not llm_budget.consume(feature="parse"):
-        return None
+        logger.info("resume llm parse skipped: daily parse slice spent (cap=%s)",
+                    llm_budget.feature_cap("parse"))
+        return None, "budget"
     try:
         from . import llm_health
         client = llm_health.client(s.anthropic_api_key)
@@ -851,7 +902,7 @@ def _llm_parse(text: str) -> dict | None:
         payload = next((b.text for b in resp.content if b.type == "text"), "")
         data = json.loads(payload)
         if not isinstance(data, dict):
-            return None
+            return None, "error"
         return {
             "identity": {k: v for k, v in (data.get("identity") or {}).items() if v},
             "profile": {k: v for k, v in (data.get("profile") or {}).items() if v},
@@ -859,10 +910,10 @@ def _llm_parse(text: str) -> dict | None:
                 i for i in (data.get("knowledge") or [])
                 if isinstance(i, dict) and i.get("text")
             ],
-        }
+        }, ""
     except Exception:  # noqa: BLE001 — fail open to heuristics
         logger.info("resume llm parse failed; using heuristics", exc_info=True)
-        return None
+        return None, "error"
 
 
 def _github_get(path: str):
@@ -927,6 +978,37 @@ def _repo_blurb(repo: dict) -> str:
     return text
 
 
+#: One trailing word of a compound heading. The capital is load-bearing and
+#: case-sensitive on purpose: real headings are ALL CAPS or Title Case, so
+#: requiring one is what stops a line of prose that merely opens with the
+#: keyword ("Education outreach for local schools") from being read as the
+#: EDUCATION heading. ``_section_after`` searches with ``re.I``, which would
+#: otherwise make ``[A-Z]`` match anything at all, hence the scoped ``(?-i:)``.
+_HEAD_WORD = r"(?-i:[A-Z])[\w'&/-]*"
+#: What may join a heading to its tail: punctuation, a connective, or a space.
+_HEAD_JOIN = r"(?:[ \t]*[&/+,][ \t]*|[ \t]+(?:and|of)[ \t]+|[ \t]+)"
+
+
+def _heading_re(*words: str) -> str:
+    """A regex matching a section heading line.
+
+    Headings are rarely the bare keyword. Resumes write "EDUCATION &
+    LEADERSHIP", "Skills and Awards", "EDUCATION:" -- and the patterns here
+    used to demand the keyword followed by nothing but a newline, so a compound
+    heading matched *nothing* and the section came back empty. Up to three
+    capitalised tail words are allowed: enough for the real compounds, not
+    enough to swallow a paragraph.
+
+    Pass the longer alternatives first ("professional experience" before
+    "experience"); alternation takes the first branch that matches.
+    """
+    return (
+        rf"(?:^|\n)[ \t]*(?:{'|'.join(words)})"
+        rf"(?:{_HEAD_JOIN}{_HEAD_WORD}){{0,3}}"
+        r"[ \t]*:?[ \t]*\n"
+    )
+
+
 def _section_after(blob: str, heading: str, stop: str) -> str:
     m = re.search(heading, blob, re.I)
     if not m:
@@ -940,14 +1022,18 @@ def _experience_from_text(blob: str) -> list[dict]:
     """Grab bullets under an EXPERIENCE heading. Jobs keep their location line."""
     section = _section_after(
         blob,
-        r"(?:^|\n)\s*(?:professional experience|work experience|experience|employment)\s*\n",
-        r"\n\s*(?:projects?|education|skills|key projects|selected projects)\s*\n",
+        _heading_re("professional experience", "work experience", "experience",
+                    "employment"),
+        _heading_re("key projects", "selected projects", "projects?",
+                    "education", "skills"),
     )
     if not section:
         return []
     items = []
     for line in section.splitlines():
-        line = re.sub(r"^[\s\-\*•·]+", "", line).strip()
+        # _clean_text, not .strip(): layout extraction separates columns with
+        # runs of spaces, so a bullet arrives as "Shipped 20+ tickets<gap>2025".
+        line = _clean_text(re.sub(r"^[\s\-\*•·]+", "", line))
         if len(line) < 16 or len(line) > 320:
             continue
         if line.isupper():
@@ -962,14 +1048,18 @@ def _projects_from_text(blob: str) -> list[dict]:
     """Grab bullets under a PROJECTS heading when there is no LLM pass."""
     section = _section_after(
         blob,
-        r"(?:^|\n)\s*(?:projects?|selected projects|personal projects|key projects)\s*\n",
-        r"\n\s*(?:experience|education|skills|work history|awards|professional experience)\s*\n",
+        _heading_re("key projects", "selected projects", "personal projects",
+                    "projects?"),
+        _heading_re("professional experience", "work experience", "work history",
+                    "experience", "education", "skills", "awards"),
     )
     if not section:
         return []
     items = []
     for line in section.splitlines():
-        line = re.sub(r"^[\s\-\*•·]+", "", line).strip()
+        # _clean_text, not .strip(): layout extraction separates columns with
+        # runs of spaces, so a bullet arrives as "Shipped 20+ tickets<gap>2025".
+        line = _clean_text(re.sub(r"^[\s\-\*•·]+", "", line))
         if len(line) < 16 or len(line) > 280:
             continue
         if line.isupper():
