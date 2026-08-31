@@ -385,6 +385,25 @@ struct CrystalCover: View {
     }
 }
 
+/// Point on a circle: `center` offset by `radius` at `radians`.
+///
+/// Every dial call site used to inline `cos(a) * radius` with a `Double` angle
+/// and a `CGFloat` radius. Swift bridges CGFloat and Double implicitly, so in an
+/// expression that mixes them the compiler has more than one valid reading of
+/// `cos` — some toolchains pick one, others call it ambiguous and refuse. An
+/// arm64-only local build was happy; CI was not. Doing the trig once, in a
+/// CGFloat-typed place, removes the ambiguity instead of relying on the
+/// compiler's mood.
+private func dialPoint(_ center: CGPoint, _ radians: Double, _ radius: CGFloat) -> CGPoint {
+    CGPoint(x: center.x + CGFloat(cos(radians)) * radius,
+            y: center.y + CGFloat(sin(radians)) * radius)
+}
+
+/// Unit vector at `radians`, as CGFloat — same reason as `dialPoint`.
+private func dialVector(_ radians: Double) -> CGVector {
+    CGVector(dx: CGFloat(cos(radians)), dy: CGFloat(sin(radians)))
+}
+
 /// 270° HUD airspeed dial. Annular radar fill, needle lives in the band so the score stays clear.
 struct InstrumentDial: View {
     var progress: Double
@@ -407,7 +426,7 @@ struct InstrumentDial: View {
             let end = Angle.degrees(startDeg + sweepDeg)
             let valueEnd = Angle.degrees(startDeg + sweepDeg * clamped)
             let a = startDeg * .pi / 180 + clamped * sweepDeg * .pi / 180
-            let tip = CGPoint(x: c.x + cos(a) * (rOuter - 2), y: c.y + sin(a) * (rOuter - 2))
+            let tip = dialPoint(c, a, rOuter - 2)
 
             var bezel = Path()
             bezel.addEllipse(in: CGRect(x: 1, y: 1, width: s - 2, height: s - 2))
@@ -431,8 +450,7 @@ struct InstrumentDial: View {
                         .init(color: color.opacity(0.16), location: 0),
                         .init(color: color.opacity(0.36), location: 1)
                     ]),
-                    startPoint: CGPoint(x: c.x + cos(startDeg * .pi / 180) * rKeep,
-                                        y: c.y + sin(startDeg * .pi / 180) * rKeep),
+                    startPoint: dialPoint(c, startDeg * .pi / 180, rKeep),
                     endPoint: tip
                 ))
 
@@ -469,7 +487,7 @@ struct InstrumentDial: View {
     private func tick(ctx: GraphicsContext, center: CGPoint, value: Double,
                        rOuter: CGFloat, major: Bool) {
         let a = angle(for: value)
-        let n = CGVector(dx: cos(a), dy: sin(a))
+        let n = dialVector(a)
         let len: CGFloat = major ? 10 : 4
         var p = Path()
         p.move(to: CGPoint(x: center.x + n.dx * rOuter, y: center.y + n.dy * rOuter))
@@ -482,7 +500,7 @@ struct InstrumentDial: View {
     private func numeral(ctx: GraphicsContext, center: CGPoint, value: Double,
                           radius: CGFloat, size: CGFloat) {
         let a = angle(for: value)
-        let pt = CGPoint(x: center.x + cos(a) * radius, y: center.y + sin(a) * radius)
+        let pt = dialPoint(center, a, radius)
         let fontSize: CGFloat = size >= 200 ? 10 : 8
         let text = Text("\(Int(value))")
             .font(.system(size: fontSize, weight: .medium, design: .rounded).monospacedDigit())
@@ -493,8 +511,8 @@ struct InstrumentDial: View {
     private func needle(ctx: GraphicsContext, center: CGPoint, value: Double,
                          rKeep: CGFloat, rOuter: CGFloat) {
         let a = startDeg * .pi / 180 + value * sweepDeg * .pi / 180
-        let n = CGVector(dx: cos(a), dy: sin(a))
-        let t = CGVector(dx: -sin(a), dy: cos(a))
+        let n = dialVector(a)
+        let t = CGVector(dx: -n.dy, dy: n.dx)
         let shaft: CGFloat = 1.8
         let tipLen: CGFloat = max(12, size * 0.055)
         let tipR = rOuter - 2
