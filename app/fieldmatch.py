@@ -20,9 +20,13 @@ FIELD_RULES: list[tuple[str, str]] = [
     ("preferred_name", r"preferred (first )?name|nick.?name|known as|goes by"),
     # "Name (First)" is as common on ATS forms as "First name", so match both orders.
     ("first_name", r"first.?name|given.?name|legal first|name\s*\(?\s*first|forename"),
+    ("middle_name", r"middle.?(name|initial)|name\s*\(?\s*middle"),
     ("last_name", r"last.?name|family.?name|surname|name\s*\(?\s*last"),
     ("full_name", r"full.?name|^\s*name\s*$|your name|legal name"),
     ("pronouns", r"pronouns"),
+    # Before `phone`: Greenhouse's "Phone type" select contains the word phone,
+    # so first-match-wins put a phone number in a Mobile/Home/Work dropdown.
+    ("phone_type", r"phone type|type of phone|phone\s*\(?\s*type"),
     ("phone", r"\bphone\b|\bmobile\b|\btel(ephone)?\b|cell.?phone|contact number"),
     ("linkedin", r"linked.?in"),
     ("github", r"git.?hub"),
@@ -33,6 +37,15 @@ FIELD_RULES: list[tuple[str, str]] = [
     # first-match-wins sent the commonest work-authorisation question on any US
     # form to the country field — so a Yes/No control got "United States", or
     # was left blank. An authorisation question is never an address question.
+    # Before `work_authorized`, which matches the bare phrase "work
+    # authorization" and so swallowed the dropdown asking *which* status. A
+    # Yes/No in an F-1 OPT / H-1B / TN select fills nothing.
+    ("work_auth_type", r"(?:what|which|select).{0,40}work authori[sz]ation|"
+                       r"work authori[sz]ation (?:type|category|status)|"
+                       r"type of work authori[sz]ation|visa (?:type|category)|"
+                       r"current visa|which of the following.{0,30}(?:visa|authori[sz])"),
+    ("security_clearance", r"security clearance|clearance level|active clearance|"
+                           r"do you (?:hold|have).{0,20}clearance"),
     ("work_authorized", r"authori[sz]ed to work|work authori[sz]ation|legally.{0,16}work|"
                         r"eligible to work|right to work|work eligibility"),
     ("needs_sponsorship", r"sponsor(ship)?|require.{0,20}visa|visa.{0,16}status|"
@@ -47,6 +60,10 @@ FIELD_RULES: list[tuple[str, str]] = [
     ("location", r"\blocation\b|where are you (based|located)|city.{0,5}state|"
                  r"where do you (live|reside)|currently (based|located|reside|living)|"
                  r"based in|city of residence"),
+    # Before `address`, whose "address line" matched line 2 as well as line 1 —
+    # so the apartment box got the street.
+    ("address2", r"address line ?2|address ?2|apt|apartment|suite|unit (?:number|#)|"
+                 r"floor|line 2"),
     ("address", r"street address|address line|mailing address|home address|"
                 r"^\s*address\b|line 1"),
     ("city", r"\bcity\b|town"),
@@ -68,6 +85,16 @@ FIELD_RULES: list[tuple[str, str]] = [
     ("intern_season", r"winter or summer internship|prefer.{0,30}internship|"
                       r"internship.{0,16}(term|season|preference|period|availability)|"
                       r"which (term|season|internship)"),
+    ("drivers_license", r"driver.?s?.? licen[sc]e|valid licen[sc]e to drive|"
+                        r"do you (?:have|hold).{0,20}driver"),
+    ("certifications", r"certificat(?:ion|e)s?\b|licen[sc]es?\s*(?:and|&|/)\s*certificat|"
+                       r"professional licen[sc]e|credentials held"),
+    ("languages", r"languages? (?:you )?(?:speak|spoken|fluenc|proficien)|"
+                  r"spoken languages?|language proficienc|fluent in|"
+                  r"what languages|other languages"),
+    ("employment_type", r"employment type|type of employment|position type|"
+                        r"job type|desired employment|seeking (?:full|part).?time|"
+                        r"what type of (?:role|position|opportunit)"),
     ("current_company", r"current (employer|company)|present (employer|company)|"
                         r"where do you (currently )?work|most recent (employer|company)|"
                         r"current or most recent employer|^\s*employer\s*$"),
@@ -94,8 +121,11 @@ FIELD_RULES: list[tuple[str, str]] = [
     ("how_heard", r"how did you (hear|learn|find)|where did you (hear|learn|find)|"
                   r"hear about (this|us|the)|referral source|source of (this )?application|"
                   r"how.?['’]?d you (find|hear)|find this (role|job|opportunit)"),
+    ("referral_name", r"who referred you|name of (?:the )?(?:person|employee).{0,16}referr|"
+                      r"referrer.?s? name|referred by(?: whom)?|"
+                      r"employee(?:'|’)?s? name.{0,16}referr"),
     ("related_to_employee", r"related to|relative (at|of)|relatives? who work|know anyone|"
-                            r"family member|referred by|employee of"),
+                            r"family member|employee of"),
     # Optional EEO — only filled when the identity has a value saved.
     # "gender identity" is hard-blocked by never_fill before these run.
     ("gender", r"\bgender\b|^\s*sex\s*$|what is your sex\b"),

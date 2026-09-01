@@ -4,12 +4,18 @@ import Foundation
 /// Keys match ``app/applicant.py`` so Autofill can fill the live form.
 struct IdentityDraft {
     var firstName = ""
+    var middleName = ""
     var lastName = ""
     var preferredName = ""
     var pronouns = ""
     var email = ""
     var phone = ""
+    /// Greenhouse and Workday put a Mobile/Home/Work select next to the number.
+    /// Mobile is right for almost everyone and is editable in the quiz.
+    var phoneType = "Mobile"
     var address = ""
+    /// Apartment / suite / unit — the "Address line 2" box.
+    var address2 = ""
     var city = ""
     var state = ""
     var zip = ""
@@ -34,7 +40,15 @@ struct IdentityDraft {
     var startDate = ""
     var internSeason = ""
     var workArrangement = ""
+    var employmentType = ""
     var howHeard = ""
+    var referralName = ""
+    /// Which authorization, not whether: F-1 OPT, STEM OPT, H-1B, TN… The
+    /// `workAuthorized` / `needsSponsorship` toggles answer the Yes/No pair.
+    var workAuthType = ""
+    var securityClearance = ""
+    var languages = ""
+    var certifications = ""
     var gender = ""
     var race = ""
     var ethnicity = ""
@@ -49,15 +63,19 @@ struct IdentityDraft {
     var canTravel = false
     var previouslyApplied = false
     var relatedToEmployee = false
+    var driversLicense = false
 
     mutating func load(from id: [String: String]) {
         if firstName.isEmpty { firstName = id["first_name"] ?? "" }
+        if middleName.isEmpty { middleName = id["middle_name"] ?? "" }
         if lastName.isEmpty { lastName = id["last_name"] ?? "" }
         if preferredName.isEmpty { preferredName = id["preferred_name"] ?? "" }
         if pronouns.isEmpty { pronouns = id["pronouns"] ?? "" }
         if email.isEmpty { email = id["email"] ?? "" }
         if phone.isEmpty { phone = id["phone"] ?? "" }
+        if phoneType.isEmpty { phoneType = id["phone_type"] ?? "" }
         if address.isEmpty { address = id["address"] ?? "" }
+        if address2.isEmpty { address2 = id["address2"] ?? "" }
         if city.isEmpty { city = id["city"] ?? "" }
         if state.isEmpty { state = id["state"] ?? "" }
         if zip.isEmpty { zip = id["zip"] ?? "" }
@@ -78,7 +96,13 @@ struct IdentityDraft {
         if startDate.isEmpty { startDate = id["start_date"] ?? "" }
         if internSeason.isEmpty { internSeason = id["intern_season"] ?? "" }
         if workArrangement.isEmpty { workArrangement = id["work_arrangement"] ?? "" }
+        if employmentType.isEmpty { employmentType = id["employment_type"] ?? "" }
         if howHeard.isEmpty { howHeard = id["how_heard"] ?? "" }
+        if referralName.isEmpty { referralName = id["referral_name"] ?? "" }
+        if workAuthType.isEmpty { workAuthType = id["work_auth_type"] ?? "" }
+        if securityClearance.isEmpty { securityClearance = id["security_clearance"] ?? "" }
+        if languages.isEmpty { languages = id["languages"] ?? "" }
+        if certifications.isEmpty { certifications = id["certifications"] ?? "" }
         if gender.isEmpty { gender = id["gender"] ?? "" }
         if race.isEmpty { race = id["race"] ?? "" }
         if ethnicity.isEmpty { ethnicity = id["ethnicity"] ?? "" }
@@ -93,6 +117,7 @@ struct IdentityDraft {
         if let v = id["can_travel"] { canTravel = v == "true" }
         if let v = id["previously_applied"] { previouslyApplied = v == "true" }
         if let v = id["related_to_employee"] { relatedToEmployee = v == "true" }
+        if let v = id["drivers_license"] { driversLicense = v == "true" }
     }
 
     /// Only the given keys. Empty strings are omitted by default so a quiz skip
@@ -100,10 +125,12 @@ struct IdentityDraft {
     /// clearing a field actually clears it.
     func payload(keys: Set<String>, omitEmpty: Bool = true) -> [String: Any] {
         let all: [String: Any] = [
-            "first_name": firstName, "last_name": lastName,
+            "first_name": firstName, "middle_name": middleName,
+            "last_name": lastName,
             "preferred_name": preferredName, "pronouns": pronouns,
-            "email": email, "phone": phone,
-            "address": address, "city": city, "state": state, "zip": zip,
+            "email": email, "phone": phone, "phone_type": phoneType,
+            "address": address, "address2": address2,
+            "city": city, "state": state, "zip": zip,
             "country": country,
             "linkedin": linkedin, "github": github, "portfolio": portfolio,
             "school": school, "degree": degree, "discipline": discipline,
@@ -113,6 +140,10 @@ struct IdentityDraft {
             "salary_expectation": salary, "start_date": startDate,
             "intern_season": internSeason,
             "work_arrangement": workArrangement, "how_heard": howHeard,
+            "employment_type": employmentType, "referral_name": referralName,
+            "work_auth_type": workAuthType,
+            "security_clearance": securityClearance,
+            "languages": languages, "certifications": certifications,
             "gender": gender, "race": race, "ethnicity": ethnicity,
             "veteran_status": veteranStatus, "disability_status": disabilityStatus,
             "work_authorized": workAuthorized,
@@ -124,6 +155,7 @@ struct IdentityDraft {
             "can_travel": canTravel,
             "previously_applied": previouslyApplied,
             "related_to_employee": relatedToEmployee,
+            "drivers_license": driversLicense,
         ]
         var out: [String: Any] = [:]
         for key in keys {
@@ -154,17 +186,20 @@ struct IdentityDraft {
     func fullPayload(omitEmpty: Bool = false,
                      includeEducation: Bool = false) -> [String: Any] {
         var out = payload(keys: Set([
-            "first_name", "last_name", "preferred_name", "pronouns",
-            "email", "phone", "address", "city", "state", "zip", "country",
+            "first_name", "middle_name", "last_name", "preferred_name",
+            "pronouns", "email", "phone", "phone_type",
+            "address", "address2", "city", "state", "zip", "country",
             "linkedin", "github", "portfolio",
             "school", "degree", "discipline", "gpa", "grad_year", "grad_month",
             "current_company", "current_title", "years_experience",
             "salary_expectation", "start_date", "intern_season",
-            "work_arrangement", "how_heard",
+            "work_arrangement", "how_heard", "employment_type",
+            "referral_name", "work_auth_type", "security_clearance",
+            "languages", "certifications",
             "gender", "race", "ethnicity", "veteran_status", "disability_status",
             "work_authorized", "needs_sponsorship", "willing_to_relocate",
             "background_check", "drug_test", "over_18", "can_travel",
-            "previously_applied", "related_to_employee",
+            "previously_applied", "related_to_employee", "drivers_license",
         ]), omitEmpty: omitEmpty)
         if includeEducation { out["education"] = educationPayload }
         return out

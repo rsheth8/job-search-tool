@@ -24,11 +24,13 @@ from . import profile as profile_mod
 # value just means "no suggestion for that field".
 #   bools are stored as real booleans.
 TEXT_FIELDS = (
-    # name + contact
-    "first_name", "last_name", "full_name", "preferred_name", "pronouns",
-    "email", "phone",
-    # location
-    "address", "city", "state", "zip", "country", "location",
+    # name + contact. ``middle_name`` is asked for on a surprising number of
+    # forms and matched nothing before, so that box was always left blank.
+    "first_name", "middle_name", "last_name", "full_name", "preferred_name",
+    "pronouns", "email", "phone", "phone_type",
+    # location. ``address2`` is the apartment/suite line: "Address line 2" was
+    # matching the ``address`` rule, so street address got painted into it.
+    "address", "address2", "city", "state", "zip", "country", "location",
     # links
     "linkedin", "github", "portfolio",
     # education. ``grad_month`` is asked for separately because Greenhouse and
@@ -41,6 +43,15 @@ TEXT_FIELDS = (
     "current_company", "current_title", "years_experience",
     # logistics commonly asked on applications
     "salary_expectation", "start_date", "work_arrangement", "how_heard",
+    "employment_type", "referral_name",
+    # Work authorization has two halves. The bools below answer "are you
+    # authorized" and "do you need sponsorship"; this answers the dropdown
+    # asking *which* status, which student forms ask constantly (F-1 OPT,
+    # STEM OPT, CPT, H-1B, TN). Citizenship is deliberately not a field here:
+    # it stays in the never-fill list next to national origin.
+    "work_auth_type", "security_clearance",
+    # Free lists, same comma-separated shape as skills.
+    "languages", "certifications",
     # optional EEO (only filled when set — see fieldmatch)
     "gender", "race",     "ethnicity", "hispanic_latino", "veteran_status", "disability_status",
 )
@@ -49,6 +60,7 @@ BOOL_FIELDS = (
     "work_authorized", "needs_sponsorship", "willing_to_relocate",
     "background_check", "drug_test", "over_18", "can_travel",
     "previously_applied", "related_to_employee", "hispanic_latino",
+    "drivers_license",
 )
 FIELDS = TEXT_FIELDS + BOOL_FIELDS
 

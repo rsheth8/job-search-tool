@@ -161,6 +161,30 @@ _LANGUAGES = (
     "Polish", "Dutch", "Turkish", "Swahili", "Hebrew", "American Sign Language",
 )
 
+_CERTIFICATIONS = (
+    "AWS Certified Cloud Practitioner", "AWS Certified Solutions Architect",
+    "AWS Certified Developer", "AWS Certified DevOps Engineer",
+    "Google Cloud Associate Cloud Engineer",
+    "Google Cloud Professional Data Engineer",
+    "Microsoft Azure Fundamentals (AZ-900)", "Azure Administrator (AZ-104)",
+    "Azure Solutions Architect", "CompTIA A+", "CompTIA Network+",
+    "CompTIA Security+", "CompTIA CySA+", "CISSP", "CISA", "CEH",
+    "Certified Kubernetes Administrator", "Docker Certified Associate",
+    "HashiCorp Terraform Associate", "Cisco CCNA", "Red Hat RHCSA",
+    "Oracle Java SE Programmer", "Microsoft Power BI Data Analyst",
+    "Tableau Desktop Specialist", "Databricks Data Engineer Associate",
+    "Snowflake SnowPro Core", "TensorFlow Developer Certificate",
+    "Deep Learning Specialization", "PMP", "CAPM",
+    "Certified ScrumMaster", "Professional Scrum Master", "SAFe Agilist",
+    "Six Sigma Green Belt", "Six Sigma Black Belt", "ITIL Foundation",
+    "Salesforce Administrator", "Salesforce Platform Developer I",
+    "Google Analytics Certification", "HubSpot Inbound Marketing",
+    "CFA Level I", "CFA Level II", "CPA", "Series 7", "Series 63",
+    "FE (Fundamentals of Engineering)", "PE (Professional Engineer)",
+    "EIT", "OSHA 10", "OSHA 30", "First Aid/CPR", "SolidWorks CSWA",
+    "Autodesk AutoCAD Certified User", "TOEFL", "IELTS",
+)
+
 CATALOG: dict[str, tuple[str, ...]] = {
     "skills": _SKILLS,
     "roles": _ROLES,
@@ -170,6 +194,7 @@ CATALOG: dict[str, tuple[str, ...]] = {
     "how_heard": _HOW_HEARD,
     "work_arrangement": _WORK_ARRANGEMENT,
     "languages": _LANGUAGES,
+    "certifications": _CERTIFICATIONS,
 }
 
 FIELDS = tuple(CATALOG)
