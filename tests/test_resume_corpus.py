@@ -88,6 +88,25 @@ def test_the_search_location_is_the_candidates_city(pdf: Path):
 
 
 @pytest.mark.parametrize("pdf", CASES, ids=_ids(CASES))
+def test_multiple_degrees_are_read_as_multiple_degrees(pdf: Path):
+    """A resume showing two degrees has to produce two entries. One flat set of
+    education fields silently keeps whichever it saw last."""
+    gold = _gold(pdf)
+    if "education" not in gold:
+        pytest.skip("one degree on this resume")
+    got = _parsed(pdf)["identity"].get("education") or []
+    assert got == gold["education"]
+
+
+@pytest.mark.parametrize("pdf", CASES, ids=_ids(CASES))
+def test_a_single_degree_resume_stores_no_list(pdf: Path):
+    """It would add a structure saying nothing the flat fields do not."""
+    if "education" in _gold(pdf):
+        pytest.skip("this resume has more than one degree")
+    assert "education" not in _parsed(pdf)["identity"]
+
+
+@pytest.mark.parametrize("pdf", CASES, ids=_ids(CASES))
 def test_every_known_gap_is_still_a_gap(pdf: Path):
     """An xfail that starts passing is good news nobody hears about. This turns
     it into a failing test, so the note gets deleted rather than left to rot."""

@@ -1,5 +1,5 @@
 {
-  "note": "Right-aligned dates via \\hfill, a compound heading, and the graduation date in a parenthetical beside the degree while the school line carries the enrolment range. This is the shape of the resume that started all of this: it produced city 'React', state 'AI', an empty education section, and the enrolment year as the graduation year.",
+  "note": "Right-aligned dates via \\hfill, a compound heading, and the graduation date in a parenthetical beside the degree while the school line carries the enrolment range. This is the shape of the resume that started all of this: it produced city 'React', state 'AI', an empty education section, and the enrolment year as the graduation year. It also carries two degrees at once -- a master's under way while the bachelor's finishes -- written on one line, which is the ordinary way to write it and the case a single flat set of education fields cannot express.",
   "identity": {
     "first_name": "Priya",
     "last_name": "Raman",
@@ -13,5 +13,21 @@
     "gpa": "3.7",
     "grad_year": "2026"
   },
-  "locations": "Minneapolis, MN"
+  "locations": "Minneapolis, MN",
+  "education": [
+    {
+      "degree": "M.S.",
+      "school": "University of Minnesota",
+      "discipline": "Data Science",
+      "status": "in_progress"
+    },
+    {
+      "degree": "B.S.",
+      "school": "University of Minnesota",
+      "discipline": "Computer Science",
+      "grad_year": "2026",
+      "gpa": "3.7",
+      "status": "completed"
+    }
+  ]
 }
