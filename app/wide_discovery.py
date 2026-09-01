@@ -1,4 +1,4 @@
-"""Wide job discovery: RSS feeds, ATS directory rotation, Simplify lists, YC.
+"""Wide job discovery: RSS, ATS directory, Simplify, YC, Workday, Amazon, Netflix, USAJobs.
 
 Runs for users with a job-search profile (even with zero tracked companies).
 Postings merge into the same ``discovery.tick`` pipeline as board tracking.
@@ -18,7 +18,9 @@ from .jobsources import swelist as swelist_src
 logger = logging.getLogger("wide_discovery")
 
 # Wide sources skip heavy seeding (would baseline thousands of roles).
-_NO_SEED_SOURCES = frozenset({"rss", "directory", "swelist", "yc"})
+_NO_SEED_SOURCES = frozenset({
+    "rss", "directory", "swelist", "yc", "amazon", "netflix", "usajobs",
+})
 
 
 def is_wide_source(source: str) -> bool:
@@ -35,6 +37,21 @@ def _profile_search_text(prof: sqlite3.Row | None) -> str:
         except (IndexError, KeyError):
             pass
     return " ".join(parts)
+
+
+def _search_query(prof: sqlite3.Row | None) -> str:
+    """Role phrase to send to Amazon / Netflix / USAJobs search. First profile role."""
+    if prof is None:
+        return "software engineer"
+    try:
+        raw = (prof["roles"] or "").strip()
+    except (IndexError, KeyError, TypeError):
+        raw = ""
+    clause = next(
+        (c.strip() for c in raw.replace(";", ",").split(",") if c.strip()),
+        "",
+    )
+    return (clause or "software engineer")[:80]
 
 
 def wide_rss_feed_ids(prof: sqlite3.Row | None = None) -> list[str]:
@@ -65,20 +82,20 @@ def collect_fresh(
     *,
     existing_keys: set[tuple[str, str]] | None = None,
 ) -> list[JobPosting]:
-    """Pull new postings from RSS, the ATS directory, swelist, and YC."""
+    """Pull new postings from RSS, ATS directory, swelist, YC, Workday, Amazon, Netflix, USAJobs."""
     if prof is None:
         return []
     settings = get_settings()
     sources = set(settings.job_sources)
     seen = existing_keys or set()
     incoming: list[JobPosting] = []
+    sectors = catalog.directory_sectors(prof)
 
     if "rss" in sources and settings.job_wide_rss_enabled:
         for feed_id in wide_rss_feed_ids(prof):
             incoming.extend(fetch_source("rss", feed_id))
 
     if "directory" in sources and settings.job_wide_directory_enabled:
-        sectors = catalog.directory_sectors(prof)
         incoming.extend(
             dir_src.fetch_directory_batch(user_id=user_id, sectors=sectors)
         )
@@ -89,6 +106,21 @@ def collect_fresh(
 
     if "yc" in sources and settings.job_wide_yc_enabled:
         incoming.extend(fetch_source("yc", "jobs"))
+
+    if "workday" in sources and settings.job_wide_workday_enabled:
+        from .jobsources import workday as workday_src
+
+        incoming.extend(
+            workday_src.fetch_directory_batch(user_id=user_id, sectors=sectors)
+        )
+
+    query = _search_query(prof)
+    if "amazon" in sources and settings.job_wide_amazon_enabled:
+        incoming.extend(fetch_source("amazon", query))
+    if "netflix" in sources and settings.job_wide_netflix_enabled:
+        incoming.extend(fetch_source("netflix", query))
+    if "usajobs" in sources and settings.job_wide_usajobs_enabled:
+        incoming.extend(fetch_source("usajobs", query))
 
     dir_src.learn_from_postings(incoming)
 
@@ -163,4 +195,16 @@ def describe_wide_status(prof: sqlite3.Row | None = None) -> str:
         parts.append(f"Pitt CSC / Simplify lists ({lists})")
     if s.job_wide_yc_enabled and "yc" in s.job_sources:
         parts.append("Y Combinator jobs")
+    if s.job_wide_workday_enabled and "workday" in s.job_sources:
+        from .jobsources import workday as workday_src
+
+        n = workday_src.board_count(catalog.directory_sectors(prof) if prof else None)
+        parts.append(f"Workday careers ({n} companies, rotating)")
+    if s.job_wide_amazon_enabled and "amazon" in s.job_sources:
+        parts.append("Amazon.jobs")
+    if s.job_wide_netflix_enabled and "netflix" in s.job_sources:
+        parts.append("Netflix careers")
+    if s.job_wide_usajobs_enabled and "usajobs" in s.job_sources:
+        if s.usajobs_api_key.strip() and s.usajobs_user_agent.strip():
+            parts.append("USAJobs")
     return "; ".join(parts) if parts else ""

@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import logging
 
-from . import ashby, directory, greenhouse, lever, rss, smartrecruiters, swelist, workable, yc
+from . import (
+    amazon, ashby, directory, greenhouse, lever, netflix, rss, smartrecruiters,
+    swelist, usajobs, workday, workable, yc,
+)
 from .base import JobPosting
 
 logger = logging.getLogger("jobsources")
@@ -29,11 +32,19 @@ SOURCES = {
     "directory": directory.fetch,
     "swelist": swelist.fetch,
     "yc": yc.fetch,
+    "workday": workday.fetch,
+    "amazon": amazon.fetch,
+    "netflix": netflix.fetch,
+    "usajobs": usajobs.fetch,
 }
 
 # Sources whose ``board_token`` is a URL/search query/cursor, not a per-company
 # slug. ``resolve_board`` must never slug-probe these.
-NON_BOARD_SOURCES = frozenset({"rss", "directory", "swelist", "yc"})
+# workday tokens are careers URLs (looked up from the curated file, never guessed).
+NON_BOARD_SOURCES = frozenset({
+    "rss", "directory", "swelist", "yc", "workday", "amazon", "netflix",
+    "usajobs",
+})
 
 
 def fetch_source(source: str, board_token: str) -> list[JobPosting]:

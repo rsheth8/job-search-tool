@@ -22,13 +22,17 @@ _ATS_HOSTS: list[tuple[str, re.Pattern]] = [
     ("ashby", re.compile(r"(^|\.)ashbyhq\.com$", re.I)),
     ("workable", re.compile(r"(^|\.)workable\.com$", re.I)),
     ("smartrecruiters", re.compile(r"(^|\.)smartrecruiters\.com$", re.I)),
+    ("workday", re.compile(r"(^|\.)myworkdayjobs\.com$", re.I)),
+    ("amazon", re.compile(r"(^|\.)amazon\.jobs$", re.I)),
+    ("netflix", re.compile(r"(^|\.)jobs\.netflix\.net$|(^|\.)jobs\.netflix\.com$", re.I)),
+    ("usajobs", re.compile(r"(^|\.)usajobs\.gov$", re.I)),
 ]
 
 # Ranking / labels: these hosts are the high-confidence Autofill set.
 # Fill still runs on other public HTML; formprobe is the gate.
 FILLABLE_SOURCES = frozenset({"greenhouse", "lever", "ashby"})
 # Company ATS we can open directly even when iOS can't fill the form.
-DIRECT_SOURCES = FILLABLE_SOURCES | {"workable", "smartrecruiters"}
+DIRECT_SOURCES = FILLABLE_SOURCES | {"workable", "smartrecruiters", "workday"}
 
 # Board tokens that are Simplify proxies / ATS plumbing, not a company board.
 _SKIP_TOKENS = frozenset({
@@ -67,8 +71,8 @@ def apply_kind(url: str | None, source: str | None = None) -> str:
     """How the phone should label this apply link.
 
     ``autofill`` — Greenhouse / Lever / Ashby; the in-app engine is most reliable.
-    ``direct`` — company ATS (Workable / SmartRecruiters); Fill still runs.
-    ``browser`` — unknown / RSS; open in-app and Fill if a public form appears.
+    ``direct`` — company ATS (Workable / SmartRecruiters / Workday); Fill still runs.
+    ``browser`` — unknown / RSS / Amazon / USAJobs / pasted LinkedIn; open in-app.
     """
     if is_fillable_form(url):
         return "autofill"

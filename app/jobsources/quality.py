@@ -21,6 +21,7 @@ from .base import JobPosting
 # Directory postings carry the underlying ATS source (greenhouse/lever/ashby/…).
 FIRST_PARTY_SOURCES = frozenset({
     "greenhouse", "lever", "ashby", "workable", "smartrecruiters",
+    "workday", "amazon", "netflix", "usajobs",
 })
 # Prefer these over RSS/aggregator when the same job arrives twice. Swelist
 # listings.json already stores company ATS URLs (not the README Simplify buttons).

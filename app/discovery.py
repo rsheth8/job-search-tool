@@ -48,10 +48,13 @@ def _slug_variants(name: str) -> list[str]:
 def resolve_board(company_name: str) -> dict | None:
     """Probe enabled free boards for one matching a company. All calls are free.
 
-    Tries the sector catalog first (known ATS token), then slug variants against
-    each enabled source. Returns the first that actually yields postings, or None.
+    Tries the sector catalog first (known ATS token), then the curated Workday
+    careers list, then slug variants against Greenhouse / Lever / Ashby / etc.
+    Workday is returned even if the live fetch is empty (bot protection) so
+    ``track openings at NVIDIA`` still sticks.
     """
     from . import catalog
+    from .jobsources import workday as workday_src
 
     known = catalog.lookup_board(company_name)
     if known and known["source"] in get_settings().job_sources:
@@ -61,6 +64,28 @@ def resolve_board(company_name: str) -> dict | None:
                 "source": known["source"],
                 "board_token": known["board_token"],
                 "company_name": known["company_name"],
+                "count": len(posts),
+            }
+    if "workday" in get_settings().job_sources:
+        wd = workday_src.lookup_company(company_name)
+        if wd:
+            posts = fetch_source("workday", wd["token"])
+            return {
+                "source": "workday",
+                "board_token": wd["token"],
+                "company_name": wd["name"],
+                "count": len(posts),
+            }
+    if "netflix" in get_settings().job_sources:
+        from .jobsources import netflix as netflix_src
+
+        nflx = netflix_src.lookup_company(company_name)
+        if nflx:
+            posts = fetch_source("netflix", nflx["token"])
+            return {
+                "source": "netflix",
+                "board_token": nflx["token"],
+                "company_name": nflx["name"],
                 "count": len(posts),
             }
     for source in get_settings().job_sources:

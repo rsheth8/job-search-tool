@@ -820,6 +820,29 @@ async def apply_import_linkedin(request: Request) -> dict:
         raise HTTPException(status_code=exc.status, detail=exc.message) from exc
 
 
+@app.post("/apply/import/url")
+async def apply_import_url(request: Request) -> dict:
+    """Paste a job URL (LinkedIn, Indeed, Workday, Amazon, Greenhouse…).
+
+    Parses the link and stages it. Does not crawl LinkedIn or Indeed.
+    """
+    from fastapi import HTTPException
+
+    from .jobsources import ingest as ingest_mod
+
+    _require_apply_token(request)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    uid = _resolve_user(request, (body or {}).get("user"))
+    url = (body or {}).get("url") or (body or {}).get("text") or ""
+    result = ingest_mod.save_pasted_job(uid, url)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "url required")
+    return {"user": uid, **result}
+
+
 @app.post("/feedback")
 async def feedback_submit(request: Request) -> dict:
     from fastapi import HTTPException
@@ -955,6 +978,7 @@ def health() -> dict:
     from . import catalog, discovery, jobstore
 
     from .jobsources import directory as dir_src
+    from .jobsources import workday as workday_src
 
     info["discovery"] = {
         "sources_enabled": s.job_sources,
@@ -963,6 +987,12 @@ def health() -> dict:
         "wide_directory": s.job_wide_directory_enabled,
         "wide_swelist": s.job_wide_swelist_enabled,
         "wide_yc": s.job_wide_yc_enabled,
+        "wide_workday": s.job_wide_workday_enabled,
+        "wide_amazon": s.job_wide_amazon_enabled,
+        "wide_netflix": s.job_wide_netflix_enabled,
+        "wide_usajobs": s.job_wide_usajobs_enabled,
+        "usajobs_keyed": bool(s.usajobs_api_key.strip() and s.usajobs_user_agent.strip()),
+        "workday_boards": workday_src.board_count(),
         "ghost_filter": s.ghost_filter_enabled,
         "eligibility_filter": s.eligibility_filter_enabled,
         "reranker": s.reranker_enabled,

@@ -15,6 +15,10 @@ from app import ats
     ("HTTPS://Jobs.Lever.CO/Acme/X", "lever"),  # case-insensitive host
     ("https://apply.workable.com/acme/j/ABCDEF/", "workable"),
     ("https://jobs.smartrecruiters.com/ServiceNow/744000146269339", "smartrecruiters"),
+    ("https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/X/Y", "workday"),
+    ("https://www.amazon.jobs/en/jobs/1/sde", "amazon"),
+    ("https://explore.jobs.netflix.net/careers/job/790318105221", "netflix"),
+    ("https://www.usajobs.gov/job/1", "usajobs"),
 ])
 def test_ats_of_first_party(url, name):
     assert ats.ats_of(url) == name
@@ -27,6 +31,13 @@ def test_ats_of_first_party(url, name):
 def test_apply_kind_labels():
     assert ats.apply_kind("https://boards.greenhouse.io/acme/jobs/1") == "autofill"
     assert ats.apply_kind("https://apply.workable.com/acme/j/ABCDEF/") == "direct"
+    assert ats.apply_kind(
+        "https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/X/Y"
+    ) == "direct"
+    assert ats.apply_kind("https://www.amazon.jobs/en/jobs/1/sde") == "browser"
+    assert ats.apply_kind(
+        "https://explore.jobs.netflix.net/careers/job/790318105221"
+    ) == "browser"
     assert ats.apply_kind("https://remoteok.com/jobs/1", source="rss") == "browser"
     assert ats.apply_kind("https://example.com/jobs/1", source="greenhouse") == "direct"
     assert ats.apply_kind("https://careers.example.com/apply/1") == "browser"

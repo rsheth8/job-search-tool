@@ -55,6 +55,14 @@ struct QueueItem: Codable, Identifiable, Hashable {
     }
 }
 
+struct ImportUrlResponse: Codable {
+    let ok: Bool?
+    let posting_id: Int?
+    let title: String?
+    let company: String?
+    let apply_kind: String?
+}
+
 struct QueueResponse: Codable {
     let queued: [QueueItem]?   // top matches not yet staged
     let queue: [QueueItem]?    // staged, ready to apply

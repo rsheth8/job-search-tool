@@ -64,14 +64,15 @@ class Settings(BaseSettings):
     job_alert_user: str = ""
     # Free sources are on by default.
     job_sources_enabled: str = (
-        "greenhouse,lever,ashby,workable,smartrecruiters,rss,directory,swelist,yc"
+        "greenhouse,lever,ashby,workable,smartrecruiters,rss,directory,"
+        "swelist,yc,workday,amazon,netflix,usajobs"
     )
 
     # --- Wide discovery — profile-driven, no company list required ----------
     job_wide_rss_enabled: bool = True
     job_wide_rss_feeds: str = "hn-hiring,remoteok,weworkremotely,himalayas,remotive"
     job_wide_directory_enabled: bool = True
-    job_directory_boards_per_tick: int = 32
+    job_directory_boards_per_tick: int = 40
     job_directory_max_jobs_per_board: int = 25
     job_directory_data_path: str = "data/ats_boards.json"
     job_company_catalog_path: str = "data/company_catalog.json"
@@ -87,6 +88,22 @@ class Settings(BaseSettings):
     job_swelist_max_age_days: int = 21
     # Y Combinator public jobs landing page (featured postings).
     job_wide_yc_enabled: bool = True
+    # Curated Workday careers URLs (public CXS JSON). Rotate a few per tick.
+    job_wide_workday_enabled: bool = True
+    job_workday_boards_per_tick: int = 6
+    job_workday_max_jobs_per_board: int = 25
+    job_workday_data_path: str = "data/workday_boards.json"
+    # Amazon.jobs public search.json, queried from the profile role.
+    job_wide_amazon_enabled: bool = True
+    job_amazon_max_jobs: int = 25
+    # Netflix Eightfold public apply JSON, queried from the profile role.
+    job_wide_netflix_enabled: bool = True
+    job_netflix_max_jobs: int = 25
+    # USAJobs official Search API. No-op until USAJOBS_API_KEY + email are set.
+    job_wide_usajobs_enabled: bool = True
+    job_usajobs_max_jobs: int = 25
+    usajobs_api_key: str = ""
+    usajobs_user_agent: str = ""
 
     # Ghost-job filter: drop never-really-hiring reqs (evergreen language,
     # reposts, stale, scam contact) beyond quality.py's spam gate. Conservative
