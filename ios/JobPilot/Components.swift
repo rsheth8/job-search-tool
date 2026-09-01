@@ -1666,14 +1666,27 @@ enum QuizList {
 
 /// Tappable chips plus an optional custom field. Stores a comma-separated string
 /// so search profile / identity payloads stay backend-compatible.
+///
+/// Give it a `field` and the chips refill: after every tap it asks the server
+/// for the next batch, ranked against what was just picked and against the
+/// profile we already have. A fixed row of eight runs out on the second tap,
+/// which is what sent everyone to the keyboard. `suggestions` stays as the
+/// offline list — shown before the first batch lands and if the request fails,
+/// so the row is never empty.
 struct TagEditor: View {
     @Binding var text: String
     var suggestions: [String] = []
     var placeholder: String = "Add another"
     var allowCustom: Bool = true
     var caption: String? = nil
+    /// Catalog to refill from (`skills`, `roles`, `locations`, `disciplines`,
+    /// `degrees`, `languages`, `how_heard`). Nil keeps the static list.
+    var field: String? = nil
 
     @State private var draft = ""
+    @State private var pool: [String] = []
+    @State private var remaining = 0
+    @State private var refill: Task<Void, Never>?
 
     private var tags: [String] { QuizList.split(text) }
 
@@ -1707,7 +1720,7 @@ struct TagEditor: View {
                     }
                 }
             }
-            let unused = suggestions.filter { sug in
+            let unused = offered.filter { sug in
                 !tags.contains { $0.caseInsensitiveCompare(sug) == .orderedSame }
             }
             if !unused.isEmpty {
@@ -1717,10 +1730,28 @@ struct TagEditor: View {
                             add(sug)
                         }
                     }
+                    if remaining > 0 {
+                        Button {
+                            reload(shuffle: true)
+                        } label: {
+                            Label("More", systemImage: "arrow.clockwise")
+                                .font(.subheadline)
+                                .foregroundStyle(Theme.accent)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                        .accessibilityLabel("Show more suggestions")
+                    }
                 }
             }
         }
+        .task(id: "\(field ?? "")|\(text)") { reload() }
+        .onDisappear { refill?.cancel() }
     }
+
+    /// Server batch once we have one; the bundled list until then.
+    private var offered: [String] { pool.isEmpty ? suggestions : pool }
 
     private func add(_ raw: String) {
         let pieces = QuizList.split(raw)
@@ -1733,6 +1764,30 @@ struct TagEditor: View {
     private func remove(_ tag: String) {
         text = QuizList.join(tags.filter { $0.caseInsensitiveCompare(tag) != .orderedSame })
         Theme.selection()
+    }
+
+    /// Fetch the next batch. `shuffle` is the More button: it asks past the
+    /// batch we're already showing so the row actually changes, rather than
+    /// re-fetching the same top twelve.
+    private func reload(shuffle: Bool = false) {
+        guard let field, !field.isEmpty else { return }
+        let skip = shuffle ? offered : []
+        let chosen = tags + skip
+        refill?.cancel()
+        refill = Task { @MainActor in
+            guard let batch = try? await APIClient(config: Config.shared)
+                .suggestions(field: field, chosen: chosen) else { return }
+            guard !Task.isCancelled, batch.known != false else { return }
+            let next = batch.suggestions ?? []
+            // An empty batch means the catalog is spent. Keep what's on screen
+            // rather than blanking the row back to the bundled list.
+            guard !next.isEmpty else {
+                remaining = 0
+                return
+            }
+            pool = next
+            remaining = batch.remaining ?? 0
+        }
     }
 }
 

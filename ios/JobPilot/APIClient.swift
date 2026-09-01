@@ -213,6 +213,30 @@ struct APIClient {
         return (decoded.applications ?? [], decoded.statuses ?? [])
     }
 
+    /// The next batch of chips for a quiz field, minus what's already picked.
+    ///
+    /// Called again after every tap so the row refills instead of running out.
+    /// Ranked server-side against the user's own profile, which is why this is
+    /// a request and not a bundled list.
+    func suggestions(field: String, chosen: [String],
+                     limit: Int = 12) async throws -> SuggestionBatch {
+        var items = [URLQueryItem(name: "user", value: config.user),
+                     URLQueryItem(name: "field", value: field),
+                     URLQueryItem(name: "limit", value: String(limit))]
+        if !chosen.isEmpty {
+            items.append(URLQueryItem(name: "chosen", value: chosen.joined(separator: ",")))
+        }
+        var comps = URLComponents()
+        comps.queryItems = items
+        // URLComponents leaves a literal "+" alone, and the server reads that
+        // as a space — so "C++" arrives as "C" and gets offered right back.
+        // Nothing here emits "+" as an encoding, so every one is a real plus.
+        let query = (comps.percentEncodedQuery ?? "")
+            .replacingOccurrences(of: "+", with: "%2B")
+        let data = try await request("GET", "/apply/suggestions?\(query)")
+        return try JSONDecoder().decode(SuggestionBatch.self, from: data)
+    }
+
     /// Remove a filed application — the way back from a double-tap on Filed.
     func deleteApplication(id: Int) async throws {
         _ = try await request("POST", "/apply/applications/delete",

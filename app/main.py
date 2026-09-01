@@ -571,6 +571,67 @@ async def apply_identity_set(request: Request) -> dict:
             "saved": applicant.set_identity(uid, fields)}
 
 
+@app.get("/apply/suggestions")
+def apply_suggestions(request: Request, field: str = "skills",
+                      chosen: str = "", q: str = "",
+                      limit: int = 0, user: str | None = None) -> dict:
+    """The next chips to offer for a quiz field, given what's already picked.
+
+    The client calls this again after every tap, so the row refills instead of
+    running dry: pick React and Next.js shows up. Ranked against the user's own
+    profile so the first batch is already in the right neighbourhood.
+    """
+    from . import profile as profile_mod
+    from . import suggest
+
+    _require_apply_token(request)
+    uid = _resolve_user(request, user)
+    picks = [p for p in (chosen or "").split(",") if p.strip()]
+    return {
+        "user": uid,
+        **suggest.next_batch(
+            (field or "").strip().lower(),
+            picks,
+            context=_suggestion_context(profile_mod, uid, picks),
+            query=q,
+            limit=limit or suggest.DEFAULT_LIMIT,
+        ),
+    }
+
+
+def _suggestion_context(profile_mod, uid: str, picks: list[str]) -> list[str]:
+    """Terms we already know about this user, to seed the ranking.
+
+    Someone who has said "ML engineer" and "Computer Science" should not have
+    to tap three times before PyTorch appears. Cheap and best-effort: a missing
+    profile just means the catalog's own order stands.
+    """
+    from . import applicant
+
+    terms: list[str] = []
+    try:
+        fields = profile_mod.public_fields(uid)
+    except Exception:
+        fields = {}
+    for key in ("roles", "keywords", "seniority", "locations"):
+        terms += [t.strip() for t in (fields.get(key) or "").split(",") if t.strip()]
+    try:
+        identity = applicant.get_identity(uid)
+    except Exception:
+        identity = {}
+    for key in ("discipline", "degree"):
+        value = identity.get(key)
+        if isinstance(value, str):
+            terms += [t.strip() for t in value.split(",") if t.strip()]
+    for entry in identity.get("education") or []:
+        if isinstance(entry, dict):
+            terms.append(str(entry.get("discipline") or ""))
+    # Their own taps outrank anything inferred; suggest.next_batch weights
+    # `chosen` higher, so leaving the picks out of the context keeps that gap.
+    taken = {p.strip().lower() for p in picks}
+    return [t for t in terms if t and t.lower() not in taken]
+
+
 @app.get("/apply/setup")
 def apply_setup(request: Request, user: str | None = None) -> dict:
     """First-run quiz status (profile + identity coverage)."""
