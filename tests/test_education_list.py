@@ -252,9 +252,15 @@ def test_a_profile_with_one_degree_still_serves_a_list(user):
     from app import onboarding
 
     applicant.set_identity(user, {"school": "Rice", "degree": "B.S."})
-    assert onboarding.status(user)["education"] == [
-        {"school": "Rice", "degree": "B.S."}
-    ]
+    got = onboarding.status(user)["education"]
+    assert len(got) == 1
+    assert got[0]["school"] == "Rice"
+    assert got[0]["degree"] == "B.S."
+    # Dense on the wire. Storage still drops the empties, but the phone types
+    # every one of these as a non-optional String, and Swift's synthesised
+    # decoder throws on an absent key rather than falling back to its default.
+    assert set(got[0]) == set(applicant.EDUCATION_FIELDS)
+    assert got[0]["gpa"] == ""
 
 
 def test_the_editor_can_save_the_list_over_http(user):

@@ -55,7 +55,8 @@ def status(user_id: str) -> dict:
         "identity": _identity_payload(user_id),
         # Separate from ``identity`` on purpose: that map is stringified flat
         # fields for form filling, and a list of degrees is neither.
-        "education": identity.get("education") or [],
+        "education": applicant.education_for_wire(
+            identity.get("education") or []),
     }
 
 
