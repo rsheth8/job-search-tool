@@ -1,0 +1,17 @@
+{
+  "note": "Right-aligned dates via \\hfill, a compound heading, and the graduation date in a parenthetical beside the degree while the school line carries the enrolment range. This is the shape of the resume that started all of this: it produced city 'React', state 'AI', an empty education section, and the enrolment year as the graduation year.",
+  "identity": {
+    "first_name": "Priya",
+    "last_name": "Raman",
+    "email": "priya.raman@example.com",
+    "phone": "(612) 555-0148",
+    "city": "Minneapolis",
+    "state": "MN",
+    "school": "University of Minnesota",
+    "degree": "M.S., B.S.",
+    "discipline": "Data Science",
+    "gpa": "3.7",
+    "grad_year": "2026"
+  },
+  "locations": "Minneapolis, MN"
+}

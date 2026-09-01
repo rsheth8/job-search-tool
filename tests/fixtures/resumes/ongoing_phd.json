@@ -1,0 +1,18 @@
+{
+  "note": "An unfinished degree with no end date anywhere on the page. grad_year must come back EMPTY: the enrolment year is not a graduation year, and an empty field the user fills in beats a wrong one autofilled onto a real application. The nearest year on the page is 'Summer 2023' in the experience section, which is exactly what the parser used to reach for.",
+  "identity": {
+    "first_name": "Sofia",
+    "last_name": "Almeida",
+    "email": "sofia.almeida@example.com",
+    "phone": "(412) 555-0175",
+    "city": "Pittsburgh",
+    "state": "PA",
+    "school": "Carnegie Mellon University",
+    "degree": "Ph.D."
+  },
+  "locations": "Pittsburgh, PA",
+  "absent": ["grad_year", "gpa"],
+  "xfail": {
+    "discipline": "Machine Learning. _discipline_from_text matches a fixed list of four disciplines and has no entry for it."
+  }
+}

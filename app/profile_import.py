@@ -458,6 +458,65 @@ def _text_from_bytes(filename: str, data: bytes) -> str:
         return data.decode("latin-1", errors="ignore")
 
 
+#: A column gutter has to be this many characters wide, and this far in from
+#: either edge, before we believe it is a gutter and not a wide word gap.
+_GUTTER_WIDTH = 4
+_GUTTER_EDGE = 12
+#: Both sides must carry this many non-empty lines. A sidebar with one line in
+#: it is a right-aligned date, not a column.
+_COLUMN_LINES = 3
+
+
+def _split_columns(text: str) -> str | None:
+    """Reading order for a two-column page, or None if there is one column.
+
+    Layout extraction preserves where things sit on the page, which is what
+    makes a sidebar resume unreadable: the left column's contact details and the
+    right column's EDUCATION heading land on the *same line*, so no heading is
+    ever at the start of one and every section comes back empty.
+
+    A real gutter is a band of columns that is blank on every single line. That
+    is a strict test on purpose -- body text in a one-column resume crosses the
+    whole measure, so nothing qualifies and this returns None. Right-aligned
+    dates leave a ragged gap, not a clean band, for the same reason.
+    """
+    lines = [line.rstrip() for line in (text or "").splitlines()]
+    if len(lines) < 6:
+        return None
+    width = max((len(line) for line in lines), default=0)
+    if width < 50:
+        return None
+    occupied = [0] * width
+    for line in lines:
+        for col, ch in enumerate(line):
+            if ch != " ":
+                occupied[col] += 1
+    runs: list[tuple[int, int]] = []
+    col = 0
+    while col < width:
+        if occupied[col]:
+            col += 1
+            continue
+        start = col
+        while col < width and not occupied[col]:
+            col += 1
+        runs.append((start, col))
+    gutters = [
+        (s, e) for s, e in runs
+        if e - s >= _GUTTER_WIDTH and s >= _GUTTER_EDGE and e <= width - _GUTTER_EDGE
+    ]
+    # Exactly one: three columns are rare enough that guessing at them would
+    # cost more than it saves, and zero means this page is one column.
+    if len(gutters) != 1:
+        return None
+    start, end = gutters[0]
+    left = [line[:start].rstrip() for line in lines]
+    right = [line[end:].rstrip() for line in lines]
+    if min(sum(1 for line in side if line.strip()) for side in (left, right)) < _COLUMN_LINES:
+        return None
+    return "\n".join(left).strip() + "\n\n" + "\n".join(right).strip()
+
+
 def _page_text(page) -> str:
     """One page of text, layout mode first.
 
@@ -480,8 +539,10 @@ def _page_text(page) -> str:
             logger.info("pdf page extract failed (%s)", kwargs or "plain",
                         exc_info=True)
             continue
-        if text.strip():
-            return text
+        if not text.strip():
+            continue
+        # Only layout text carries the geometry a gutter is detectable in.
+        return (_split_columns(text) or text) if kwargs else text
     return ""
 
 
@@ -652,10 +713,13 @@ def _grad_year_from_text(edu: str, blob: str) -> str:
         hits = re.findall(pattern, search, re.I)
         if hits:
             return max(hits)
-    for source in (search, blob):
-        years = _candidate_years(source)
-        if years:
-            return max(years)
+    years = _candidate_years(search)
+    if years:
+        return max(years)
+    # No second sweep of the whole document. When there *was* an education
+    # section and it deliberately yielded nothing -- an unfinished degree with
+    # no end date -- that silence is the answer, and scavenging the rest of the
+    # page hands back the year off somebody's summer internship instead.
     return ""
 
 
