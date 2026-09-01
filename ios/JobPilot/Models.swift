@@ -176,6 +176,67 @@ struct SetupStatus: Codable {
     let onboarding: String?
     let profile: [String: String]
     let identity: [String: String]
+    /// Optional so a build that predates the list still decodes a new server.
+    let education: [EducationEntry]?
+}
+
+/// One degree. A bachelor's finishing while a master's is under way needs two
+/// of these; the flat `identity` fields can only describe one.
+struct EducationEntry: Codable, Identifiable, Hashable {
+    var school = ""
+    var degree = ""
+    var discipline = ""
+    var gpa = ""
+    var start_year = ""
+    var grad_month = ""
+    var grad_year = ""
+    /// "in_progress" | "completed" | "" (let the server infer it from the dates)
+    var status = ""
+
+    /// Local only. The server keys entries by position, and two degrees from
+    /// the same school with the same name are a thing, so nothing in the
+    /// payload is stable enough to identify a row.
+    var id = UUID()
+
+    enum CodingKeys: String, CodingKey {
+        case school, degree, discipline, gpa, start_year, grad_month, grad_year, status
+    }
+
+    var isBlank: Bool {
+        [school, degree, discipline, gpa, start_year, grad_year]
+            .allSatisfy { $0.trimmingCharacters(in: .whitespaces).isEmpty }
+    }
+
+    var headline: String {
+        let head = [degree, discipline].filter { !$0.isEmpty }.joined(separator: " ")
+        if !head.isEmpty { return head }
+        return school.isEmpty ? "New degree" : school
+    }
+
+    var subtitle: String {
+        var bits: [String] = []
+        if !school.isEmpty, !headline.hasPrefix(school) { bits.append(school) }
+        if status == "in_progress" {
+            bits.append(grad_year.isEmpty ? "in progress" : "expected \(grad_year)")
+        } else if !grad_year.isEmpty {
+            bits.append(grad_year)
+        }
+        if !gpa.isEmpty { bits.append("GPA \(gpa)") }
+        return bits.joined(separator: " · ")
+    }
+
+    var payload: [String: String] {
+        var out: [String: String] = [:]
+        for (key, value) in [
+            ("school", school), ("degree", degree), ("discipline", discipline),
+            ("gpa", gpa), ("start_year", start_year), ("grad_month", grad_month),
+            ("grad_year", grad_year), ("status", status),
+        ] {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { out[key] = trimmed }
+        }
+        return out
+    }
 }
 
 struct ImportResult: Codable {

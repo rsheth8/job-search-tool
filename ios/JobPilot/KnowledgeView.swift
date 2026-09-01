@@ -583,15 +583,24 @@ private struct IdentityEditorView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 }
-                Section("Education") {
-                    TextField("School", text: $identity.school)
-                    TextField("Degree", text: $identity.degree)
-                    TextField("Major", text: $identity.discipline)
-                    TextField("Graduation year", text: $identity.gradYear)
-                        .keyboardType(.numberPad)
-                    TextField("Graduation month (e.g. May)", text: $identity.gradMonth)
-                    TextField("GPA", text: $identity.gpa)
-                        .keyboardType(.decimalPad)
+                Section {
+                    ForEach($identity.education) { $entry in
+                        EducationRowEditor(entry: $entry) {
+                            identity.education.removeAll { $0.id == entry.id }
+                        }
+                    }
+                    Button {
+                        withAnimation { identity.education.append(EducationEntry()) }
+                    } label: {
+                        Label("Add a degree", systemImage: "plus.circle")
+                    }
+                } header: {
+                    Text("Education")
+                } footer: {
+                    Text("Add each degree separately. A degree you are still "
+                         + "reading for is the one forms get asked about, and "
+                         + "the rest still go on applications that want your "
+                         + "full history.")
                 }
                 Section("Work") {
                     TextField("Years of experience", text: $identity.years)
@@ -660,6 +669,8 @@ private struct IdentityEditorView: View {
             return
         }
         identity.load(from: saved)
+        // Separate from the flat map, which is stringified single-degree fields.
+        identity.education = setup.status?.education ?? []
         loaded = true
     }
 
@@ -667,12 +678,70 @@ private struct IdentityEditorView: View {
         defer { saving = false }
         guard loaded else { return }
         do {
-            try await APIClient(config: config).saveIdentity(fields: identity.fullPayload())
+            try await APIClient(config: config)
+                .saveIdentity(fields: identity.fullPayload(includeEducation: true))
             await setup.refresh(config: config)
             Theme.impact(.soft)
             dismiss()
         } catch {
             self.error = APIClient.userMessage(for: error)
+        }
+    }
+}
+
+/// One degree in the education list.
+///
+/// Collapsed to a headline until tapped, because most people have two and a
+/// form of six fields each would bury everything under it.
+private struct EducationRowEditor: View {
+    @Binding var entry: EducationEntry
+    let onDelete: () -> Void
+
+    @State private var expanded = false
+
+    private static let degrees = ["B.S.", "B.A.", "M.S.", "M.Eng.", "MBA", "Ph.D.",
+                                  "Associate", "Certificate"]
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            TextField("School", text: $entry.school)
+            Picker("Degree", selection: $entry.degree) {
+                Text("—").tag("")
+                ForEach(Self.degrees, id: \.self) { Text($0).tag($0) }
+            }
+            TextField("Major / field", text: $entry.discipline)
+            Picker("Status", selection: $entry.status) {
+                // "" lets the server infer it from the dates, which is right
+                // far more often than a default guess would be.
+                Text("From the dates").tag("")
+                Text("In progress").tag("in_progress")
+                Text("Completed").tag("completed")
+            }
+            TextField("Start year", text: $entry.start_year)
+                .keyboardType(.numberPad)
+            TextField(entry.status == "in_progress" ? "Expected year" : "Graduation year",
+                      text: $entry.grad_year)
+                .keyboardType(.numberPad)
+            TextField("Graduation month (e.g. May)", text: $entry.grad_month)
+            TextField("GPA", text: $entry.gpa)
+                .keyboardType(.decimalPad)
+            Button(role: .destructive, action: onDelete) {
+                Label("Remove this degree", systemImage: "trash")
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.headline)
+                if !entry.subtitle.isEmpty {
+                    Text(entry.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .onAppear {
+            // A row the user just added has nothing to show, so open it rather
+            // than making them tap a blank line to find out it is empty.
+            if entry.isBlank { expanded = true }
         }
     }
 }

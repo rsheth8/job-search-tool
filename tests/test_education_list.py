@@ -224,3 +224,49 @@ def test_an_import_does_not_overwrite_a_list_you_curated(user):
     applicant.set_identity(user, {"education": mine})
     profile_import.import_resume(user, text=RESUME)
     assert applicant.get_identity(user)["education"][0]["school"] == "Carnegie Mellon"
+
+
+# --- what the phone is served --------------------------------------------
+
+def test_setup_serves_the_list_for_the_editor(user):
+    """The flat `identity` map is stringified single-degree fields, so the list
+    travels beside it rather than inside it."""
+    from app import onboarding
+
+    applicant.set_identity(user, {"education": [BACHELORS, MASTERS]})
+    got = onboarding.status(user)["education"]
+    assert [e["degree"] for e in got] == ["M.S.", "B.S."]
+
+
+def test_the_flat_identity_map_never_carries_the_list(user):
+    """It is typed [String: String] on the phone; a list would fail to decode."""
+    from app import onboarding
+
+    applicant.set_identity(user, {"education": [BACHELORS, MASTERS]})
+    payload = onboarding.status(user)["identity"]
+    assert "education" not in payload
+    assert all(isinstance(v, str) for v in payload.values())
+
+
+def test_a_profile_with_one_degree_still_serves_a_list(user):
+    from app import onboarding
+
+    applicant.set_identity(user, {"school": "Rice", "degree": "B.S."})
+    assert onboarding.status(user)["education"] == [
+        {"school": "Rice", "degree": "B.S."}
+    ]
+
+
+def test_the_editor_can_save_the_list_over_http(user):
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    got = client.post("/apply/identity", json={
+        "user": user,
+        "fields": {"first_name": "Rahil", "education": [BACHELORS, MASTERS]},
+    })
+    assert got.status_code == 200
+    saved = applicant.get_identity(user)
+    assert [e["degree"] for e in saved["education"]] == ["M.S.", "B.S."]
+    assert saved["first_name"] == "Rahil"
