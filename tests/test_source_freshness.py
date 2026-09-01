@@ -98,3 +98,35 @@ def test_the_newest_sources_are_not_exempt_from_the_check(client, monkeypatch):
             "workday", "amazon", "netflix", "usajobs"}
     finally:
         get_settings.cache_clear()
+
+
+def test_the_directory_fan_out_is_not_reported_as_silent(client, monkeypatch):
+    """It fetches per-company boards and saves each posting under that board's
+    source, so it never owns a row. Listing it would be a permanent false
+    positive, and a monitor that always cries wolf gets ignored."""
+    monkeypatch.setenv("JOB_SOURCES_ENABLED", "directory,greenhouse")
+    from app.config import get_settings
+    get_settings.cache_clear()
+    try:
+        disc = client.get("/health").json()["discovery"]
+        assert disc["silent_sources"] == ["greenhouse"]
+    finally:
+        get_settings.cache_clear()
+
+
+def test_the_curated_workday_file_holds_only_boards_that_answered():
+    """20 of 35 were plausible-looking guesses -- "tesla.wd5/Tesla" reads
+    exactly like a real careers URL and 404s. The rotation only tries six a
+    tick, so a half-wrong file doesn't half-work: it burns half of every tick.
+    Re-check with `python -m scripts.validate_workday_boards`."""
+    import json
+    import pathlib
+
+    path = pathlib.Path(__file__).resolve().parents[1] / "data/workday_boards.json"
+    boards = json.loads(path.read_text())["boards"]
+    names = {b["name"] for b in boards}
+    assert len(boards) >= 15
+    assert not names & {"Tesla", "Boeing", "RTX", "Walmart", "Goldman Sachs"}, (
+        "a board that does not answer is back in the file")
+    for b in boards:
+        assert b.get("url", "").startswith("https://"), b
