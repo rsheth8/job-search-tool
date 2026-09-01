@@ -210,6 +210,32 @@ struct EducationEntry: Codable, Identifiable, Hashable {
         case school, degree, discipline, gpa, start_year, grad_month, grad_year, status
     }
 
+    init() {}
+
+    /// A missing key decodes as blank rather than throwing.
+    ///
+    /// The default values above do *not* rescue an absent key: Swift's
+    /// synthesised decoder calls `decode`, not `decodeIfPresent`, and throws
+    /// `keyNotFound`. The server stores education sparsely, so a degree with no
+    /// GPA simply has no `gpa` key — and because education rides inside the
+    /// setup payload, that one absent field failed the *entire* response. The
+    /// quiz could not advance past its first page, reporting only "Something
+    /// went wrong." A field the server has no value for is blank, not fatal.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func str(_ key: CodingKeys) throws -> String {
+            try c.decodeIfPresent(String.self, forKey: key) ?? ""
+        }
+        school = try str(.school)
+        degree = try str(.degree)
+        discipline = try str(.discipline)
+        gpa = try str(.gpa)
+        start_year = try str(.start_year)
+        grad_month = try str(.grad_month)
+        grad_year = try str(.grad_year)
+        status = try str(.status)
+    }
+
     var isBlank: Bool {
         [school, degree, discipline, gpa, start_year, grad_year]
             .allSatisfy { $0.trimmingCharacters(in: .whitespaces).isEmpty }

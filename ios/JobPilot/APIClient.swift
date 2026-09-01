@@ -49,6 +49,13 @@ struct APIClient {
             case .message(let s): return s
             }
         }
+        // Before the NSError branch: a DecodingError bridges to NSError too,
+        // and would otherwise fall all the way through to the generic line —
+        // which is what made a single missing `gpa` key read as "Something
+        // went wrong. Try again." with nothing to point at.
+        if error is DecodingError {
+            return "Couldn't read the server response. Try again."
+        }
         let ns = error as NSError
         if ns.domain == NSURLErrorDomain {
             switch ns.code {

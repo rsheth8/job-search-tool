@@ -124,6 +124,23 @@ def _clean_entry(raw) -> dict:
     return out
 
 
+def education_for_wire(entries) -> list[dict]:
+    """Every entry carrying every key, blanks included.
+
+    Storage is deliberately sparse: ``_clean_entry`` drops empty values, so an
+    entry with no GPA has no ``gpa`` key at all. That is right for the database
+    and wrong for the wire. A typed client that declares eight non-optional
+    strings gets ``keyNotFound`` on the first degree without a GPA — and
+    because education rides inside the setup payload, the failure is nowhere
+    near education: the whole response fails to decode and the quiz cannot
+    advance past its first page.
+
+    Sparse in the column, dense on the wire.
+    """
+    return [{key: entry.get(key, "") for key in EDUCATION_FIELDS}
+            for entry in entries if isinstance(entry, dict)]
+
+
 def clean_education(raw) -> list[dict]:
     """Validate a list of entries, dropping blanks and exact duplicates."""
     if not isinstance(raw, (list, tuple)):

@@ -198,3 +198,36 @@ def test_coverage_alone_is_not_enough_without_a_name_and_email():
     body = TestClient(app).get("/apply/setup?user=nameless").json()
     assert body["identity_core_missing"] == []
     assert body["complete"] is True
+
+
+def test_setup_education_entries_carry_every_key():
+    """Ragged education entries broke the iOS quiz at its first page.
+
+    Storage drops empty values, so a degree with no GPA has no ``gpa`` key.
+    The iOS ``EducationEntry`` declares eight non-optional strings, and Swift's
+    synthesised decoder throws ``keyNotFound`` on a missing one — default
+    property values do not rescue it. Education rides inside the setup payload,
+    so the whole response failed to decode and ``markSetup`` threw before the
+    quiz could save anything. The user saw only "Something went wrong."
+    """
+    c = TestClient(app)
+    r = c.post("/apply/identity", json={"user": "edu_wire", "fields": {
+        "education": [
+            # No gpa, no start_year, no grad_month — exactly the shape a
+            # resume import produces for a degree in progress.
+            {"school": "University of Minnesota", "degree": "M.S.",
+             "discipline": "Data Science", "grad_year": "2026",
+             "status": "in_progress"},
+        ],
+    }})
+    assert r.status_code == 200
+
+    entries = c.get("/apply/setup?user=edu_wire").json()["education"]
+    assert entries, "the degree should survive to the setup payload"
+    for entry in entries:
+        assert set(entry) == set(applicant.EDUCATION_FIELDS), (
+            f"ragged entry {sorted(entry)} — a strict client cannot decode it")
+        assert all(isinstance(v, str) for v in entry.values())
+    # The blanks are blank, not invented.
+    assert entries[0]["gpa"] == ""
+    assert entries[0]["school"] == "University of Minnesota"
