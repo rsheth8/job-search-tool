@@ -191,6 +191,20 @@ Three rules in there that were each a real wrong-answer bug:
    off `/health`, separates blockers (isolation) from advisories (a degraded
    feature), and exits 1 on a blocker. `--token … --spend` adds the one live
    Anthropic call.
+1. **A secret outranks `fly.toml`.** Fly injects `[env]` and `fly secrets` into
+   the same environment and the secret wins, so a secret set once silently
+   overrides every later edit to the file — with a green deploy either side of
+   it. This has bitten once: `JOB_SOURCES_ENABLED` was a stale secret, so the
+   release that added Workday/Amazon/Netflix/USAJobs to `fly.toml` shipped all
+   four switched off. The code was there, the data file was there, the feature
+   was inert.
+   - `GET /health` → `config_shadowed` lists any `fly.toml [env]` key whose live
+     value differs from the file (names only — the shadowing value is usually a
+     secret, and `/health` is public). Empty is what you want.
+   - `beta_preflight` blocks on it.
+   - The fix is `fly secrets unset <KEY>` when the value belongs in `fly.toml`,
+     or `fly secrets set <KEY>=…` when it genuinely belongs in a secret. Prefer
+     unset: config in git beats config you have to remember.
 1. **Fly secrets** (see `deploy/BETA.md`): `APPLY_API_TOKEN`, `AUTH_ALLOWED_EMAILS`,
    `APPLE_CLIENT_IDS`, `SENTRY_DSN`, valid `ANTHROPIC_API_KEY`.
    **Verify it, don't assume it.** Every paid call site fails open to a heuristic,

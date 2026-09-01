@@ -118,6 +118,20 @@ def evaluate(health: dict) -> Report:
               "Reminders deliver in-app",
               bad_detail=f"reminder_delivery={health.get('reminder_delivery')!r}")
 
+    # A stale `fly secrets set` outranks every later edit to fly.toml, so the
+    # file can say one thing and the running app do another with a green
+    # deploy either side of it. Blocking: you cannot check a build against a
+    # checklist when you don't know what configuration it is running.
+    shadowed = health.get("config_shadowed")
+    if shadowed is None:
+        rep.add(SKIP, "fly.toml matches the live config",
+                "deployment predates the check")
+    else:
+        rep.check(not shadowed, BLOCKING, "fly.toml matches the live config",
+                  bad_detail="a secret is overriding fly.toml for "
+                             + ", ".join(shadowed)
+                             + " — `fly secrets unset <KEY>` or update the secret")
+
     # --- Quality: the silent-degradation checks --------------------------
     problem = llm.get("problem")
     rep.check(problem is None, ADVISORY, "Anthropic key configured",
