@@ -17,6 +17,10 @@ struct IdentityDraft {
     var linkedin = ""
     var github = ""
     var portfolio = ""
+    /// Every degree, most relevant first. When this has entries the server
+    /// derives `school`/`degree`/`gpa`/… from it, so those flat properties are
+    /// a read-through view rather than the source of truth.
+    var education: [EducationEntry] = []
     var school = ""
     var degree = ""
     var discipline = ""
@@ -138,8 +142,18 @@ struct IdentityDraft {
         return out
     }
 
-    func fullPayload(omitEmpty: Bool = false) -> [String: Any] {
-        payload(keys: Set([
+    /// Blank rows are dropped rather than sent: an empty entry the user added
+    /// and did not fill in is not a degree, and the server would store it.
+    var educationPayload: [[String: String]] {
+        education.filter { !$0.isBlank }.map(\.payload)
+    }
+
+    /// ``includeEducation`` defaults off. Sending the list is destructive --
+    /// an empty one clears every stored degree -- so only a screen that
+    /// actually loaded and edited it may send it.
+    func fullPayload(omitEmpty: Bool = false,
+                     includeEducation: Bool = false) -> [String: Any] {
+        var out = payload(keys: Set([
             "first_name", "last_name", "preferred_name", "pronouns",
             "email", "phone", "address", "city", "state", "zip", "country",
             "linkedin", "github", "portfolio",
@@ -152,5 +166,7 @@ struct IdentityDraft {
             "background_check", "drug_test", "over_18", "can_travel",
             "previously_applied", "related_to_employee",
         ]), omitEmpty: omitEmpty)
+        if includeEducation { out["education"] = educationPayload }
+        return out
     }
 }
