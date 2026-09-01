@@ -3,177 +3,114 @@
     {
       "name": "NVIDIA",
       "url": "https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite",
-      "sectors": ["software"]
+      "sectors": [
+        "software"
+      ]
     },
     {
       "name": "Salesforce",
       "url": "https://salesforce.wd12.myworkdayjobs.com/en-US/External_Career_Site",
-      "sectors": ["software"]
+      "sectors": [
+        "software"
+      ]
     },
     {
       "name": "Adobe",
       "url": "https://adobe.wd5.myworkdayjobs.com/en-US/external_experienced",
-      "sectors": ["software"]
-    },
-    {
-      "name": "Adobe University",
-      "url": "https://adobe.wd5.myworkdayjobs.com/en-US/external_university",
-      "sectors": ["software"]
+      "sectors": [
+        "software"
+      ]
     },
     {
       "name": "Intel",
       "url": "https://intel.wd1.myworkdayjobs.com/en-US/External",
-      "sectors": ["software"]
-    },
-    {
-      "name": "AMD",
-      "url": "https://amd.wd1.myworkdayjobs.com/en-US/AMD",
-      "sectors": ["software"]
-    },
-    {
-      "name": "Qualcomm",
-      "url": "https://qualcomm.wd5.myworkdayjobs.com/External",
-      "sectors": ["software"]
+      "sectors": [
+        "software"
+      ]
     },
     {
       "name": "Cisco",
       "url": "https://cisco.wd5.myworkdayjobs.com/en-US/Cisco_Careers",
-      "sectors": ["software"]
+      "sectors": [
+        "software"
+      ]
     },
     {
       "name": "Broadcom",
       "url": "https://broadcom.wd1.myworkdayjobs.com/External_Career",
-      "sectors": ["software"]
+      "sectors": [
+        "software"
+      ]
     },
     {
       "name": "Workday",
       "url": "https://workday.wd5.myworkdayjobs.com/en-US/workday",
-      "sectors": ["software"]
+      "sectors": [
+        "software"
+      ]
     },
     {
       "name": "Autodesk",
       "url": "https://autodesk.wd1.myworkdayjobs.com/Ext",
-      "sectors": ["software"]
-    },
-    {
-      "name": "Siemens",
-      "url": "https://siemens.wd3.myworkdayjobs.com/External",
-      "sectors": ["software", "manufacturing"]
-    },
-    {
-      "name": "Samsung",
-      "url": "https://samsung.wd3.myworkdayjobs.com/Global",
-      "sectors": ["software"]
-    },
-    {
-      "name": "Capital One",
-      "url": "https://capitalone.wd1.myworkdayjobs.com/Capital_One",
-      "sectors": ["software", "finance"]
-    },
-    {
-      "name": "Goldman Sachs",
-      "url": "https://goldmansachs.wd1.myworkdayjobs.com/GoldmanSachsCareers",
-      "sectors": ["software", "finance"]
-    },
-    {
-      "name": "JPMorgan Chase",
-      "url": "https://jpmchase.wd5.myworkdayjobs.com/en-US/JPMCCareers",
-      "sectors": ["software", "finance"]
-    },
-    {
-      "name": "Bank of America",
-      "url": "https://bankofamerica.wd1.myworkdayjobs.com/en-US/Campus_Careers",
-      "sectors": ["software", "finance"]
-    },
-    {
-      "name": "American Express",
-      "url": "https://aexp.wd1.myworkdayjobs.com/en-US/American_Express",
-      "sectors": ["software", "finance"]
+      "sectors": [
+        "software"
+      ]
     },
     {
       "name": "PayPal",
       "url": "https://paypal.wd1.myworkdayjobs.com/en-US/jobs",
-      "sectors": ["software", "finance"]
+      "sectors": [
+        "software",
+        "finance"
+      ]
     },
     {
       "name": "Morgan Stanley",
       "url": "https://ms.wd5.myworkdayjobs.com/en-US/external",
-      "sectors": ["software", "finance"]
+      "sectors": [
+        "software",
+        "finance"
+      ]
     },
     {
       "name": "Wells Fargo",
       "url": "https://wf.wd1.myworkdayjobs.com/en-US/wellsfargojobs",
-      "sectors": ["software", "finance"]
+      "sectors": [
+        "software",
+        "finance"
+      ]
     },
     {
       "name": "BlackRock",
       "url": "https://blackrock.wd1.myworkdayjobs.com/en-US/BlackRock_Professional",
-      "sectors": ["software", "finance"]
+      "sectors": [
+        "software",
+        "finance"
+      ]
     },
     {
       "name": "Accenture",
       "url": "https://accenture.wd103.myworkdayjobs.com/en-US/AccentureCareers",
-      "sectors": ["software", "consulting"]
-    },
-    {
-      "name": "Deloitte",
-      "url": "https://deloitte.wd5.myworkdayjobs.com/DeloitteUSCareers",
-      "sectors": ["software", "consulting"]
-    },
-    {
-      "name": "McKinsey",
-      "url": "https://mckinsey.wd5.myworkdayjobs.com/External",
-      "sectors": ["consulting"]
-    },
-    {
-      "name": "Walmart",
-      "url": "https://walmart.wd5.myworkdayjobs.com/WalmartExternal",
-      "sectors": ["software", "retail"]
+      "sectors": [
+        "software",
+        "consulting"
+      ]
     },
     {
       "name": "Target",
       "url": "https://target.wd5.myworkdayjobs.com/en-US/targetcareers",
-      "sectors": ["software", "retail"]
-    },
-    {
-      "name": "Disney",
-      "url": "https://disneycareers.wd5.myworkdayjobs.com/en-US/DisneyCareers",
-      "sectors": ["software", "media"]
-    },
-    {
-      "name": "Warner Bros",
-      "url": "https://warnerbros.wd5.myworkdayjobs.com/WarnerBros",
-      "sectors": ["software", "media"]
-    },
-    {
-      "name": "Epic Games",
-      "url": "https://epicgames.wd5.myworkdayjobs.com/EpicExternalSite",
-      "sectors": ["software", "gaming"]
-    },
-    {
-      "name": "Tesla",
-      "url": "https://tesla.wd5.myworkdayjobs.com/Tesla",
-      "sectors": ["software", "automotive"]
-    },
-    {
-      "name": "Boeing",
-      "url": "https://boeing.wd1.myworkdayjobs.com/BOEING",
-      "sectors": ["software", "aerospace"]
-    },
-    {
-      "name": "Lockheed Martin",
-      "url": "https://lockheedmartinjobs.wd5.myworkdayjobs.com/en-US/LockheedMartin",
-      "sectors": ["software", "aerospace"]
+      "sectors": [
+        "software",
+        "retail"
+      ]
     },
     {
       "name": "Northrop Grumman",
       "url": "https://ngc.wd1.myworkdayjobs.com/Northrop_Grumman_External_Site",
-      "sectors": ["software", "aerospace"]
-    },
-    {
-      "name": "RTX",
-      "url": "https://rtx.wd1.myworkdayjobs.com/en-US/RTX",
-      "sectors": ["software", "aerospace"]
+      "sectors": [
+        "software",
+        "aerospace"
+      ]
     }
   ]
 }
