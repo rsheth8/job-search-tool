@@ -176,6 +176,9 @@ def load() -> dict:
 
 def reset_cache() -> None:
     load.cache_clear()
+    # Anything derived from load() has to go with it, or a test pointed at a
+    # different catalog file reads the previous one's index.
+    _names_by_board.cache_clear()
 
 
 def sectors_for_profile(profile: sqlite3.Row | None) -> frozenset[str]:
@@ -259,6 +262,31 @@ def probe_pairs(sectors: frozenset[str] | None) -> list[tuple[str, str]]:
         seen.add(key)
         out.append((src, token if src == "smartrecruiters" else token.lower()))
     return out
+
+
+@lru_cache(maxsize=1)
+def _names_by_board() -> dict[tuple[str, str], str]:
+    index: dict[tuple[str, str], str] = {}
+    for row in load().get("boards") or []:
+        if not isinstance(row, dict):
+            continue
+        src = (row.get("source") or "").strip().lower()
+        token = (row.get("token") or "").strip()
+        name = (row.get("name") or "").strip()
+        if src and token and name:
+            index.setdefault((src, token.lower()), name)
+    return index
+
+
+def display_name(source: str, token: str) -> str | None:
+    """The company's real name for an ATS board, if the catalog knows it.
+
+    Titlecasing the token gives "Janestreet" and "Xai". The catalog already
+    carries the human name for every board it lists, so anything deriving a
+    company name from a URL should ask here first.
+    """
+    return _names_by_board().get(
+        ((source or "").strip().lower(), (token or "").strip().lower()))
 
 
 def lookup_board(company_name: str) -> dict | None:

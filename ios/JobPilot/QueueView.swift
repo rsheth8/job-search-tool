@@ -24,6 +24,8 @@ struct QueueView: View {
     @State private var tapeFocus: Int?
     @State private var searching = false
     @State private var pendingJobId: Int?
+    @State private var linkDraft = ""
+    @State private var importingLink = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var api: APIClient { APIClient(config: config) }
@@ -165,6 +167,7 @@ struct QueueView: View {
                 }
 
                 if pane == 0 {
+                    pasteLinkBar
                     matchesPane
                         .transition(paneTransition(leading: true))
                 } else {
@@ -204,6 +207,7 @@ struct QueueView: View {
                         retryTitle: "Search now"
                     ) { Task { await load(refresh: true); await pollWhileSearching() } }
                     .padding(.horizontal, Theme.spaceL)
+                    pasteLinkBar
                 }
                 Color.clear.frame(height: Theme.dockClearance)
             }
@@ -597,7 +601,53 @@ struct QueueView: View {
         let lead = greetingName.isEmpty
             ? "No matches yet."
             : "No matches yet, \(greetingName)."
-        return "\(lead) Pull to refresh to search again. Open a match and tap Fill — public forms get Autofill; sign-in and CAPTCHAs pause for you."
+        return "\(lead) Pull to refresh, or paste a LinkedIn / Amazon / Workday link below."
+    }
+
+    private var pasteLinkBar: some View {
+        HStack(spacing: 8) {
+            TextField("Paste a job link", text: $linkDraft)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+                .font(.subheadline)
+                .foregroundStyle(Theme.ink)
+            Button {
+                Task { await importLink() }
+            } label: {
+                Text(importingLink ? "Adding…" : "Add")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .disabled(importingLink || linkDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .foregroundStyle(Theme.accent)
+        }
+        .padding(12)
+        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.horizontal, Theme.spaceL)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Paste a job link from LinkedIn, Amazon, or a company site")
+    }
+
+    private func importLink() async {
+        let url = linkDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard url.lowercased().hasPrefix("http") else {
+            flashToast("Paste a full https:// job link.")
+            return
+        }
+        importingLink = true
+        defer { importingLink = false }
+        do {
+            let result = try await api.importJobURL(url)
+            linkDraft = ""
+            Theme.impact(.soft)
+            let title = result.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Job"
+            flashToast("Saved \(title). It’s in Apply.")
+            await load()
+        } catch {
+            Theme.notify(.error)
+            let msg = APIClient.userMessage(for: error)
+            if !msg.isEmpty { flashToast(msg) }
+        }
     }
 
     private var subtitleLine: String? {

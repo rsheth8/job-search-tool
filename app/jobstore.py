@@ -109,6 +109,17 @@ def save_posting(
         ).fetchone()
 
 
+def get_by_external(
+    user_id: str, source: str, external_id: str
+) -> sqlite3.Row | None:
+    with connect() as conn:
+        return conn.execute(
+            "SELECT * FROM job_postings WHERE user_id = ? AND source = ? "
+            "AND external_id = ?",
+            (user_id, source, external_id),
+        ).fetchone()
+
+
 def seen_similar_count(user_id: str, company: str | None, title: str | None) -> int:
     """How many postings the user has already seen for the same company + a similar
     title — the repost signal for the ghost-job filter. Reuses ``posting_match``

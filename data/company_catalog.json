@@ -1114,6 +1114,443 @@
       "sectors": [
         "manufacturing"
       ]
+    },
+    {
+      "name": "Armis",
+      "source": "greenhouse",
+      "token": "armissecurity",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Axonius",
+      "source": "greenhouse",
+      "token": "axonius",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Beam Therapeutics",
+      "source": "greenhouse",
+      "token": "beamtherapeutics",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "BigID",
+      "source": "greenhouse",
+      "token": "bigid",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Blockchain.com",
+      "source": "greenhouse",
+      "token": "blockchain",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "C3 AI",
+      "source": "greenhouse",
+      "token": "c3iot",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Canonical",
+      "source": "greenhouse",
+      "token": "canonical",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "CodePath",
+      "source": "greenhouse",
+      "token": "codepath",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Collibra",
+      "source": "greenhouse",
+      "token": "collibra",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Colossal Biosciences",
+      "source": "greenhouse",
+      "token": "colossalbiosciences",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Cresta",
+      "source": "greenhouse",
+      "token": "cresta",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Culture Amp",
+      "source": "greenhouse",
+      "token": "cultureamp",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Customer.io",
+      "source": "greenhouse",
+      "token": "customerio",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Daybreak Games",
+      "source": "greenhouse",
+      "token": "daybreakgames",
+      "sectors": [
+        "gaming",
+        "software"
+      ]
+    },
+    {
+      "name": "Easyship",
+      "source": "greenhouse",
+      "token": "easyship",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "ExtraHop",
+      "source": "greenhouse",
+      "token": "extrahopnetworks",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Fastly",
+      "source": "greenhouse",
+      "token": "fastly",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Fetch",
+      "source": "greenhouse",
+      "token": "fetch",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Figure",
+      "source": "greenhouse",
+      "token": "figureai",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "HeyGen",
+      "source": "greenhouse",
+      "token": "heygen",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "IMC",
+      "source": "greenhouse",
+      "token": "imc",
+      "sectors": [
+        "software",
+        "finance"
+      ]
+    },
+    {
+      "name": "Jane Street",
+      "source": "greenhouse",
+      "token": "janestreet",
+      "sectors": [
+        "software",
+        "finance"
+      ]
+    },
+    {
+      "name": "Jump Trading",
+      "source": "greenhouse",
+      "token": "jumptrading",
+      "sectors": [
+        "software",
+        "finance"
+      ]
+    },
+    {
+      "name": "Lucid",
+      "source": "greenhouse",
+      "token": "lucidmotors",
+      "sectors": [
+        "automotive",
+        "software"
+      ]
+    },
+    {
+      "name": "Neuralink",
+      "source": "greenhouse",
+      "token": "neuralink",
+      "sectors": [
+        "science",
+        "software"
+      ]
+    },
+    {
+      "name": "New Relic",
+      "source": "greenhouse",
+      "token": "newrelic",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Otter.ai",
+      "source": "greenhouse",
+      "token": "otterai",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Point72",
+      "source": "greenhouse",
+      "token": "point72",
+      "sectors": [
+        "software",
+        "finance"
+      ]
+    },
+    {
+      "name": "Qualia",
+      "source": "greenhouse",
+      "token": "qualia",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Samsara",
+      "source": "greenhouse",
+      "token": "samsara",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "SimpliSafe",
+      "source": "greenhouse",
+      "token": "simplisafe",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "SpaceX",
+      "source": "greenhouse",
+      "token": "spacex",
+      "sectors": [
+        "software",
+        "aerospace"
+      ]
+    },
+    {
+      "name": "Stability AI",
+      "source": "greenhouse",
+      "token": "stabilityai",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Tanium",
+      "source": "greenhouse",
+      "token": "tanium",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Twitch",
+      "source": "greenhouse",
+      "token": "twitch",
+      "sectors": [
+        "software",
+        "media"
+      ]
+    },
+    {
+      "name": "Vox Media",
+      "source": "greenhouse",
+      "token": "voxmedia",
+      "sectors": [
+        "media"
+      ]
+    },
+    {
+      "name": "VTS",
+      "source": "greenhouse",
+      "token": "vts",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Wildlife Studios",
+      "source": "greenhouse",
+      "token": "wildlifestudios",
+      "sectors": [
+        "gaming",
+        "software"
+      ]
+    },
+    {
+      "name": "Wiz",
+      "source": "greenhouse",
+      "token": "wizinc",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "xAI",
+      "source": "greenhouse",
+      "token": "xai",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Zocdoc",
+      "source": "greenhouse",
+      "token": "zocdoc",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Zynga",
+      "source": "greenhouse",
+      "token": "zyngacareers",
+      "sectors": [
+        "gaming",
+        "software"
+      ]
+    },
+    {
+      "name": "Clerk",
+      "source": "ashby",
+      "token": "clerk",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Cohere",
+      "source": "ashby",
+      "token": "cohere",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Guild",
+      "source": "ashby",
+      "token": "guild",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Midjourney",
+      "source": "ashby",
+      "token": "midjourney",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Nubank",
+      "source": "ashby",
+      "token": "nubank",
+      "sectors": [
+        "software",
+        "finance"
+      ]
+    },
+    {
+      "name": "Redis",
+      "source": "ashby",
+      "token": "redis",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Synthesia",
+      "source": "ashby",
+      "token": "synthesia",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Continental",
+      "source": "smartrecruiters",
+      "token": "Continental",
+      "sectors": [
+        "automotive",
+        "manufacturing"
+      ]
+    },
+    {
+      "name": "Equinox",
+      "source": "smartrecruiters",
+      "token": "Equinox",
+      "sectors": [
+        "fitness"
+      ]
+    },
+    {
+      "name": "PaloAltoNetworks",
+      "source": "smartrecruiters",
+      "token": "PaloAltoNetworks2",
+      "sectors": [
+        "software"
+      ]
+    },
+    {
+      "name": "Primark",
+      "source": "smartrecruiters",
+      "token": "Primark",
+      "sectors": [
+        "retail"
+      ]
     }
   ],
   "names": {

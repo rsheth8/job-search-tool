@@ -25,6 +25,10 @@ def temp_db(monkeypatch):
     monkeypatch.setenv("JOB_WIDE_DIRECTORY_ENABLED", "false")
     monkeypatch.setenv("JOB_WIDE_SWELIST_ENABLED", "false")
     monkeypatch.setenv("JOB_WIDE_YC_ENABLED", "false")
+    monkeypatch.setenv("JOB_WIDE_WORKDAY_ENABLED", "false")
+    monkeypatch.setenv("JOB_WIDE_AMAZON_ENABLED", "false")
+    monkeypatch.setenv("JOB_WIDE_NETFLIX_ENABLED", "false")
+    monkeypatch.setenv("JOB_WIDE_USAJOBS_ENABLED", "false")
     monkeypatch.setenv("AUTH_ALLOW_DEV_LOGIN", "false")
     monkeypatch.setenv("AUTH_LEGACY_USER_ID", "")
     monkeypatch.setenv("AUTH_FAIL_OPEN", "true")
@@ -69,6 +73,8 @@ def temp_db(monkeypatch):
     llm_health.reset_for_tests()  # per-process counters must not leak across tests
     from app import catalog
     catalog.reset_cache()
+    from app.jobsources import workday as workday_src
+    workday_src.reset_cache()
     from app.jobsources import alive
     alive.reset_cache()
 

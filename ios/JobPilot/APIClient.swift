@@ -268,6 +268,13 @@ struct APIClient {
                               body: ["user": config.user, "posting_id": postingId])
     }
 
+    /// Save a pasted job URL (LinkedIn / Indeed / Workday / Amazon / ATS) into Apply.
+    func importJobURL(_ url: String) async throws -> ImportUrlResponse {
+        let data = try await request("POST", "/apply/import/url",
+                                     body: ["user": config.user, "url": url])
+        return try JSONDecoder().decode(ImportUrlResponse.self, from: data)
+    }
+
     /// Unstage a ready item — it can show up in matches again later.
     func skipQueueItem(postingId: Int) async throws {
         _ = try await request("POST", "/apply/remove",

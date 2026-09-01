@@ -40,7 +40,13 @@ class JobPosting:
 # HTTP — one resilient JSON GET shared by every adapter
 # ---------------------------------------------------------------------------
 
-def get_json(url: str, *, timeout: float | None = None):
+def get_json(
+    url: str,
+    *,
+    timeout: float | None = None,
+    params: dict | None = None,
+    extra_headers: dict | None = None,
+):
     """GET ``url`` and return parsed JSON, or ``None`` on any failure.
 
     Never raises: network errors, non-2xx, and bad JSON all log and return None
@@ -48,17 +54,52 @@ def get_json(url: str, *, timeout: float | None = None):
     """
     import httpx  # lazy: offline/test paths never import it
 
+    headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
+    if extra_headers:
+        headers.update(extra_headers)
     try:
         resp = httpx.get(
             url,
+            params=params,
             timeout=timeout or HTTP_TIMEOUT_SECONDS,
             follow_redirects=True,
-            headers={"Accept": "application/json", "User-Agent": USER_AGENT},
+            headers=headers,
         )
         resp.raise_for_status()
         return resp.json()
     except Exception:  # noqa: BLE001 — adapters degrade to [] on any error
         logger.warning("job source fetch failed: %s", url, exc_info=True)
+        return None
+
+
+def post_json(url: str, payload: dict, *, timeout: float | None = None,
+              extra_headers: dict | None = None):
+    """POST JSON and return parsed JSON, or ``None`` on any failure.
+
+    Same fail-open contract as ``get_json``. No retries, no browser-UA spoofing
+    — a 403/429 from bot protection is a skip, not a fight.
+    """
+    import httpx
+
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": USER_AGENT,
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    try:
+        resp = httpx.post(
+            url,
+            json=payload,
+            timeout=timeout or HTTP_TIMEOUT_SECONDS,
+            follow_redirects=True,
+            headers=headers,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception:  # noqa: BLE001
+        logger.warning("job source POST failed: %s", url, exc_info=True)
         return None
 
 

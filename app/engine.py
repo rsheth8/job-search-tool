@@ -76,9 +76,10 @@ MENU = (
     "▸ DISCOVER JOBS\n"
     "  \"I'm looking for new grad SWE roles, remote or NYC\" — set what to match\n"
     "  \"track openings at stripe\" — watch one company's board\n"
+    "  \"https://…/jobs/…\" — paste any job link (LinkedIn, Amazon, Workday…)\n"
     "  \"track feed hn-hiring\" — optional extra RSS feed\n"
     "  \"what am I tracking\" · \"stop tracking stripe\" — manage tracked boards\n"
-    "  (Set your profile once — I'll also scan RSS, job search, and many ATS boards)\n"
+    "  (Set your profile once — I'll also scan Amazon, Netflix, Workday, RSS, and ATS boards)\n"
     "  \"any new jobs\" — quick list of queued matches\n"
     "  \"review jobs\" — go through new matches one by one (skip / apply / stop)\n"
     "  \"apply 2\" — get the link + a drafted blurb for posting #2 (I log it)\n"
@@ -263,6 +264,16 @@ def _looks_like_new_command(p: ParsedMessage, text: str, pending: Pending) -> bo
 
 
 def _start(user_id: str, p: ParsedMessage, raw: str) -> str:
+    from .jobsources import ingest as ingest_mod
+
+    # A pasted job URL is the easy path for LinkedIn / Indeed / random boards
+    # we can't index. Don't steal "applied … https://…" (that's logging).
+    if ingest_mod.is_job_link_message(raw) and p.intent not in (
+        Intent.APPLY, Intent.UPDATE, Intent.NOTE, Intent.DELETE,
+        Intent.EDIT, Intent.BULK, Intent.TRACK,
+    ):
+        return _do_save_link(user_id, raw)
+
     memory = ctx.get_context(user_id)
     if p.intent in SLOT_INTENTS:
         slots = {k: v for k, v in _slots_from_parsed(p).items() if v}
@@ -900,7 +911,19 @@ def _do_track(user_id: str, p: ParsedMessage, raw: str) -> str:
         return (f"Stopped tracking {company}." if n
                 else f"You weren't tracking {company}.")
 
-    board = discovery_mod.resolve_board(company)
+    from .jobsources import workday as workday_src
+
+    wd_board = workday_src.parse_board(company) or workday_src.parse_board(raw)
+    if wd_board and "workday" in get_settings().job_sources:
+        known = workday_src.lookup_token(wd_board.token)
+        board = {
+            "source": "workday",
+            "board_token": wd_board.token,
+            "company_name": (known or {}).get("name") or wd_board.tenant.replace("-", " ").title(),
+            "count": 0,
+        }
+    else:
+        board = discovery_mod.resolve_board(company)
     if board is None:
         return (f"Couldn't find a public job board for {company} on "
                 f"{', '.join(get_settings().job_sources)}. It may use a different ATS.")
@@ -914,6 +937,31 @@ def _do_track(user_id: str, p: ParsedMessage, raw: str) -> str:
     )
     return (f"✅ Tracking {board['company_name']} ({board['source']}). Baselined "
             f"{seeded} current roles — I'll alert you on NEW matches from here.")
+
+
+def _do_save_link(user_id: str, raw: str) -> str:
+    from . import ats
+    from .jobsources import ingest as ingest_mod
+
+    result = ingest_mod.save_pasted_job(user_id, raw)
+    if not result.get("ok"):
+        return result.get("error") or "Couldn't save that link."
+    title = result.get("title") or "Saved job"
+    company = result.get("company") or "that company"
+    kind = result.get("apply_kind") or ats.apply_kind(result.get("url"), result.get("source"))
+    already = "" if result.get("created") else " (already in your list)"
+    extra = ""
+    if kind == "browser":
+        extra = (
+            " Autofill won't drive LinkedIn/Indeed — open it in Apply, attach "
+            "your resume, and you Submit."
+        )
+    elif kind == "direct":
+        extra = " Open it in Apply; you still tap Submit."
+    verb = "Saved" if result.get("created") else "That's"
+    return (
+        f"{verb} {title} @ {company}{already}. It's in Apply.{extra}"
+    )
 
 
 def _do_profile(user_id: str, p: ParsedMessage, raw: str) -> str:

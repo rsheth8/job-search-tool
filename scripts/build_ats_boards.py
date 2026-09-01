@@ -62,12 +62,41 @@ CANDIDATE_SLUGS = [
     "uipath", "veeva", "wiz", "workos", "anaplan", "matchgroup",
     "rocketlab", "sourcegraph", "okta", "duolingo",
     "andurilindustries", "scaleai",
+    # --- well-known public boards not yet in rotation ---
+    "doordash", "shopify", "hubspot", "snap", "rivian", "lucidmotors",
+    "twitch", "samsara", "unity3d", "canva", "fastly", "hashicorp",
+    "grammarly", "retool", "rippling", "huggingface", "together",
+    "replicate", "sourcegraph", "clerk", "grafana", "wizinc",
+    "dbtlabsinc", "collibra", "c3iot", "axonius", "blockchain",
+    "zocdoc", "otterai", "neuralink", "figureai", "tanium",
+    "cultureamp", "eventbrite", "atlassian", "yelp", "box", "zendesk",
+    "duckduckgo", "cruise", "appliedintuition", "aurorainnovation",
+    "janestreet", "jane-street", "citadel", "twosigma", "hudsonrivertrading",
+    "jumptrading", "optiver", "imc", "hrt", "deshaw", "bridgewater",
+    "point72", "millennium", "two-sigma", "citadel-securities",
+    "nubank", "cresta", "simplisafe", "fetch", "guild", "iherb",
+    "qualia", "bigid", "armissecurity", "beamtherapeutics",
+    "colossalbiosciences", "customerio", "extrahopnetworks",
+    "wildlifestudios", "zyngacareers", "daybreakgames",
+    "voxmedia", "vts", "easyship", "codepath",
+    "cohere", "mistral", "xai", "adept", "inflection", "glean",
+    "anysphere", "windsurf", "codeium", "characterai", "midjourney",
+    "stabilityai", "runwayml", "heygen", "synthesia",
+    "github", "canonical", "digitalocean", "heroku", "salesforce",
+    "slack", "zoom", "docusign", "crowdstrike", "paloaltonetworks",
+    "fortinet", "splunk", "newrelic", "dynatrace", "hashicorp",
+    "redis", "elastic", "confluent", "databricks",
+    "openai", "anthropic", "perplexity", "cursor",
 ]
 
 # Identifiers that are not interchangeable with GH/Lever/Ashby slugs.
 SMARTRECRUITERS_CANDIDATES = [
     "ServiceNow", "WesternDigital", "Thales", "BoschGroup", "Experian",
     "Intuitive", "Sandisk", "AbbVie", "PaloAltoNetworks2", "NBCUniversal3",
+    "Visa", "Equinox", "Skechers", "Continental", "Primark",
+    "Philips", "Roche", "Novartis", "Sanofi", "GSK", "AstraZeneca",
+    "Loreal", "Unilever", "Nestle", "IKEA", "McDonalds", "Adidas",
+    "SiemensEnergy", "Ericsson", "Nokia", "Vodafone", "Orange",
 ]
 WORKABLE_CANDIDATES = [
     "grayce", "thorlabs", "qodeworld",
