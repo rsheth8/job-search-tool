@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 
 from . import profile as profile_mod
 
@@ -51,6 +52,162 @@ BOOL_FIELDS = (
 )
 FIELDS = TEXT_FIELDS + BOOL_FIELDS
 
+# --- education -------------------------------------------------------------
+# Applications ask about education one block at a time, and people routinely
+# have two degrees in flight: a bachelor's finishing while a master's is under
+# way, or one earned and the next in progress. A single flat set of fields
+# cannot say that, so ``education`` holds a list and the flat keys above are
+# *derived* from it. Nothing migrates -- applicant_json is schemaless -- and a
+# profile that has never touched the list keeps behaving exactly as before.
+EDUCATION_FIELDS = ("school", "degree", "discipline", "gpa",
+                    "start_year", "grad_month", "grad_year", "status")
+EDUCATION_STATUSES = ("in_progress", "completed")
+#: Flat keys computed from the list whenever there is one. Writing these
+#: directly is still supported; ``set_identity`` routes them into the entry
+#: they describe rather than storing a value the next read would overwrite.
+DERIVED_EDUCATION = ("school", "degree", "discipline", "gpa",
+                     "grad_year", "grad_month")
+MAX_EDUCATION = 6
+
+_IN_PROGRESS_WORDS = frozenset({
+    "in_progress", "inprogress", "current", "ongoing", "pursuing", "expected",
+    "present", "attending",
+})
+_COMPLETED_WORDS = frozenset({
+    "completed", "complete", "done", "graduated", "earned", "awarded", "past",
+})
+
+
+def _year_of(value) -> int | None:
+    m = re.search(r"((?:19|20)\d{2})", str(value or ""))
+    return int(m.group(1)) if m else None
+
+
+def _this_year() -> int:
+    return datetime.now(timezone.utc).year
+
+
+def _clean_entry(raw) -> dict:
+    """One education entry, keys trimmed to the known set."""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key in EDUCATION_FIELDS:
+        value = raw.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            out[key] = text
+    if not out:
+        return {}
+    word = out.get("status", "").lower().replace("-", "_").replace(" ", "_")
+    if word in _IN_PROGRESS_WORDS:
+        out["status"] = "in_progress"
+    elif word in _COMPLETED_WORDS:
+        out["status"] = "completed"
+    else:
+        # An unrecognised word is worse than none: it would be believed.
+        out.pop("status", None)
+    return out
+
+
+def clean_education(raw) -> list[dict]:
+    """Validate a list of entries, dropping blanks and exact duplicates."""
+    if not isinstance(raw, (list, tuple)):
+        return []
+    seen: set[tuple] = set()
+    out: list[dict] = []
+    for item in raw:
+        entry = _clean_entry(item)
+        if not entry:
+            continue
+        key = tuple(entry.get(k, "").lower()
+                    for k in ("school", "degree", "discipline"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(entry)
+        if len(out) >= MAX_EDUCATION:
+            break
+    return out
+
+
+def is_in_progress(entry: dict) -> bool:
+    """Whether this degree is still being read for.
+
+    An explicit status wins. Otherwise a graduation year later than this one
+    means in progress, and a start year with no end at all means the same. A
+    degree ending *this* year is genuinely ambiguous without a month, and is
+    called finished -- the conservative answer, since claiming to still be
+    enrolled is the more embarrassing of the two on an application.
+    """
+    status = entry.get("status")
+    if status in EDUCATION_STATUSES:
+        return status == "in_progress"
+    year = _year_of(entry.get("grad_year"))
+    if year is None:
+        return bool(entry.get("start_year"))
+    return year > _this_year()
+
+
+def order_education(entries: list[dict]) -> list[dict]:
+    """Most relevant first: in progress, then most recently finished."""
+    return sorted(
+        entries,
+        key=lambda e: (0 if is_in_progress(e) else 1,
+                       -(_year_of(e.get("grad_year")) or 0)),
+    )
+
+
+def education_summary(entries: list[dict]) -> str:
+    """One line for the many forms with a single free-text education box."""
+    parts = []
+    for entry in order_education(clean_education(entries)):
+        head = " ".join(p for p in (entry.get("degree"), entry.get("discipline")) if p)
+        school = entry.get("school")
+        segment = f"{head}, {school}" if head and school else (head or school or "")
+        if not segment:
+            continue
+        year = entry.get("grad_year")
+        if is_in_progress(entry):
+            segment += f" (expected {year})" if year else " (in progress)"
+        elif year:
+            segment += f" ({year})"
+        parts.append(segment)
+    return "; ".join(parts)
+
+
+def _derived_education(entries: list[dict]) -> dict:
+    """Flat fields for the entry a form is most likely asking about."""
+    ordered = order_education(entries)
+    if not ordered:
+        return {}
+    primary = ordered[0]
+    out = {k: primary[k] for k in DERIVED_EDUCATION if primary.get(k)}
+    # School, degree, discipline and dates are deliberately *not* backfilled
+    # from other entries: a form's education block describes one degree, and
+    # mixing a master's title with a bachelor's school is how wrong facts get
+    # onto real applications. GPA is the exception -- it is usually asked as a
+    # standalone question, and a degree still in progress rarely has one yet,
+    # so a finished degree's GPA stands in. Only a finished one: an interim
+    # average is not what the question means.
+    if not out.get("gpa"):
+        earned = next((e for e in ordered
+                       if e.get("gpa") and not is_in_progress(e)), None)
+        if earned:
+            out["gpa"] = earned["gpa"]
+    summary = education_summary(ordered)
+    if summary:
+        out["degrees"] = summary
+    return out
+
+
+def _entry_from_flat(data: dict) -> dict:
+    """The single degree an older profile stored, as a list entry, so every
+    caller sees one shape whether or not this profile has used the list yet."""
+    return _clean_entry({k: data.get(k) for k in EDUCATION_FIELDS})
+
 
 def get_identity(user_id: str) -> dict:
     """The saved identity dict (empty if none). ``full_name`` is derived from
@@ -68,6 +225,15 @@ def get_identity(user_id: str) -> dict:
                                     data.get("country")) if p)
         if loc:
             data["location"] = loc
+    entries = clean_education(data.get("education"))
+    if entries:
+        data["education"] = order_education(entries)
+        data.update(_derived_education(entries))
+    else:
+        # Never stored, so derive nothing and change nothing -- just show the
+        # one degree this profile does have in the shape callers now expect.
+        single = _entry_from_flat(data)
+        data["education"] = [single] if single else []
     return data
 
 
@@ -75,8 +241,38 @@ def set_identity(user_id: str, fields: dict) -> dict:
     """Merge ``fields`` into the saved identity (partial update). Unknown keys are
     dropped; bool fields are coerced; empty strings clear a field."""
     current = _decode(_raw(user_id))
+    if "education" in fields:
+        entries = clean_education(fields["education"])
+        if entries:
+            current["education"] = entries
+        else:
+            current.pop("education", None)
+        for key in DERIVED_EDUCATION:
+            current.pop(key, None)
+    stored = clean_education(current.get("education"))
+    if stored and "education" not in fields:
+        # A client that predates the list still writes flat education fields.
+        # Route them into the entry they describe instead of storing a value
+        # the next read would derive straight over the top of.
+        #
+        # Only when the list is not in the same call. A resume import sends
+        # both, and its flat `degree` is the summary of every degree found
+        # ("M.S., B.S.") -- routing that into the first entry would overwrite
+        # the specific degree with a list of all of them.
+        flat = {k: v for k, v in fields.items() if k in DERIVED_EDUCATION}
+        if flat:
+            ordered = order_education(stored)
+            for key, value in flat.items():
+                text = "" if value is None else str(value).strip()
+                if text:
+                    ordered[0][key] = text
+                else:
+                    ordered[0].pop(key, None)
+            current["education"] = ordered
     for k, v in fields.items():
         if k not in FIELDS:
+            continue
+        if stored and k in DERIVED_EDUCATION:
             continue
         if k in BOOL_FIELDS:
             current[k] = _as_bool(v)
@@ -94,6 +290,10 @@ def autofill_map(user_id: str) -> dict:
     Phone is digits-only (user preference for form fields)."""
     out: dict[str, object] = {}
     for k, v in get_identity(user_id).items():
+        if k == "education":
+            # Structure, not a form value. Its flat derivations are already in
+            # here; painting a list of dicts onto an input would be nonsense.
+            continue
         if k in BOOL_FIELDS:
             out[k] = "Yes" if v else "No"
         elif v not in (None, ""):

@@ -265,6 +265,14 @@ def apply_extracted(user_id: str, extracted: dict, *, source: str) -> dict:
             continue
         to_set[key] = cleaned
         filled.append(_label(key))
+    # Education is a list, so it never survives the field loop above -- and it
+    # follows the same rule as everything else here: only write what is empty.
+    # A single synthesised entry does not count as "already there", but a list
+    # the user has actually curated does.
+    incoming_school = applicant.clean_education(identity_in.get("education"))
+    if len(incoming_school) > 1 and len(applicant.clean_education(current.get("education"))) < 2:
+        to_set["education"] = incoming_school
+        filled.append("education")
     if to_set:
         applicant.set_identity(user_id, to_set)
 
@@ -661,6 +669,67 @@ def _degrees_from_text(blob: str) -> list[str]:
     return out
 
 
+#: The subject named right after a degree token: "B.S. Computer Science".
+#: Stops at a bracket, a separator, or the column gap layout extraction leaves,
+#: so "B.S. Computer Science(May 2026)   Undergrad GPA" yields the subject only.
+_DISCIPLINE_AFTER_DEGREE = re.compile(
+    r"^[\s,.:]*(?:in|of)?[ \t]*([A-Z][A-Za-z]*(?:[ \t][A-Z][A-Za-z]*){0,3})"
+)
+_IN_PROGRESS_HINT = re.compile(
+    r"\b(in progress|ongoing|present|current|expected|pursuing|candidate)\b", re.I
+)
+
+
+def _education_entries(block: str, school: str) -> list[dict]:
+    """One entry per degree named in the education section.
+
+    Both degrees frequently share a line -- "M.S. Data Science (In Progress)
+    B.S. Computer Science (May 2026)" is an ordinary way to write it -- so this
+    splits on the degree tokens themselves rather than on newlines, and reads
+    each segment up to the next degree.
+
+    The school is carried across every entry. Two degrees from two different
+    institutions in one block is a harder problem than it looks, and guessing
+    at it would put the wrong university next to a degree; the list can be
+    corrected in the app, and a single wrong school is worse than one repeated.
+    """
+    if not block:
+        return []
+    marks = [m for m in _DEGREE_RE.finditer(block)]
+    if len(marks) < 2:
+        return []
+    entries: list[dict] = []
+    for i, mark in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(block)
+        tail = block[mark.end():end]
+        entry: dict[str, str] = {"degree": _normalize_degree(mark.group(1))}
+        if school:
+            entry["school"] = school
+        # _DEGREE_RE can swallow the subject itself ("B.S. Computer Science"),
+        # so the known-vocabulary matcher reads the whole segment first and the
+        # after-the-token pattern only covers what that vocabulary misses.
+        segment = block[mark.start():end]
+        disc = _discipline_from_text(segment)
+        if not disc:
+            loose = _DISCIPLINE_AFTER_DEGREE.match(tail)
+            disc = _clean_text(loose.group(1)) if loose else ""
+        if disc:
+            entry["discipline"] = disc
+        year = _GRAD_YEAR_RE.search(tail)
+        if year:
+            entry["grad_year"] = year.group(1)
+        gpa = _GPA_RE.search(tail)
+        if gpa:
+            entry["gpa"] = gpa.group(1)
+        if _IN_PROGRESS_HINT.search(tail):
+            entry["status"] = "in_progress"
+        elif entry.get("grad_year"):
+            entry["status"] = "completed"
+        if entry.get("degree"):
+            entries.append(entry)
+    return entries
+
+
 def _discipline_from_text(blob: str) -> str:
     if re.search(r"data science", blob, re.I):
         return "Data Science"
@@ -894,6 +963,13 @@ def _heuristic_parse(text: str) -> dict:
     gy = _grad_year_from_text(edu, blob)
     if gy:
         identity["grad_year"] = gy
+    # Only when there is genuinely more than one. A single degree is exactly
+    # what the flat fields already say, and applicant.get_identity presents it
+    # as a one-entry list anyway -- so emitting one here would add a stored
+    # structure that changes nothing and could only introduce a difference.
+    schooling = _education_entries(edu, identity.get("school", ""))
+    if len(schooling) > 1:
+        identity["education"] = schooling
     yoe = _YOE_RE.search(blob)
     if yoe:
         identity["years_experience"] = yoe.group(1)
