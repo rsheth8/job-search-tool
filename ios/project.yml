@@ -29,6 +29,12 @@ targets:
           - UIInterfaceOrientationPortrait
         NSAppTransportSecurity:
           NSAllowsArbitraryLoadsInWebContent: true
+        # Documents (a transcript, mostly) are stored on the phone and never
+        # uploaded. A web form's file picker can't reach into our container, so
+        # these two keys are what make a stored transcript actually attachable:
+        # the folder shows up in Files under "On My iPhone -> JobPilot".
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         SentryDSN: ""
     settings:
       base:

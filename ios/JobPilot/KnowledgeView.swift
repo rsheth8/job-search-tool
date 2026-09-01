@@ -11,6 +11,7 @@ struct KnowledgeView: View {
     @State private var showAdd = false
     @State private var showSearch = false
     @State private var showIdentity = false
+    @State private var showDocuments = false
     @State private var error: String?
     @State private var addPrefillHint: String?
     @State private var addPrefillCategory: String?
@@ -66,12 +67,27 @@ struct KnowledgeView: View {
             .sheet(isPresented: $showIdentity) {
                 IdentityEditorView()
             }
+            .sheet(isPresented: $showDocuments) {
+                DocumentsView()
+            }
             .refreshable { await load() }
             .ambientScreen()
             .task { await load() }
             .onAppear { consumeHorizonHop() }
             .onChange(of: push.hop) { _, _ in consumeHorizonHop() }
         }
+    }
+
+    /// Counted fresh rather than cached: the folder is also reachable from
+    /// Files, so the app is not the only thing that can change it.
+    private var documentsLine: String {
+        let docs = LocalDocuments.all()
+        if docs.isEmpty { return "Transcript and anything else forms ask to attach" }
+        let transcripts = docs.filter { $0.kind == .transcript }.count
+        let noun = docs.count == 1 ? "file" : "files"
+        return transcripts > 0
+            ? "\(docs.count) \(noun) on this phone, transcript included"
+            : "\(docs.count) \(noun) on this phone"
     }
 
     private var dossier: some View {
@@ -129,6 +145,33 @@ struct KnowledgeView: View {
                     .id("import")
                     .padding(.horizontal, Theme.spaceL)
                 }
+
+                // A transcript is asked for by most university-recruiting forms
+                // and is the one thing here we can't generate.
+                Button { showDocuments = true } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "graduationcap")
+                            .font(.body)
+                            .foregroundStyle(Theme.accent)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Documents")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.ink)
+                            Text(documentsLine)
+                                .font(.caption)
+                                .foregroundStyle(Theme.soft)
+                        }
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.cloud)
+                    }
+                    .padding(Theme.spaceM)
+                    .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 16))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(PressableButtonStyle())
+                .padding(.horizontal, Theme.spaceL)
 
                 HStack {
                     Text("Knowledge")
