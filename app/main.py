@@ -980,6 +980,12 @@ def health() -> dict:
     from .jobsources import directory as dir_src
     from .jobsources import workday as workday_src
 
+    # A secret quietly overriding fly.toml is invisible in a green deploy —
+    # see app/deploy_config.py. Names only: /health is public.
+    from . import deploy_config
+
+    info["config_shadowed"] = deploy_config.shadowed_keys()
+
     info["discovery"] = {
         "sources_enabled": s.job_sources,
         "alert_mode": s.job_alert_mode_normalized,
