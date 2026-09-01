@@ -8,8 +8,12 @@ options:
     iOS: "17.0"
 settings:
   base:
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    # TestFlight rejects a build number it has already seen, so this has to
+    # move for every upload. 0.2.0 covers the multi-degree editor, refilling
+    # suggestion chips, ten new application fields, device-local documents,
+    # and paste-a-job-link.
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "2"
     DEVELOPMENT_TEAM: "P28MCS4P38"
     CODE_SIGN_STYLE: Automatic
     ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -23,6 +27,12 @@ targets:
       path: JobPilot/Info.plist
       properties:
         CFBundleDisplayName: JobPilot
+        # Without these two the generated plist carries XcodeGen's defaults —
+        # "1.0" and "1" — and MARKETING_VERSION / CURRENT_PROJECT_VERSION above
+        # are inert. Bumping them looked like it worked and changed nothing,
+        # which TestFlight would have rejected as a duplicate build number.
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen:
           UIColorName: Fog
         UISupportedInterfaceOrientations:
