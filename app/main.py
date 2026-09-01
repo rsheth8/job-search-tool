@@ -980,6 +980,8 @@ def health() -> dict:
     from .jobsources import directory as dir_src
     from .jobsources import workday as workday_src
 
+    produced = jobstore.source_freshness(7)
+
     # A secret quietly overriding fly.toml is invisible in a green deploy —
     # see app/deploy_config.py. Names only: /health is public.
     from . import deploy_config
@@ -993,6 +995,13 @@ def health() -> dict:
         "wide_directory": s.job_wide_directory_enabled,
         "wide_swelist": s.job_wide_swelist_enabled,
         "wide_yc": s.job_wide_yc_enabled,
+        # Enabled is not the same as working: every adapter fails open, so a
+        # broken one is silent. This is what each has actually produced.
+        # NON_BOARD_SOURCES is deliberately not consulted — it means "the token
+        # isn't a company slug", which says nothing about whether a source
+        # works, and it happens to contain all four of the newest ones.
+        "postings_by_source_7d": produced,
+        "silent_sources": [n for n in s.job_sources if not produced.get(n)],
         "wide_workday": s.job_wide_workday_enabled,
         "wide_amazon": s.job_wide_amazon_enabled,
         "wide_netflix": s.job_wide_netflix_enabled,

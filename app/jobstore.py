@@ -461,3 +461,27 @@ def global_counts_by_status() -> dict[str, int]:
             "SELECT status, COUNT(*) AS n FROM job_postings GROUP BY status"
         ).fetchall()
     return {r["status"]: r["n"] for r in rows}
+
+
+def source_freshness(days: int = 7) -> dict[str, int]:
+    """Postings first seen per source in the last ``days``, across all users.
+
+    "Enabled" and "working" are different states, and every adapter here fails
+    open — a wrong tenant, a changed JSON shape or a 403 all return ``[]`` and
+    log at warning. So a source can be switched on, deployed, and contributing
+    nothing, and the only outward sign is an absence.
+
+    Counting what each source has actually produced turns that absence into a
+    number you can look at. Aggregate over users on purpose: this is a question
+    about the adapter, not about anyone's queue.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    since = (datetime.now(timezone.utc) - timedelta(days=max(1, days))).isoformat()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT source, COUNT(*) AS n FROM job_postings "
+            "WHERE first_seen_at >= ? GROUP BY source",
+            (since,),
+        ).fetchall()
+    return {r["source"]: r["n"] for r in rows}
