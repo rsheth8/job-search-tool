@@ -57,6 +57,22 @@ struct SetupView: View {
         "Python", "JavaScript", "TypeScript", "React", "Java", "SQL",
         "AWS", "Docker", "FastAPI", "PyTorch",
     ]
+    /// The answers a work-authorization *dropdown* offers, as against the
+    /// Yes/No pair. Student forms ask this constantly and nothing was
+    /// answering it. Citizenship is deliberately not among them — that
+    /// question stays in the never-fill list beside national origin.
+    private static let workAuthOptions = [
+        "U.S. Citizen", "Permanent Resident", "F-1 OPT", "F-1 CPT",
+        "STEM OPT", "H-1B", "TN", "J-1", "Other",
+    ]
+    private static let clearanceOptions = [
+        "None", "Eligible", "Confidential", "Secret", "Top Secret", "TS/SCI",
+    ]
+    private static let employmentTypeOptions = [
+        "Full-time", "Internship", "Co-op", "Part-time", "Contract",
+    ]
+    private static let phoneTypeOptions = ["Mobile", "Home", "Work"]
+
     private static var gradYearOptions: [String] {
         let year = Calendar.current.component(.year, from: Date())
         return (0..<8).map { String(year - 1 + $0) }
@@ -399,6 +415,10 @@ struct SetupView: View {
         card {
             labeled("First name") { TextField("Ada", text: $identity.firstName) }
             Divider().background(Theme.accent.opacity(0.08))
+            labeled("Middle name") {
+                TextField("optional", text: $identity.middleName)
+            }
+            Divider().background(Theme.accent.opacity(0.08))
             labeled("Last name") { TextField("Lovelace", text: $identity.lastName) }
             Divider().background(Theme.accent.opacity(0.08))
             labeled("Preferred name") {
@@ -417,6 +437,11 @@ struct SetupView: View {
             labeled("Phone") {
                 TextField("555-0100", text: $identity.phone).keyboardType(.phonePad)
             }
+            Divider().background(Theme.accent.opacity(0.08))
+            // Forms that ask for a number usually put a type select next to it.
+            labeled("Phone type") {
+                chipRow(Self.phoneTypeOptions, selected: $identity.phoneType)
+            }
         }
     }
 
@@ -433,6 +458,10 @@ struct SetupView: View {
                 Divider().background(Theme.accent.opacity(0.08))
                 labeled("Street address") {
                     TextField("optional", text: $identity.address)
+                }
+                Divider().background(Theme.accent.opacity(0.08))
+                labeled("Apartment, suite, unit") {
+                    TextField("optional", text: $identity.address2)
                 }
             }
             // One value, two ways in. The chips and the field are the same
@@ -516,6 +545,7 @@ struct SetupView: View {
     }
 
     private var workFields: some View {
+      VStack(alignment: .leading, spacing: Theme.spaceM) {
         card {
             labeled("Years of experience") {
                 TextField("0", text: $identity.years).keyboardType(.numberPad)
@@ -535,7 +565,44 @@ struct SetupView: View {
                 .font(.subheadline)
             Toggle("I am 18 or older", isOn: $identity.over18)
                 .font(.subheadline)
+            Toggle("I have a valid driver’s licence", isOn: $identity.driversLicense)
+                .font(.subheadline)
         }
+        VStack(alignment: .leading, spacing: Theme.spaceM) {
+            labeled("Work authorization") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Some forms ask which status, not just yes or no.")
+                        .font(.caption)
+                        .foregroundStyle(Theme.soft)
+                    chipRow(Self.workAuthOptions, selected: $identity.workAuthType)
+                }
+            }
+            labeled("Security clearance") {
+                chipRow(Self.clearanceOptions, selected: $identity.securityClearance)
+            }
+            card {
+                labeled("Languages you speak") {
+                    TagEditor(
+                        text: $identity.languages,
+                        suggestions: ["English", "Spanish", "Mandarin", "Hindi", "French"],
+                        placeholder: "Add a language",
+                        field: "languages"
+                    )
+                }
+                Divider().background(Theme.accent.opacity(0.08))
+                labeled("Certifications and licences") {
+                    TagEditor(
+                        text: $identity.certifications,
+                        suggestions: ["AWS Certified Cloud Practitioner",
+                                      "CompTIA Security+", "Certified ScrumMaster"],
+                        placeholder: "Add a certification",
+                        caption: "Optional — skip if you don’t have any yet.",
+                        field: "certifications"
+                    )
+                }
+            }
+        }
+      }
     }
 
     private var logisticsFields: some View {
@@ -543,6 +610,10 @@ struct SetupView: View {
             labeled("Work arrangement") {
                 chipRow(["Remote", "Hybrid", "On-site", "Flexible"],
                         selected: $identity.workArrangement, multi: true)
+            }
+            labeled("What kind of role?") {
+                chipRow(Self.employmentTypeOptions,
+                        selected: $identity.employmentType, multi: true)
             }
             labeled("When can you start?") {
                 chipRow(["Immediately", "2 weeks", "After graduation"],
@@ -582,6 +653,12 @@ struct SetupView: View {
                         ["LinkedIn", "Company website", "Job board", "Referral", "Recruiter", "Event"],
                         selected: $identity.howHeard
                     )
+                }
+            }
+            card {
+                labeled("Who referred you, if anyone?") {
+                    TextField("optional — a name, not a company",
+                              text: $identity.referralName)
                 }
             }
             card {
@@ -1129,10 +1206,13 @@ struct SetupView: View {
             )
         case .you:
             try await saveIdentity([
-                "first_name", "last_name", "preferred_name", "email", "phone",
+                "first_name", "middle_name", "last_name", "preferred_name",
+                "email", "phone", "phone_type",
             ])
         case .home:
-            try await saveIdentity(["city", "state", "zip", "country", "address"])
+            try await saveIdentity([
+                "city", "state", "zip", "country", "address", "address2",
+            ])
         case .links:
             try await saveIdentity(["linkedin", "github", "portfolio"])
         case .school:
@@ -1143,16 +1223,19 @@ struct SetupView: View {
             try await saveIdentity([
                 "years_experience", "current_company", "current_title",
                 "work_authorized", "needs_sponsorship", "over_18",
+                "work_auth_type", "security_clearance", "drivers_license",
+                "languages", "certifications",
             ])
         case .logistics:
             try await saveIdentity([
                 "work_arrangement", "start_date", "intern_season",
                 "salary_expectation", "willing_to_relocate", "can_travel",
+                "employment_type",
             ])
         case .formDefaults:
             try await saveIdentity([
                 "how_heard", "background_check", "drug_test",
-                "previously_applied", "related_to_employee",
+                "previously_applied", "related_to_employee", "referral_name",
             ])
         case .story:
             try await addFact(category: "project", text: project)

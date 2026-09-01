@@ -73,7 +73,7 @@ enum Autofill {
       // was blanked out on exactly the embedded forms that need it most.
       const IS_TOP = (() => { try { return window.top === window; } catch (e) { return false; } })();
       // Offline fallback, generated from app/fieldmatch.py (rules version
-      // 6de898a0bcef). The served rules below take priority — this exists only so a
+      // 36ce0d185f60). The served rules below take priority — this exists only so a
       // first launch or a dropped connection still fills safely. If you edit these
       // by hand you've reintroduced the drift this design removes; regenerate them
       // from fieldmatch.py instead.
@@ -81,17 +81,22 @@ enum Autofill {
         ["email", /e-?mail/i],
         ["preferred_name", /preferred (first )?name|nick.?name|known as|goes by/i],
         ["first_name", /first.?name|given.?name|legal first|name\s*\(?\s*first|forename/i],
+        ["middle_name", /middle.?(name|initial)|name\s*\(?\s*middle/i],
         ["last_name", /last.?name|family.?name|surname|name\s*\(?\s*last/i],
         ["full_name", /full.?name|^\s*name\s*$|your name|legal name/i],
         ["pronouns", /pronouns/i],
+        ["phone_type", /phone type|type of phone|phone\s*\(?\s*type/i],
         ["phone", /\bphone\b|\bmobile\b|\btel(ephone)?\b|cell.?phone|contact number/i],
         ["linkedin", /linked.?in/i],
         ["github", /git.?hub/i],
         ["portfolio", /portfolio|personal (web)?site|^\s*website\s*$|^url$|other url|personal url|home ?page|personal page/i],
+        ["work_auth_type", /(?:what|which|select).{0,40}work authori[sz]ation|work authori[sz]ation (?:type|category|status)|type of work authori[sz]ation|visa (?:type|category)|current visa|which of the following.{0,30}(?:visa|authori[sz])/i],
+        ["security_clearance", /security clearance|clearance level|active clearance|do you (?:hold|have).{0,20}clearance/i],
         ["work_authorized", /authori[sz]ed to work|work authori[sz]ation|legally.{0,16}work|eligible to work|right to work|work eligibility/i],
         ["needs_sponsorship", /sponsor(ship)?|require.{0,20}visa|visa.{0,16}status|immigration status|now or in the future.{0,24}sponsor/i],
         ["work_arrangement", /preferred work (location|arrangement)|work (from home|arrangement|location preference)|on-?site|onsite|fully remote|remote or hybrid|hybrid or remote/i],
         ["location", /\blocation\b|where are you (based|located)|city.{0,5}state|where do you (live|reside)|currently (based|located|reside|living)|based in|city of residence/i],
+        ["address2", /address line ?2|address ?2|apt|apartment|suite|unit (?:number|#)|floor|line 2/i],
         ["address", /street address|address line|mailing address|home address|^\s*address\b|line 1/i],
         ["city", /\bcity\b|town/i],
         ["country", /\bcountry\b|nation/i],
@@ -105,6 +110,10 @@ enum Autofill {
         ["grad_year_num", /end date year/i],
         ["grad_year", /when (do|will) you graduate|expected graduation|grad(uation)?.{0,12}(year|date)|class of|completion (year|date)|year of grad|anticipated graduation|graduation date/i],
         ["intern_season", /winter or summer internship|prefer.{0,30}internship|internship.{0,16}(term|season|preference|period|availability)|which (term|season|internship)/i],
+        ["drivers_license", /driver.?s?.? licen[sc]e|valid licen[sc]e to drive|do you (?:have|hold).{0,20}driver/i],
+        ["certifications", /certificat(?:ion|e)s?\b|licen[sc]es?\s*(?:and|&|\/)\s*certificat|professional licen[sc]e|credentials held/i],
+        ["languages", /languages? (?:you )?(?:speak|spoken|fluenc|proficien)|spoken languages?|language proficienc|fluent in|what languages|other languages/i],
+        ["employment_type", /employment type|type of employment|position type|job type|desired employment|seeking (?:full|part).?time|what type of (?:role|position|opportunit)/i],
         ["current_company", /current (employer|company)|present (employer|company)|where do you (currently )?work|most recent (employer|company)|current or most recent employer|^\s*employer\s*$/i],
         ["current_title", /current (title|role|position)|present (title|role|position)|most recent (title|role|position)|job title/i],
         ["years_experience", /years.{0,16}experience|experience.{0,16}years|\byoe\b|how many years/i],
@@ -117,7 +126,8 @@ enum Autofill {
         ["can_travel", /willing to travel|able to travel|travel (required|for (work|this))|open to travel|willing and able to travel/i],
         ["previously_applied", /previously applied|applied (here|before|to (this|us))|worked (here|for us|at this)|former employee|prior application|previously (been )?employed|ever (worked for|applied to)/i],
         ["how_heard", /how did you (hear|learn|find)|where did you (hear|learn|find)|hear about (this|us|the)|referral source|source of (this )?application|how.?['’]?d you (find|hear)|find this (role|job|opportunit)/i],
-        ["related_to_employee", /related to|relative (at|of)|relatives? who work|know anyone|family member|referred by|employee of/i],
+        ["referral_name", /who referred you|name of (?:the )?(?:person|employee).{0,16}referr|referrer.?s? name|referred by(?: whom)?|employee(?:'|’)?s? name.{0,16}referr/i],
+        ["related_to_employee", /related to|relative (at|of)|relatives? who work|know anyone|family member|employee of/i],
         ["gender", /\bgender\b|^\s*sex\s*$|what is your sex\b/i],
         ["race", /\brace\b|race\s*\/?\s*ethnicity|racial identity/i],
         ["ethnicity", /^\s*ethnicity\s*$|ethnic background/i],
