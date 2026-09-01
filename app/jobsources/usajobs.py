@@ -71,6 +71,10 @@ def fetch(board_token: str) -> list[JobPosting]:
             "SortDirection": "desc",
             "DatePosted": 30,
         },
+        # The only adapter that does not send User-Agent: JobPilot/1.0, and it
+        # is not spoofing: developer.usajobs.gov requires the User-Agent to be
+        # the email address the API key was registered to, and rejects the
+        # request otherwise. Do not "restore" the standard UA here.
         extra_headers={
             "Host": "data.usajobs.gov",
             "User-Agent": email,

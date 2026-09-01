@@ -97,7 +97,8 @@ def fetch(board_token: str) -> list[JobPosting]:
             "num": min(50, cap),
             "query": query,
         },
-        extra_headers={"Referer": f"{SITE}/careers"},
+        # No Referer — see the note in workday.py. We identify as JobPilot and
+        # ask; we do not imply a page visit that never happened.
     )
     return _parse(data)[:cap]
 

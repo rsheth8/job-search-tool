@@ -10,7 +10,7 @@ import hashlib
 import re
 from urllib.parse import parse_qs, urlparse
 
-from .. import ats
+from .. import ats, catalog
 from . import amazon, netflix, workday
 from .base import JobPosting
 
@@ -68,7 +68,10 @@ def from_url(raw: str) -> JobPosting | None:
     ref = ats.posting_ref(url)
     if ref is not None:
         source, token, job_id = ref
-        company = token.replace("-", " ").title()
+        # "janestreet".title() is "Janestreet"; the catalog knows it's Jane
+        # Street. Fall back to the token only for boards it hasn't heard of.
+        company = (catalog.display_name(source, token)
+                   or token.replace("-", " ").title())
         return JobPosting(
             source=source,
             external_id=str(job_id),

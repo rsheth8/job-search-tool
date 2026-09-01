@@ -154,11 +154,10 @@ def fetch(board_token: str) -> list[JobPosting]:
             "offset": offset,
             "searchText": "",
         }
-        data = post_json(
-            board.jobs_api,
-            payload,
-            extra_headers={"Referer": board.careers_url},
-        )
+        # No Referer: we never visited that careers page, and claiming we did
+        # is the same kind of pretending as a browser User-Agent. The endpoint
+        # is public; if it ever refuses a plain request, that is a skip.
+        data = post_json(board.jobs_api, payload)
         if data is None:
             break
         page = _parse(data, board)

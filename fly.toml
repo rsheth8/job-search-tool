@@ -20,7 +20,7 @@ swap_size_mb = 512
   DATABASE_PATH = '/data/job_search.db'
   JOB_ALERT_MODE = 'digest'
   JOB_DIGEST_TOP_N = '5'
-    JOB_DIRECTORY_BOARDS_PER_TICK = '40'
+  JOB_DIRECTORY_BOARDS_PER_TICK = '40'
   JOB_DIRECTORY_DATA_PATH = 'data/ats_boards.json'
   JOB_DIRECTORY_MAX_JOBS_PER_BOARD = '25'
   JOB_MAX_SCORED_PER_TICK = '60'
@@ -41,6 +41,10 @@ swap_size_mb = 512
     JOB_AMAZON_MAX_JOBS = '25'
     JOB_WIDE_NETFLIX_ENABLED = 'true'
     JOB_NETFLIX_MAX_JOBS = '25'
+    # No-op until both USAJobs secrets exist: `fly secrets set
+    # USAJOBS_API_KEY=... USAJOBS_USER_AGENT=<registered email>`.
+    # The adapter returns [] when either is blank, so leaving this on
+    # means it starts working the moment the secrets land.
     JOB_WIDE_USAJOBS_ENABLED = 'true'
   RERANKER_ENABLED = 'true'
   JOB_CATALOG_PROBE_ENABLED = 'true'
