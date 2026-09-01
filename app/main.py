@@ -1001,7 +1001,14 @@ def health() -> dict:
         # isn't a company slug", which says nothing about whether a source
         # works, and it happens to contain all four of the newest ones.
         "postings_by_source_7d": produced,
-        "silent_sources": [n for n in s.job_sources if not produced.get(n)],
+        # `directory` is a fan-out: it fetches per-company boards and each
+        # posting is saved under that board's own source, so it never owns a
+        # row and would sit in this list forever. A monitor with a permanent
+        # false positive is a monitor people stop reading.
+        "silent_sources": [
+            n for n in s.job_sources
+            if n != "directory" and not produced.get(n)
+        ],
         "wide_workday": s.job_wide_workday_enabled,
         "wide_amazon": s.job_wide_amazon_enabled,
         "wide_netflix": s.job_wide_netflix_enabled,
