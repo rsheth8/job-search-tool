@@ -67,6 +67,36 @@ struct QueueResponse: Codable {
     let queued: [QueueItem]?   // top matches not yet staged
     let queue: [QueueItem]?    // staged, ready to apply
     let discovery: DiscoveryStatus?
+    let momentum: Momentum?
+}
+
+/// Sitting + ranking progress from `GET /apply/data` / Filed / Pass.
+/// Hitting the sitting goal is permission to stop, not a streak.
+struct Momentum: Codable {
+    let filed_today: Int
+    let sitting_goal: Int
+    let sitting_done: Bool
+    let likes: Int
+    let passes: Int
+    let likes_need: Int
+    let passes_need: Int
+    let likes_left: Int
+    let passes_left: Int
+    let ranker_on: Bool
+    let sitting_line: String
+    let ranker_line: String?
+    let toast: String
+}
+
+/// Toast to show on Apply after File / Pass, set by the form browser.
+enum SittingCue {
+    static var toast: String?
+}
+
+struct AppliedResponse: Codable {
+    let ok: Bool?
+    let duplicate: Bool?
+    let momentum: Momentum?
 }
 
 struct DiscoveryStatus: Codable {

@@ -157,9 +157,11 @@ def apply_data(request: Request, user: str | None = None) -> dict:
     # never advanced.
     queue = [{**it, **explain(it["posting_id"], it.get("score"))}
              for it in filed if it["status"] != "submitted"]
+    from . import momentum as momentum_mod
     return {
         "user": uid, "queued": queued, "queue": queue,
         "discovery": discovery.search_status(uid),
+        "momentum": momentum_mod.snapshot(uid),
     }
 
 
@@ -397,7 +399,8 @@ async def apply_applied(request: Request) -> dict:
                                  posting["title"] or "Role", source="mobile")
     jobstore.mark_posting_status(uid, posting["id"], "applied")
     apply_queue.mark(uid, pid, "submitted")
-    return {"ok": True, "duplicate": duplicate}
+    from . import momentum as momentum_mod
+    return {"ok": True, "duplicate": duplicate, "momentum": momentum_mod.snapshot(uid)}
 
 
 @app.post("/apply/remove")
@@ -426,7 +429,8 @@ async def apply_pass(request: Request) -> dict:
         return {"ok": False}
     apply_queue.remove(uid, pid)
     jobstore.mark_posting_status(uid, pid, "dismissed")
-    return {"ok": True}
+    from . import momentum as momentum_mod
+    return {"ok": True, "momentum": momentum_mod.snapshot(uid)}
 
 
 @app.post("/apply/snooze")

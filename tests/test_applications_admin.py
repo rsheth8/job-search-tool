@@ -77,8 +77,11 @@ def test_the_next_job_moves_up(client):
 
 def test_filing_the_same_job_twice_files_it_once(client):
     pid = _save(company="Acme")
-    assert _file(client, pid) == {"ok": True, "duplicate": False}
-    assert _file(client, pid) == {"ok": True, "duplicate": True}
+    first = _file(client, pid)
+    assert first["ok"] is True and first["duplicate"] is False
+    assert first["momentum"]["filed_today"] == 1
+    second = _file(client, pid)
+    assert second["ok"] is True and second["duplicate"] is True
     acme = [a for a in store.list_applications("u1") if a["company"] == "Acme"]
     assert len(acme) == 1
 

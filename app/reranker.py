@@ -268,6 +268,22 @@ def _build_dataset(
     return X, y, w, n_pos, n_neg
 
 
+def class_counts(user_id: str) -> tuple[int, int]:
+    """(likes, passes) using the same examples the model trains on.
+
+    likes = applied / swipe-like. passes = dismissed / snoozed / swipe-pass.
+    Cheap: no featurizer, no fit. Used by the sitting strip so Pass is visibly
+    worth as much as File toward ranking that actually learns them.
+    """
+    n_pos = n_neg = 0
+    for row in _labeled_examples(user_id):
+        if row[6] >= 0.5:
+            n_pos += 1
+        else:
+            n_neg += 1
+    return n_pos, n_neg
+
+
 def _train_model(
     user_id: str, profile: sqlite3.Row | None
 ) -> tuple[dict, list[list[float]], list[float], list[float]] | None:

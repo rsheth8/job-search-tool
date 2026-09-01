@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Loads the application package for a posting, then hands off to the in-app browser.
 struct ApplyView: View {
@@ -67,6 +68,17 @@ private struct ApplyBrowser: View {
     @State private var fetchingDoc = false
     @State private var resumeReadyFlash = false
     @State private var prefetchedResume: URL?
+    @State private var confirmLeave = false
+    @State private var confirmUnstage = false
+
+    private var remaining: RemainingWork { RemainingWork(skips: model.lastSkips) }
+
+    private var formDirty: Bool {
+        if model.driveState.isRunning { return true }
+        if case .ready = model.driveState { return true }
+        if let fill = model.lastFill, fill.filled > 0 { return true }
+        return remaining.isEmpty == false
+    }
 
     init(item: QueueItem, package: Package, rules: RulesPayload?) {
         self.item = item
@@ -93,25 +105,42 @@ private struct ApplyBrowser: View {
 
                 driveBanner
                     .transition(.move(edge: .top).combined(with: .opacity))
+                remainingBanner
+                    .transition(.move(edge: .top).combined(with: .opacity))
                 Spacer(minLength: 0)
             }
             .animation(Theme.springSoft, value: model.driveState)
             .animation(Theme.quick, value: model.loading)
+            .animation(Theme.springSoft, value: remaining.isEmpty)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { controls }
         .appToast($toast, bottomPadding: 96)
         .navigationTitle(item.company ?? "Apply")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(formDirty)
+        .background(PopGuard(locked: formDirty))
         .toolbarBackground(Theme.fog, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.light, for: .navigationBar)
         .toolbar {
             // Nav "Back" pops Apply. Site history lives in the bottom bar so we
-            // don't show two competing chevrons under the title.
+            // don't show two competing chevrons under the title. When the form
+            // has been filled, a custom back asks first — popping dumps the
+            // WebView and they start the Greenhouse over.
+            if formDirty {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { confirmLeave = true } label: {
+                        Image(systemName: "chevron.backward")
+                            .font(.body.weight(.semibold))
+                    }
+                    .accessibilityLabel("Back")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button {
-                        Task { await skipAndClose() }
+                        if formDirty { confirmUnstage = true }
+                        else { Task { await skipAndClose() } }
                     } label: {
                         Label("Back to matches", systemImage: "clock")
                     }
@@ -143,7 +172,8 @@ private struct ApplyBrowser: View {
             Button("Filed") {
                 marking = true
                 Task {
-                    try? await APIClient(config: config).markApplied(postingId: item.posting_id)
+                    let snap = try? await APIClient(config: config).markApplied(postingId: item.posting_id)
+                    if let toast = snap?.toast { SittingCue.toast = toast }
                     Theme.notify(.success)
                     dismiss()
                 }
@@ -160,6 +190,22 @@ private struct ApplyBrowser: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Removes this listing. It won’t appear again.")
+        }
+        .confirmationDialog("Leave this form?", isPresented: $confirmLeave,
+                            titleVisibility: .visible) {
+            Button("Leave", role: .destructive) { dismiss() }
+            Button("Stay", role: .cancel) {}
+        } message: {
+            Text("What you filled on this page isn’t saved. Coming back starts the form over.")
+        }
+        .confirmationDialog("Back to matches?", isPresented: $confirmUnstage,
+                            titleVisibility: .visible) {
+            Button("Leave", role: .destructive) {
+                Task { await skipAndClose() }
+            }
+            Button("Stay", role: .cancel) {}
+        } message: {
+            Text("This listing goes back to matches. The form itself isn’t saved.")
         }
         .sheet(item: $applyDoc) { doc in ShareSheet(items: [doc.url]) }
     }
@@ -213,6 +259,51 @@ private struct ApplyBrowser: View {
             )
         default:
             EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var remainingBanner: some View {
+        if model.driveState.isRunning || remaining.isEmpty {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Still you")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.ink)
+                ForEach(remaining.lines, id: \.self) { line in
+                    Text(line)
+                        .font(.caption)
+                        .foregroundStyle(Theme.ink.opacity(0.72))
+                }
+                if remaining.wantsResume || remaining.wantsCover {
+                    HStack(spacing: 8) {
+                        if remaining.wantsResume {
+                            Button(action: fetchResume) {
+                                Text("Attach résumé")
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .disabled(fetchingDoc)
+                        }
+                        if remaining.wantsCover {
+                            Button(action: fetchCover) {
+                                Text("Attach cover letter")
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .disabled(fetchingDoc)
+                        }
+                    }
+                    .foregroundStyle(Theme.accent)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white.opacity(0.96))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Theme.cloud.opacity(0.5)).frame(height: 1)
+            }
+            .accessibilityElement(children: .combine)
         }
     }
 
@@ -402,7 +493,8 @@ private struct ApplyBrowser: View {
     }
 
     private func passAndClose() async {
-        try? await APIClient(config: config).passPosting(postingId: item.posting_id)
+        let snap = try? await APIClient(config: config).passPosting(postingId: item.posting_id)
+        if let line = snap?.ranker_line { SittingCue.toast = line }
         Theme.impact(.soft)
         dismiss()
     }
@@ -415,7 +507,13 @@ private struct ApplyBrowser: View {
             flashToast("No fields matched. The form may still be loading, or name and email are missing in You.")
             return
         }
-        let more = f.essays > 0 ? " · \(f.essays) need you" : ""
+        let remain = RemainingWork(skips: model.lastSkips)
+        let more: String
+        if remain.isEmpty {
+            more = f.essays > 0 ? " · \(f.essays) need you" : ""
+        } else {
+            more = " · \(remain.count) still you"
+        }
         let stale = f.rules.hasPrefix("bundled") ? " · offline rules" : ""
         flashToast("Filled \(f.filled)\(more)\(stale)")
         if f.filled > 0 { Theme.notify(.success) }
@@ -497,6 +595,80 @@ struct ShareSheet: UIViewControllerRepresentable {
 }
 
 struct ApplyDoc: Identifiable { let id = UUID(); let url: URL }
+
+/// Groups Fill skips into the remaining-work banner: file, date, then a few others.
+private struct RemainingWork {
+    let files: [String]
+    let dates: [String]
+    let others: [String]
+
+    init(skips: [[String: Any]]) {
+        var files: [String] = []
+        var dates: [String] = []
+        var others: [String] = []
+        var seen = Set<String>()
+        for raw in skips {
+            let reason = ((raw["reason"] as? String) ?? "").lowercased()
+            let label = ((raw["label"] as? String) ?? "")
+                .replacingOccurrences(of: "*", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !label.isEmpty else { continue }
+            let key = reason + "\n" + label.lowercased()
+            if seen.contains(key) { continue }
+            seen.insert(key)
+            switch reason {
+            case "file": files.append(label)
+            case "date": dates.append(label)
+            default:
+                if others.count < 3 { others.append(label) }
+            }
+        }
+        self.files = files
+        self.dates = dates
+        self.others = others
+    }
+
+    var isEmpty: Bool { files.isEmpty && dates.isEmpty && others.isEmpty }
+    var count: Int { files.count + dates.count + others.count }
+
+    var wantsResume: Bool {
+        files.contains { !$0.lowercased().contains("cover") }
+    }
+
+    var wantsCover: Bool {
+        files.contains { $0.lowercased().contains("cover") }
+    }
+
+    var lines: [String] {
+        var out: [String] = []
+        for label in files {
+            let t = label.lowercased()
+            if t.contains("cover") { out.append("Attach cover letter — \(label)") }
+            else { out.append("Attach résumé — \(label)") }
+        }
+        for label in dates { out.append("Pick a date — \(label)") }
+        out.append(contentsOf: others)
+        return out
+    }
+}
+
+/// Blocks the interactive pop gesture while a filled form would be destroyed.
+private struct PopGuard: UIViewControllerRepresentable {
+    var locked: Bool
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        let vc = UIViewController()
+        vc.view.isUserInteractionEnabled = false
+        vc.view.backgroundColor = .clear
+        return vc
+    }
+
+    func updateUIViewController(_ vc: UIViewController, context: Context) {
+        DispatchQueue.main.async {
+            vc.navigationController?.interactivePopGestureRecognizer?.isEnabled = !locked
+        }
+    }
+}
 
 /// Breathing cockpit orb while fill is mid-flight.
 private struct AutopilotOrb: View {

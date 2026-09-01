@@ -147,8 +147,8 @@ struct SettingsView: View {
                                 howStep("Matches — JobPilot finds fits on Greenhouse, Lever, and Ashby.")
                                 howStep("You — roles, form details, and facts used to fill.")
                                 howStep("Preflight — resume and answers are prepared for the role.")
-                                howStep("Fill — tap Fill on the real form. Attach a résumé or cover letter from the documents menu if the form asks.")
-                                howStep("You submit, then mark Filed. Filed applications live on Apply.")
+                                howStep("Fill — tap Fill on the real form. A Still you list appears for résumé, dates, and anything Autofill left blank. Attach from that list or the documents menu.")
+                                howStep("You submit, then mark Filed. Three fitted files is a sitting — then stop. Pass jobs that aren't you; ranking learns from both.")
                                 howStep("Horizon — find jobs, edit details, and how Autofill works.")
                             }
                         }

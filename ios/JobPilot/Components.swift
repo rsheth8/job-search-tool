@@ -942,6 +942,68 @@ struct QuietRow: View {
     }
 }
 
+/// Three fitted files is a sitting. Hitting the goal is permission to stop.
+struct SittingStrip: View {
+    let momentum: Momentum
+
+    private var fraction: CGFloat {
+        let goal = max(1, momentum.sitting_goal)
+        return min(1, CGFloat(momentum.filed_today) / CGFloat(goal))
+    }
+
+    private var countLabel: String {
+        if momentum.sitting_done {
+            return momentum.filed_today > momentum.sitting_goal
+                ? "\(momentum.filed_today) today"
+                : "Done"
+        }
+        return "\(momentum.filed_today)/\(momentum.sitting_goal)"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(momentum.sitting_line)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Theme.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Text(countLabel)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.horizon)
+                    .monospacedDigit()
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Theme.cloud.opacity(0.7))
+                    Capsule()
+                        .fill(Theme.accent)
+                        .frame(width: max(6, geo.size.width * fraction))
+                }
+            }
+            .frame(height: 4)
+            if let ranker = momentum.ranker_line {
+                Text(ranker)
+                    .font(.caption)
+                    .foregroundStyle(Theme.soft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.horizontal, Theme.spaceL)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityText)
+    }
+
+    private var accessibilityText: String {
+        if let ranker = momentum.ranker_line {
+            return "\(momentum.sitting_line). \(ranker)"
+        }
+        return momentum.sitting_line
+    }
+}
+
 // MARK: - Up-next hero (editorial)
 
 /// Leading hit target for reorder — no visible handle.
