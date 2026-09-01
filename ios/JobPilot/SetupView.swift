@@ -362,7 +362,8 @@ struct SetupView: View {
                         text: $roles,
                         suggestions: Self.roleSuggestions,
                         placeholder: "Add a role",
-                        caption: "Tap all that apply. This is how matches are found."
+                        caption: "Tap all that apply. This is how matches are found.",
+                        field: "roles"
                     )
                 }
                 Divider().background(Theme.accent.opacity(0.08))
@@ -370,7 +371,8 @@ struct SetupView: View {
                     TagEditor(
                         text: $locations,
                         suggestions: Self.locationSuggestions,
-                        placeholder: "Add a city or Remote"
+                        placeholder: "Add a city or Remote",
+                        field: "locations"
                     )
                 }
                 Divider().background(Theme.accent.opacity(0.08))
@@ -378,7 +380,8 @@ struct SetupView: View {
                     TagEditor(
                         text: $keywords,
                         suggestions: Self.skillSuggestions,
-                        placeholder: "Add a skill"
+                        placeholder: "Add a skill",
+                        field: "skills"
                     )
                 }
             }
@@ -485,8 +488,10 @@ struct SetupView: View {
                 labeled("Major / field of study") {
                     TagEditor(
                         text: $identity.discipline,
-                        suggestions: ["Computer Science", "Data Science", "Software Engineering", "Electrical Engineering"],
-                        placeholder: "Add a major"
+                        suggestions: ["Computer Science", "Data Science",
+                                      "Software Engineering", "Electrical Engineering"],
+                        placeholder: "Add a major",
+                        field: "disciplines"
                     )
                 }
                 Divider().background(Theme.accent.opacity(0.08))

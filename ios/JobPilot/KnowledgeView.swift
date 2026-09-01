@@ -449,21 +449,24 @@ private struct SearchEditorView: View {
                             "Full-stack", "ML engineer", "Data scientist",
                         ],
                         placeholder: "Add a role",
-                        caption: "Tap every role you want matches for."
+                        caption: "Tap every role you want matches for.",
+                        field: "roles"
                     )
                 } header: { Text("Roles") }
                 Section {
                     TagEditor(
                         text: $locations,
                         suggestions: ["Remote", "Chicago", "Minneapolis", "San Francisco", "NYC"],
-                        placeholder: "Add a city or Remote"
+                        placeholder: "Add a city or Remote",
+                        field: "locations"
                     )
                 } header: { Text("Locations") }
                 Section {
                     TagEditor(
                         text: $keywords,
                         suggestions: ["Python", "JavaScript", "TypeScript", "React", "Java", "SQL"],
-                        placeholder: "Add a skill"
+                        placeholder: "Add a skill",
+                        field: "skills"
                     )
                 } header: { Text("Skills") }
                 Section {

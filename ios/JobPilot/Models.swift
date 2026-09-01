@@ -312,3 +312,12 @@ struct ApplicationUpdateResponse: Codable {
     let ok: Bool?
     let application: FiledApplication?
 }
+
+/// One refill of quiz chips. `remaining` is what's left in the catalog after
+/// this batch — the app shows "more" only when there genuinely is more.
+struct SuggestionBatch: Codable {
+    let field: String?
+    let suggestions: [String]?
+    let remaining: Int?
+    let known: Bool?
+}
