@@ -24,6 +24,7 @@ from . import horizon
 from . import discovery as discovery_mod
 from . import jobs_review
 from . import jobstore
+from . import momentum as momentum_mod
 from . import outreach
 from . import profile as profile_mod
 from . import reminders
@@ -283,7 +284,8 @@ def _start(user_id: str, p: ParsedMessage, raw: str) -> str:
     if p.intent == Intent.QUERY:
         return _do_query(user_id, p, memory)
     if p.intent == Intent.STATS:
-        return stats_mod.render(stats_mod.compute_stats(user_id))
+        return momentum_mod.with_stats(
+            user_id, stats_mod.render(stats_mod.compute_stats(user_id)))
     if p.intent == Intent.DEADLINE:
         return _do_deadline(user_id, p, raw, memory)
     if p.intent == Intent.CHECK:

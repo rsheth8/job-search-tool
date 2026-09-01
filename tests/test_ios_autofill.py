@@ -61,6 +61,14 @@ def _extract_lib() -> str:
     return m.group(1)
 
 
+def test_lib_notes_file_and_date_skips():
+    """iOS cannot set <input type=file> or date pickers. Those must be skips
+    the Still-you banner can turn into Attach résumé / pick a date."""
+    lib = _extract_lib()
+    assert 'noteSkip(label || "Resume", "file")' in lib
+    assert 'noteSkip(label || "Start date", "date")' in lib
+
+
 class _QuietHandler(SimpleHTTPRequestHandler):
     def log_message(self, *_args):
         pass
@@ -318,6 +326,42 @@ def test_reports_which_rule_set_ran(browser, server, lib):
         assert sent["rules"] == fieldmatch.rules_payload()["version"]
         skips = {s["label"]: s["reason"] for s in sent.get("skips") or []}
         assert skips.get("favorite color") == "unmatched"
+        file_skips = [s for s in sent.get("skips") or [] if s.get("reason") == "file"]
+        assert any("resume" in s["label"].lower() for s in file_skips)
+        assert any("cover" in s["label"].lower() for s in file_skips)
+    finally:
+        page.close()
+
+
+def test_date_inputs_are_reported_as_still_you(browser, lib):
+    """Native date pickers cannot be filled from JS; they must show up as remaining work."""
+    page = browser.new_page()
+    try:
+        payload = {"identity": IDENTITY, "answers": ANSWERS,
+                   "rules": fieldmatch.rules_payload()}
+        page.set_content("""<!doctype html>
+            <label for="start">Available start date</label>
+            <input type="date" id="start" name="start_date">
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email">
+        """)
+        # Injected after set_content, not via add_init_script: an init script
+        # does not run for a document installed this way, and __APPLY came out
+        # undefined. The fill then reported "bundled" rules and skipped email
+        # as empty — the test would have passed its date assertion while
+        # exercising none of the profile it thought it had loaded.
+        page.evaluate("(p) => { window.__APPLY = p; }", payload)
+        page.evaluate(lib)
+        page.evaluate("""() => {
+            window.__sent = null;
+            window.webkit = { messageHandlers: { applyfill: {
+                postMessage: (m) => { window.__sent = m; } } } };
+        }""")
+        page.evaluate("window.__applyAutofill()")
+        sent = page.evaluate("window.__sent")
+        skips = {s["label"].lower(): s["reason"] for s in sent.get("skips") or []}
+        assert any("start" in k and v == "date" for k, v in skips.items()), skips
+        assert page.input_value("#email") == "rahil@example.com"
     finally:
         page.close()
 

@@ -26,6 +26,7 @@ struct QueueView: View {
     @State private var pendingJobId: Int?
     @State private var linkDraft = ""
     @State private var importingLink = false
+    @State private var momentum: Momentum?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var api: APIClient { APIClient(config: config) }
@@ -131,7 +132,12 @@ struct QueueView: View {
             }
             .onChange(of: path.count) { _, count in
                 chrome.dockHidden = count > 0
-                if count == 0 { Task { await load() } }
+                if count == 0 {
+                    Task {
+                        await load()
+                        consumeSittingCue()
+                    }
+                }
             }
             .onAppear { chrome.dockHidden = !path.isEmpty; consumeHorizonHop() }
             .onChange(of: push.hop) { _, _ in consumeHorizonHop() }
@@ -232,6 +238,10 @@ struct QueueView: View {
     @ViewBuilder
     private var matchesPane: some View {
         VStack(alignment: .leading, spacing: Theme.spaceM) {
+            if let momentum, (upNext != nil || momentum.filed_today > 0) {
+                SittingStrip(momentum: momentum)
+                    .staggerAppear(0)
+            }
             if let item = upNext {
                 hero(item)
                     .id(item.posting_id)
@@ -242,7 +252,7 @@ struct QueueView: View {
                             removal: .opacity
                         ))
                     .padding(.horizontal, Theme.spaceL)
-                    .staggerAppear(0)
+                    .staggerAppear(1)
             } else if !loading {
                 EmptyStateView(
                     title: "No open matches",
@@ -655,6 +665,9 @@ struct QueueView: View {
             let n = filed.count
             return n == 0 ? "Filed after you submit." : (n == 1 ? "1 application" : "\(n) applications")
         }
+        if let momentum, momentum.filed_today > 0 {
+            return momentum.sitting_line
+        }
         if !queue.isEmpty {
             let n = queue.count
             return n == 1 ? "1 ready to apply" : "\(n) ready to apply"
@@ -709,14 +722,19 @@ struct QueueView: View {
 
     private func pass(_ item: QueueItem) async {
         do {
-            try await api.passPosting(postingId: item.posting_id)
+            let snap = try await api.passPosting(postingId: item.posting_id)
             Theme.impact(.soft)
             withAnimation(Theme.springSoft) {
                 queue.removeAll { $0.posting_id == item.posting_id }
                 matches.removeAll { $0.posting_id == item.posting_id }
                 chrome.readyCount = queue.count
+                if let snap { momentum = snap }
             }
-            flashToast("Passed \(item.company ?? "this role")")
+            if let line = snap?.ranker_line {
+                flashToast(line)
+            } else {
+                flashToast("Passed \(item.company ?? "this role")")
+            }
             await load()
         } catch {
             Theme.notify(.error)
@@ -787,6 +805,12 @@ struct QueueView: View {
         }
     }
 
+    private func consumeSittingCue() {
+        guard let toast = SittingCue.toast, !toast.isEmpty else { return }
+        SittingCue.toast = nil
+        flashToast(toast)
+    }
+
     private func tryOpenPendingJob() {
         guard let id = pendingJobId else { return }
         if let item = (queue + matches).first(where: { $0.posting_id == id }) {
@@ -807,6 +831,7 @@ struct QueueView: View {
                 queue = data.queue
                 matches = data.matches
                 filed = apps
+                momentum = data.momentum
                 if let served = filedResult?.statuses, !served.isEmpty { stages = served }
                 searching = data.searching
             }

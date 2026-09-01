@@ -1068,9 +1068,22 @@ enum Autofill {
         for (const el of document.querySelectorAll('input, textarea, select, [contenteditable="true"]')) {
           if (!isVisible(el) || el.disabled || el.readOnly) continue;
           const tag = el.tagName.toLowerCase(), type = (el.type||"").toLowerCase();
-          if (["radio","checkbox","file","hidden","submit","button","date","datetime-local","password"].includes(type)) continue;
-          if (isTypeaheadInput(el)) continue;
+          if (["radio","checkbox","hidden","submit","button","password"].includes(type)) continue;
+          // Read the label before the file/date branches below: `const` is
+          // hoisted into a temporal dead zone, so using it above its own
+          // declaration threw "Cannot access 'label' before initialization"
+          // and took the whole fill down with it — every field, not just this
+          // one.
           const label = fieldLabel(el);
+          // File and date cannot be set from JS on iOS. Report them as still-you
+          // work so the banner can point at the documents menu instead of
+          // pretending the form is done.
+          if (type === "file") { noteSkip(label || "Resume", "file"); continue; }
+          if (type === "date" || type === "datetime-local") {
+            noteSkip(label || "Start date", "date");
+            continue;
+          }
+          if (isTypeaheadInput(el)) continue;
           if (EEO.test(label)) continue;
           if (hasOwnValue(el)) continue;   // already answered — never overwrite it
           const editable = el.isContentEditable;

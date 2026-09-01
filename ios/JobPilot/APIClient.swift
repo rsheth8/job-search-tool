@@ -198,14 +198,15 @@ struct APIClient {
     /// matches you could stage. Pass `refresh` to kick a discovery pass (quiz /
     /// pull-to-refresh) instead of re-reading an empty queue.
     func fetchData(refresh: Bool = false) async throws -> (
-        queue: [QueueItem], matches: [QueueItem], searching: Bool
+        queue: [QueueItem], matches: [QueueItem], searching: Bool, momentum: Momentum?
     ) {
         if refresh {
             _ = try? await request("POST", "/apply/discover", body: [:])
         }
         let data = try await request("GET", "/apply/data?user=\(encodedUser)")
         let decoded = try JSONDecoder().decode(QueueResponse.self, from: data)
-        return (decoded.queue ?? [], decoded.queued ?? [], decoded.discovery?.searching ?? false)
+        return (decoded.queue ?? [], decoded.queued ?? [],
+                decoded.discovery?.searching ?? false, decoded.momentum)
     }
 
     /// Start a discovery pass. Quiz completion uses `force` so the first
@@ -289,9 +290,17 @@ struct APIClient {
     }
 
     /// Pass on a posting for good — leave the apply queue and mark it dismissed.
-    func passPosting(postingId: Int) async throws {
-        _ = try await request("POST", "/apply/pass",
-                              body: ["user": config.user, "posting_id": postingId])
+    func passPosting(postingId: Int) async throws -> Momentum? {
+        let data = try await request("POST", "/apply/pass",
+                                     body: ["user": config.user, "posting_id": postingId])
+        return (try? JSONDecoder().decode(AppliedResponse.self, from: data))?.momentum
+    }
+
+    /// Log a finished application (records it + marks the posting applied).
+    func markApplied(postingId: Int) async throws -> Momentum? {
+        let data = try await request("POST", "/apply/applied",
+                                     body: ["user": config.user, "posting_id": postingId])
+        return (try? JSONDecoder().decode(AppliedResponse.self, from: data))?.momentum
     }
 
     /// Hide a posting for a while (default a week). It leaves Ready and matches
@@ -362,12 +371,6 @@ struct APIClient {
                                      body: ["user": config.user, "posting_id": postingId])
         do { return try JSONDecoder().decode(Package.self, from: data) }
         catch { throw APIError.decode }
-    }
-
-    /// Log a finished application (records it + marks the posting applied).
-    func markApplied(postingId: Int) async throws {
-        _ = try await request("POST", "/apply/applied",
-                              body: ["user": config.user, "posting_id": postingId])
     }
 
     /// Download the tailored resume PDF to a temp file and return its URL, so it can
