@@ -70,6 +70,7 @@ private struct ApplyBrowser: View {
     @State private var prefetchedResume: URL?
     @State private var confirmLeave = false
     @State private var confirmUnstage = false
+    @State private var openMarked = false
 
     private var remaining: RemainingWork { RemainingWork(skips: model.lastSkips) }
 
@@ -158,6 +159,7 @@ private struct ApplyBrowser: View {
             chrome.dockHidden = true
             model.load(package.url)
             prefetchResume()
+            markOpened()
         }
         .onChange(of: model.driveState) { _, state in
             if case .ready = state { flashToast("Ready — you submit on the site") }
@@ -166,6 +168,7 @@ private struct ApplyBrowser: View {
         .onChange(of: model.fillSeq) { _, _ in
             showFillToast()
             reportFillSkips()
+            markClock("filled")
         }
         .confirmationDialog("Mark this as filed?", isPresented: $confirmApplied,
                             titleVisibility: .visible) {
@@ -517,6 +520,24 @@ private struct ApplyBrowser: View {
         let stale = f.rules.hasPrefix("bundled") ? " · offline rules" : ""
         flashToast("Filled \(f.filled)\(more)\(stale)")
         if f.filled > 0 { Theme.notify(.success) }
+    }
+
+    /// Start the clock once per visit to this form.
+    ///
+    /// Guarded because `onAppear` can fire again when a sheet is dismissed, and
+    /// a spurious mark would read as an abandoned attempt. Genuinely leaving
+    /// and re-entering builds a new view, so that still counts as a reopen —
+    /// which is the number we want.
+    private func markOpened() {
+        guard !openMarked else { return }
+        openMarked = true
+        markClock("opened")
+    }
+
+    private func markClock(_ mark: String) {
+        let api = APIClient(config: config)
+        let pid = item.posting_id
+        Task { try? await api.markClock(postingId: pid, mark: mark) }
     }
 
     private func reportFillSkips() {
