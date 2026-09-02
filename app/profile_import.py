@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from io import BytesIO
 
 from . import applicant, knowledge, profile
@@ -970,9 +971,27 @@ def _heuristic_parse(text: str) -> dict:
     schooling = _education_entries(edu, identity.get("school", ""))
     if len(schooling) > 1:
         identity["education"] = schooling
+    # Work. None of this was ever read: the experience section was mined for
+    # free-text bullets and nothing else, so "current company", "current title"
+    # and "years of experience" came back empty from a resume that named all
+    # three, and the quiz had nothing to prefill them with.
+    jobs = sorted(_work_history(blob), key=lambda j: j["end"], reverse=True)
+    if jobs:
+        latest = jobs[0]
+        if latest["company"]:
+            identity["current_company"] = latest["company"]
+        if latest["title"]:
+            identity["current_title"] = latest["title"]
     yoe = _YOE_RE.search(blob)
     if yoe:
+        # A resume that states the number outright is answering the question
+        # forms ask; believe it over anything counted off the dates.
         identity["years_experience"] = yoe.group(1)
+    elif jobs:
+        # Floor, not round. This lands on real applications, and a person with
+        # sixteen months has one year of experience, not two. Understating is
+        # correctable in the next field; overstating is a false claim.
+        identity["years_experience"] = str(_months_worked(jobs) // 12)
 
     profile_fields: dict = {}
     skills = [s for s in _SKILL_WORDS if re.search(rf"\b{re.escape(s)}\b", blob, re.I)]
@@ -1072,7 +1091,14 @@ def _llm_parse(text: str) -> tuple[dict | None, str]:
                 "graduation, not an internship year. roles are job titles they want "
                 "(software engineer, software intern) — never a lone word 'intern' "
                 "if they study CS. If they have internships and a 2025+ graduation, "
-                "seniority is 'Internship, New grad'."
+                "seniority is 'Internship, New grad'. "
+                "current_company and current_title are the most recent job in the "
+                "experience section -- internships and research roles count, and "
+                "'most recent' means latest end date, not first listed. "
+                "years_experience is a whole number of years of professional work, "
+                "counted from the employment dates when the resume does not state "
+                "it outright; round down, and use '0' rather than leaving it empty "
+                "when the only work is a short internship."
             ),
             messages=[{"role": "user", "content": snippet}],
             output_config={"format": {"type": "json_schema", "schema": _EXTRACT_SCHEMA}},
@@ -1194,6 +1220,153 @@ def _section_after(blob: str, heading: str, stop: str) -> str:
     rest = blob[m.end():]
     nxt = re.search(stop, rest, re.I)
     return rest[: nxt.start() if nxt else 1500]
+
+
+#: A job header is recognised by its dates. Everything else on the line varies
+#: wildly between resumes; a month/year range does not.
+_MONTH_WORD = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*"
+_MONTH_INDEX = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+                "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
+_DATE_POINT = rf"(?:({_MONTH_WORD})[.,]?\s*)?((?:19|20)\d{{2}})"
+_STILL_THERE = r"(present|current|now|ongoing|today)"
+_DATE_RANGE_RE = re.compile(
+    rf"{_DATE_POINT}\s*(?:[-–—]{{1,2}}|\bto\b)\s*(?:{_STILL_THERE}|{_DATE_POINT})",
+    re.I,
+)
+#: Words that make a phrase a job title rather than an employer.
+_TITLE_WORDS = (
+    "engineer", "developer", "programmer", "scientist", "analyst", "manager",
+    "intern", "researcher", "designer", "consultant", "associate", "assistant",
+    "architect", "administrator", "specialist", "technician", "lead",
+    "director", "founder", "officer", "coordinator", "instructor", "tutor",
+    "ambassador", "fellow", "trainee", "apprentice", "strategist", "recruiter",
+    "accountant", "auditor", "paralegal", "nurse", "technologist",
+)
+_TITLE_WORD_RE = re.compile(r"\b(?:%s)s?\b" % "|".join(_TITLE_WORDS), re.I)
+#: Splits a header into its parts. Resumes use a dash, a pipe, a bullet, "at",
+#: or a plain comma between employer and title, and no two agree on the order.
+_HEADER_SPLIT_RE = re.compile(r"\s*(?:[|•·]|[-–—]{1,2}|\bat\b|,)\s*", re.I)
+
+
+def _month_number(word: str) -> int:
+    return _MONTH_INDEX.get((word or "")[:3].lower(), 0)
+
+
+def _range_months(m: re.Match) -> tuple[tuple[int, int], tuple[int, int], bool]:
+    """((start_year, start_month), (end_year, end_month), still_there)."""
+    start = (int(m.group(2)), _month_number(m.group(1)) or 1)
+    if m.group(3):
+        now = datetime.now(timezone.utc)
+        return start, (now.year, now.month), True
+    end_year = int(m.group(5)) if m.group(5) else start[0]
+    end_month = _month_number(m.group(4)) or 12
+    return start, (end_year, end_month), False
+
+
+def _looks_like_a_place(part: str) -> bool:
+    if _CITY_STATE_RE.search(part):
+        return True
+    words = [w.strip(".,").lower() for w in part.split()]
+    return bool(words) and all(w in _GEO_WORDS or len(w) <= 2 for w in words)
+
+
+def _header_parts(text: str) -> list[str]:
+    out = []
+    for part in _HEADER_SPLIT_RE.split(text):
+        part = _clean_text(part).strip(" .,;:|-–—")
+        # A bare state code or a stray year is debris from the split, not a name.
+        if len(part) < 2 or part.isdigit():
+            continue
+        out.append(part)
+    return out
+
+
+def _work_history(blob: str) -> list[dict]:
+    """Structured jobs from the experience section: employer, title, dates.
+
+    ``_experience_from_text`` already reads this section, but only as free-text
+    bullets for the knowledge base — nothing was ever pulled out as *fields*,
+    which is why "current company", "current title" and "years of experience"
+    stayed empty after an import even though the resume named all three.
+
+    Entries are found by their date range rather than their shape. Where the
+    employer and the title sit relative to each other, which separator joins
+    them, and whether the dates share their line is different on every resume;
+    a month-and-year range is the one thing that is reliably present and
+    reliably means "a job starts here".
+    """
+    section = _section_after(
+        blob,
+        _heading_re("professional experience", "work experience", "work history",
+                    "experience", "employment"),
+        _heading_re("key projects", "selected projects", "projects?",
+                    "education", "skills", "awards", "publications"),
+    )
+    if not section:
+        return []
+    lines = [_clean_text(line) for line in section.splitlines()]
+    jobs: list[dict] = []
+    for i, line in enumerate(lines):
+        if not line:
+            continue
+        match = _DATE_RANGE_RE.search(line)
+        if not match:
+            continue
+        start, end, still_there = _range_months(match)
+        # The header is whatever shares the date's line, unless that is only a
+        # location (a very common two-line layout) -- then it is the line above.
+        # Strip "San Francisco, CA" before splitting, not after: the split
+        # treats a comma as a separator, which would tear a city off its state
+        # and leave "San Francisco" looking exactly like an employer name.
+        remainder = _CITY_STATE_RE.sub(" ", _DATE_RANGE_RE.sub(" ", line))
+        parts = _header_parts(remainder)
+        named = [p for p in parts if not _looks_like_a_place(p)]
+        if not named:
+            previous = next((lines[j] for j in range(i - 1, -1, -1) if lines[j]), "")
+            if previous and len(previous) <= 120:
+                named = [p for p in _header_parts(previous) if not _looks_like_a_place(p)]
+        if not named:
+            continue
+        title = next((p for p in named if _TITLE_WORD_RE.search(p)), "")
+        company = next((p for p in named if p != title), "")
+        if not company and not title:
+            continue
+        # A range with no month is weak evidence on its own: prose carries bare
+        # year spans too. "Analyzed 2019 - 2021 revenue trends across regions"
+        # was being read as a job at a company called "Analyzed revenue trends
+        # across regions", and its two invented years went into the experience
+        # total. Require a recognisable job title before believing one.
+        if not (match.group(1) or match.group(4)) and not title:
+            continue
+        jobs.append({
+            "company": company, "title": title,
+            "start": start, "end": end, "still_there": still_there,
+        })
+        if len(jobs) >= 12:
+            break
+    return jobs
+
+
+def _months_worked(jobs: list[dict]) -> int:
+    """Distinct calendar months across every job.
+
+    A set rather than a sum: two overlapping roles (a part-time job held
+    through an internship, or a promotion written as two entries) are one
+    stretch of experience, and adding their lengths would report twice what
+    the person actually worked.
+    """
+    covered: set[tuple[int, int]] = set()
+    for job in jobs:
+        (sy, sm), (ey, em) = job["start"], job["end"]
+        if (ey, em) < (sy, sm):
+            continue
+        year, month = sy, sm
+        while (year, month) <= (ey, em) and len(covered) < 900:
+            covered.add((year, month))
+            month += 1
+            if month > 12:
+                year, month = year + 1, 1
+    return len(covered)
 
 
 def _experience_from_text(blob: str) -> list[dict]:
