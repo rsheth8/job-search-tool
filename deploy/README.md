@@ -46,7 +46,11 @@ remote or NYC"`. Optionally set `JOB_ALERT_USER` to your `usr_…` id (Apple acc
 so digests always target you; empty defaults to the busiest user.
 
 Wide discovery (RSS + ATS directory rotation) is configured in `fly.toml` `[env]`.
-Optional paid broad search: add `SERPAPI_API_KEY`, set
+
+Paid aggregator search (SerpApi / Google Jobs) is **not** part of this product and
+has no code path. JobPilot reads public company careers JSON directly; a paid
+scraper-aggregator is a different product with different terms. The sentence that
+used to sit here told you to set `SERPAPI_API_KEY` and stopped mid-instruction.
 
 ## Resume base files (one-time)
 

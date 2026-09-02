@@ -58,6 +58,13 @@ class Transfer:
     counts: dict[str, int] = field(default_factory=dict)
     skipped_tables: dict[str, str] = field(default_factory=dict)
     dropped_columns: dict[str, list[str]] = field(default_factory=dict)
+    #: Tables that could not cross but held nothing for this user. Named, like
+    #: everything else, but they cost the transfer no data — so they must not
+    #: make it ``incomplete``. Every long-lived database accumulates retired
+    #: tables; letting empty ones fail the check meant the delete guard had to
+    #: be overridden with --force every single time, and a --force you always
+    #: pass is not a guard at all.
+    skipped_empty: dict[str, str] = field(default_factory=dict)
 
     @property
     def rows(self) -> int:
@@ -250,6 +257,30 @@ def _init_db_file(path: str, *, overwrite: bool = False) -> None:
         c.close()
 
 
+def _split_empty_skips(conn: sqlite3.Connection, skipped: dict[str, str],
+                       user_id: str) -> tuple[dict[str, str], dict[str, str]]:
+    """Separate skips that lost data from skips that had none to lose.
+
+    A table the destination schema no longer has is only a problem if this user
+    actually had rows in it. ``fill_requests`` and ``unmatched_fields`` are
+    retired and empty database-wide, yet they failed every backup's completeness
+    check — which meant deleting any account required --force, and a flag you
+    always pass stops carrying information.
+    """
+    real: dict[str, str] = {}
+    empty: dict[str, str] = {}
+    src = _tables_in(conn, "main")
+    for table, why in skipped.items():
+        if table not in src or "user_id" not in set(_columns_in(conn, "main", table)):
+            real[table] = why       # cannot be checked; assume it mattered
+            continue
+        n = conn.execute(
+            f"SELECT COUNT(*) FROM main.{table} WHERE user_id = ?", (user_id,)
+        ).fetchone()[0]
+        (empty if n == 0 else real)[table] = why
+    return real, empty
+
+
 def export_user(user_id: str, out_path: str, *, tables=BRAIN_TABLES,
                 overwrite: bool = False,
                 conn: sqlite3.Connection | None = None) -> Transfer:
@@ -275,6 +306,7 @@ def export_user(user_id: str, out_path: str, *, tables=BRAIN_TABLES,
         counts: dict[str, int] = {}
         try:
             plan, skipped, dropped = _plan(conn, "main", "exp", tables)
+            skipped, empty = _split_empty_skips(conn, skipped, user_id)
             for t, cols in plan:
                 names = ", ".join(cols)
                 cur = conn.execute(
@@ -287,7 +319,8 @@ def export_user(user_id: str, out_path: str, *, tables=BRAIN_TABLES,
         finally:
             conn.commit()  # release the write txn before detaching
             conn.execute("DETACH DATABASE exp")
-        return Transfer(counts=counts, skipped_tables=skipped, dropped_columns=dropped)
+        return Transfer(counts=counts, skipped_tables=skipped,
+                        dropped_columns=dropped, skipped_empty=empty)
     finally:
         if own:
             ctx.__exit__(None, None, None)

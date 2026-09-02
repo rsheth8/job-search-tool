@@ -8,7 +8,7 @@ as File.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from . import reranker, store, voice
 from .config import get_settings
@@ -63,7 +63,10 @@ def _day_bounds(user_id: str, now: datetime) -> tuple[datetime, datetime]:
     tz_name = voice.timezone_for(user_id)
     try:
         tz = ZoneInfo(tz_name) if tz_name else timezone.utc
-    except (ZoneInfoNotFoundError, Exception):  # noqa: BLE001 — bad IANA id
+    # ZoneInfo raises ZoneInfoNotFoundError for an unknown key and ValueError
+    # for a malformed one; the tuple this used to catch was just Exception
+    # with extra words. A timezone we cannot read is a UTC day, not a 500.
+    except Exception:  # noqa: BLE001
         tz = timezone.utc
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)

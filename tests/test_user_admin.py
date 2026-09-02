@@ -82,6 +82,58 @@ def test_a_skipped_table_makes_the_transfer_incomplete(tmp_path):
     assert export_user("u1", str(tmp_path / "o.db"), tables=None).complete is False
 
 
+def test_an_empty_retired_table_does_not_make_a_backup_incomplete(tmp_path):
+    """The reason every production delete needed --force.
+
+    `fill_requests` and `unmatched_fields` are retired *and* empty — 0 rows
+    database-wide. They still failed the completeness check, so backing up any
+    account before deleting it reported "the backup is incomplete" and refused,
+    and the only way through was --force. A flag you have to pass every single
+    time stops being a safety check and becomes a keystroke, which is exactly
+    when it will be passed over a backup that genuinely did lose something.
+
+    A table that carried nothing cannot have lost anything. Still named, so the
+    gap is never silent — just not counted against completeness.
+    """
+    _make_account("u1")
+    _give_postings("u1", 2)
+    with connect() as c:
+        c.execute("CREATE TABLE fill_requests (id INTEGER PRIMARY KEY, "
+                  "user_id TEXT, label TEXT)")   # retired, and no rows at all
+
+    t = export_user("u1", str(tmp_path / "o.db"), tables=None)
+
+    assert t.counts["job_postings"] == 2
+    assert t.complete is True, "an empty retired table lost nothing"
+    assert t.skipped_tables == {}
+    assert "fill_requests" in t.skipped_empty, "it must still be named"
+    assert "destination schema" in t.skipped_empty["fill_requests"]
+
+
+def test_a_retired_table_with_this_users_rows_still_blocks(tmp_path):
+    """The guard has to keep meaning something: rows that cannot cross still
+    make the backup incomplete, even now that empty ones don't."""
+    _make_account("u1")
+    _give_postings("u1", 1)
+    _retire_a_table()          # inserts a row for u1
+    t = export_user("u1", str(tmp_path / "o.db"), tables=None)
+    assert t.complete is False
+    assert "fill_requests" in t.skipped_tables
+    assert t.skipped_empty == {}
+
+
+def test_another_users_rows_do_not_block_this_users_backup(tmp_path):
+    """Completeness is per-transfer. A retired table full of someone else's rows
+    carries nothing for *this* user, so it cannot fail *this* backup."""
+    _make_account("u1")
+    _make_account("u2")
+    _give_postings("u1", 1)
+    _retire_a_table()          # the stale row belongs to u1
+    t = export_user("u2", str(tmp_path / "o.db"), tables=None)
+    assert t.complete is True
+    assert "fill_requests" in t.skipped_empty
+
+
 def test_a_clean_export_is_complete(tmp_path):
     _make_account("u1")
     _give_postings("u1", 2)
