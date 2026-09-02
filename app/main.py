@@ -399,8 +399,49 @@ async def apply_applied(request: Request) -> dict:
                                  posting["title"] or "Role", source="mobile")
     jobstore.mark_posting_status(uid, posting["id"], "applied")
     apply_queue.mark(uid, pid, "submitted")
+    if not duplicate:
+        # The clock stops here, server-side. A second tap on Filed is the same
+        # application, not a second lap, so it must not start a new session.
+        from . import clock
+        clock.mark(uid, pid, "filed")
     from . import momentum as momentum_mod
     return {"ok": True, "duplicate": duplicate, "momentum": momentum_mod.snapshot(uid)}
+
+
+@app.post("/apply/clock")
+async def apply_clock(request: Request) -> dict:
+    """Record that the form appeared, or that a fill finished.
+
+    Only ``opened`` and ``filled`` are accepted. ``filed`` is written by
+    ``/apply/applied`` itself, so no client can post itself a fast lap.
+
+    A bad mark is ignored rather than rejected: this is measurement riding
+    along on someone's application, and it must never be the reason one fails.
+    """
+    from . import clock
+
+    body = await request.json()
+    uid = _resolve_user(request, body.get("user"))
+    name = (body.get("mark") or "").strip().lower()
+    if name not in clock.CLIENT_MARKS:
+        return {"ok": False, "reason": "unknown mark"}
+    ok = clock.mark(uid, body.get("posting_id"), name)
+    return {"ok": ok}
+
+
+@app.get("/apply/timings")
+def apply_timings(request: Request, user: str | None = None,
+                  days: int = 7, limit: int = 20) -> dict:
+    """How long applications are taking, and which leg is slow."""
+    from . import clock
+
+    uid = _resolve_user(request, user)
+    return {
+        "user": uid,
+        "summary": clock.summary(uid, days=days),
+        "best_sitting": clock.best_sitting(uid),
+        "sessions": clock.sessions(uid, days=days, limit=limit),
+    }
 
 
 @app.post("/apply/remove")

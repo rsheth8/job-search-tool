@@ -618,6 +618,18 @@ struct APIClient {
         return try JSONDecoder().decode(HealthInfo.self, from: data)
     }
 
+    /// One timing mark for this application: "opened" or "filled".
+    ///
+    /// Fire-and-forget by design. This is measurement riding along on someone's
+    /// application, so a failed mark must never surface as an error or block a
+    /// tap. "filed" is not sent from here — the server records it inside
+    /// /apply/applied, where it can't be missed or faked.
+    func markClock(postingId: Int, mark: String) async throws {
+        _ = try await request("POST", "/apply/clock", body: [
+            "user": config.user, "posting_id": postingId, "mark": mark,
+        ])
+    }
+
     /// Labels Fill skipped on a live form — grows the phrasing table on the server.
     func reportFillSkips(postingId: Int, url: String?, skips: [[String: Any]]) async throws {
         guard !skips.isEmpty else { return }

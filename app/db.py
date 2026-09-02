@@ -330,6 +330,20 @@ CREATE TABLE IF NOT EXISTS apply_queue (
     PRIMARY KEY (user_id, posting_id)
 );
 
+-- Timing marks for one application: opened / filled / filed. An event log, not
+-- columns on apply_queue, because people abandon a form and come back — see
+-- app/clock.py. This is what makes "under 3 minutes, open form to Filed"
+-- something the product can actually answer.
+CREATE TABLE IF NOT EXISTS apply_marks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT NOT NULL,
+    posting_id  INTEGER NOT NULL,
+    mark        TEXT NOT NULL,   -- opened | filled | filed
+    at          TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_apply_marks_user ON apply_marks(user_id, posting_id, at);
+
 -- App accounts (Sign in with Apple). ``id`` is the opaque user_id used everywhere
 -- else in the DB; ``apple_sub`` is Apple's stable subject. ``legacy_user_id``
 -- records a Slack/phone id that was merged into this account on first sign-in.
