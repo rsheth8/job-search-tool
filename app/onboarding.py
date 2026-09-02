@@ -167,10 +167,7 @@ def quiz_draft(user_id: str, *, polish: bool = False) -> dict:
     if polish:
         polished = _llm_polish_quiz(user_id, ident, prof, items, draft)
         if polished:
-            for key in (
-                "project", "achievement", "strength", "preference",
-                "about", "why_role",
-            ):
+            for key in _POLISH_FIELDS:
                 value = (polished.get(key) or "").strip()
                 if value:
                     draft[key] = value
@@ -222,14 +219,15 @@ def _why_template(ident: dict, prof: dict) -> str:
     )
 
 
+#: The quiz answers Horizon drafts. One list, so the schema, the prompt's
+#: context and the fields copied back onto the draft cannot drift apart again.
+_POLISH_FIELDS = ("project", "achievement", "strength", "preference",
+                  "about", "why_role")
+
 _POLISH_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "properties": {
-        k: {"type": "string"} for k in (
-            "project", "achievement", "strength", "preference", "about", "why_role",
-        )
-    },
+    "properties": {k: {"type": "string"} for k in _POLISH_FIELDS},
 }
 
 
@@ -262,17 +260,41 @@ def _llm_polish_quiz(
             max_tokens=700,
             system=(
                 "Write short first-person quiz answers from the facts given. "
-                "Do not invent employers, metrics, or schools. Empty string if "
-                "you lack a fact for that field. about: 2-3 sentences. "
-                "why_role: 2 sentences about the kind of work, not a company."
+                "Do not invent employers, metrics, schools, or job titles. "
+                "Fill every field you have any grounds for; empty string only "
+                "when you genuinely have nothing.\n"
+                "about: 2-3 sentences.\n"
+                "why_role: 2 sentences about the kind of work, not a company.\n"
+                "project: one thing they built, and what it did.\n"
+                "achievement: one concrete result, using only numbers that "
+                "appear in the facts.\n"
+                "strength: what they are good at and like doing, drawn from "
+                "the work and tools that actually recur in their history. "
+                "This is a self-description, not a claim about an employer, so "
+                "infer it from the pattern in the facts rather than waiting to "
+                "be told it outright.\n"
+                "preference: what they want in a role -- the kind of team, "
+                "problem, or setup -- inferred the same way, and consistent "
+                "with the roles and locations they are looking for.\n"
+                "Every field is a starting draft the person will edit, so a "
+                "grounded inference is more useful to them than a blank."
             ),
             messages=[{"role": "user", "content": (
                 f"Name: {ident.get('full_name') or ident.get('first_name') or ''}\n"
                 f"School: {ident.get('school') or ''} {ident.get('degree') or ''} "
                 f"{ident.get('discipline') or ''}\n"
+                f"Most recent role: {ident.get('current_title') or ''} at "
+                f"{ident.get('current_company') or ''}\n"
+                f"Years of experience: {ident.get('years_experience') or ''}\n"
+                f"Skills: {prof.get('keywords') or ''}\n"
                 f"Looking for: {prof.get('roles') or ''} in {prof.get('locations') or ''}\n"
+                f"Seniority: {prof.get('seniority') or ''}\n"
                 f"Facts:\n{blob}\n\n"
-                f"Current draft: {json.dumps({k: draft.get(k) for k in ('about', 'why_role', 'project')})}"
+                # The whole draft, not three of six keys. Sending only about /
+                # why_role / project is why `strength` and `preference` came
+                # back empty every time: the model was asked for six fields,
+                # told about two of them, and shown three.
+                f"Current draft: {json.dumps({k: draft.get(k) for k in _POLISH_FIELDS})}"
             )}],
             output_config={"format": {"type": "json_schema", "schema": _POLISH_SCHEMA}},
         )
