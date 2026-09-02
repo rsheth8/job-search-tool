@@ -123,16 +123,6 @@ CREATE TABLE IF NOT EXISTS apollo_api_calls (
 
 CREATE INDEX IF NOT EXISTS idx_apollo_calls_at ON apollo_api_calls(called_at);
 
--- Paid aggregator (Google-Jobs search) call log — daily budget cap + /health.
--- Each row is one billable search; the daily count gates further calls.
-CREATE TABLE IF NOT EXISTS aggregator_api_calls (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    query       TEXT,
-    called_at   TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_aggregator_calls_at ON aggregator_api_calls(called_at);
-
 -- Optional domain cache when APOLLO_ORG_LOOKUP_ENABLED=true (avoids repeat org searches).
 CREATE TABLE IF NOT EXISTS company_domains (
     company_key     TEXT PRIMARY KEY,
@@ -234,16 +224,6 @@ CREATE TABLE IF NOT EXISTS directory_learned_boards (
     learned_at   TEXT NOT NULL,
     PRIMARY KEY (source, board_token)
 );
-
--- Paid / rate-limited wide-discovery API calls (SerpApi aggregator).
-CREATE TABLE IF NOT EXISTS job_api_calls (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    call_type   TEXT NOT NULL,
-    user_id     TEXT,
-    called_at   TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_job_api_calls_at ON job_api_calls(called_at);
 
 -- Tailored resume cache: PDF + .tex on the Fly volume, indexed here for reuse.
 CREATE TABLE IF NOT EXISTS tailored_resumes (

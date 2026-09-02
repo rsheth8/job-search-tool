@@ -39,11 +39,19 @@ Human always clicks Submit. Résumé attach is manual (WKWebView cannot set file
   Engine is transport-agnostic; CLI for local dev.
 - **Alerts & reminders:** `AppSender` — appends to chat transcript + best-effort APNs.
 - **Hosting:** **Fly.io**, app `job-search-tool`, region `iad`, URL
-  `https://job-search-tool.fly.dev`. One always-warm 512MB machine (in-process
-  APScheduler for reminders + discovery). SQLite on a **1GB persistent volume at
+  `https://job-search-tool.fly.dev`. One always-warm **1GB** machine (in-process
+  APScheduler for reminders + discovery) with 512MB swap. It was 512MB until the
+  kernel OOM-killed uvicorn mid-request during a Tectonic compile — tailoring is
+  the largest allocation this app makes, so do not size it back down. SQLite on a
+  **1GB persistent volume at
   `/data/job_search.db`**. Redeploy: push to `main` (CI pytest, then Fly deploy) or
   `flyctl deploy -a job-search-tool`. Migrations are idempotent (run at import).
 - **Local venv:** use `.venv/bin/python` directly (repo pins 3.13).
+- **Autofill browser tests run locally.** `tests/test_ios_autofill.py` drives real
+  Chromium through Playwright and only skips if the browser cannot launch. They
+  are ~50s and they are the only thing that executes the injected JS: a temporal
+  dead zone bug there disabled *every* field on *every* form while the Python
+  suite stayed green. Do not assume they are CI-only.
 
 ---
 

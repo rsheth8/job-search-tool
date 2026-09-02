@@ -46,6 +46,11 @@ def _report(t) -> int:
         print("\n  Tables skipped:")
         for table, why in sorted(t.skipped_tables.items()):
             print(f"    {table}: {why}")
+    if t.skipped_empty:
+        # Named, but not a warning: these carried nothing, so nothing was lost.
+        print("\n  Retired tables, empty for this user (nothing to carry):")
+        for table, why in sorted(t.skipped_empty.items()):
+            print(f"    {table}: {why}")
     return 0 if t.complete else 1
 
 
