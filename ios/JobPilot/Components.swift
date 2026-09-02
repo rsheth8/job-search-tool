@@ -1735,6 +1735,14 @@ enum QuizList {
 /// which is what sent everyone to the keyboard. `suggestions` stays as the
 /// offline list — shown before the first batch lands and if the request fails,
 /// so the row is never empty.
+///
+/// The row is mutated one chip at a time. Refilling *was* a whole-batch
+/// refetch assigned over `pool`: the tapped chip vanished instantly, and then
+/// — whenever the network happened to answer — every *other* chip was replaced
+/// too, reflowing the row a second time under a finger that had already moved
+/// on. Two uncoordinated jumps per tap is what made it feel ragged. The
+/// replacement is now decided *before* the tap (`reserve`) and spliced in at
+/// the same index, so one chip leaves, one arrives, and nothing else moves.
 struct TagEditor: View {
     @Binding var text: String
     var suggestions: [String] = []
@@ -1746,11 +1754,22 @@ struct TagEditor: View {
     var field: String? = nil
 
     @State private var draft = ""
+    /// What is on screen. The bundled list until a server batch lands.
     @State private var pool: [String] = []
+    /// Fetched ahead, never shown. A tap promotes from here so the replacement
+    /// is instant and no round trip is visible.
+    @State private var reserve: [String] = []
     @State private var remaining = 0
+    /// The catalog answered with nothing left. Stop asking on every tap.
+    @State private var spent = false
     @State private var refill: Task<Void, Never>?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var tags: [String] { QuizList.split(text) }
+
+    /// How many suggestion chips stay on screen. We fetch twice this so the
+    /// second half can wait in `reserve`.
+    private static let shown = 12
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1766,6 +1785,7 @@ struct TagEditor: View {
                         SelectChip(label: tag, selected: true, removable: true) {
                             remove(tag)
                         }
+                        .transition(chipMotion)
                     }
                 }
             }
@@ -1782,19 +1802,18 @@ struct TagEditor: View {
                     }
                 }
             }
-            let unused = offered.filter { sug in
-                !tags.contains { $0.caseInsensitiveCompare(sug) == .orderedSame }
-            }
             if !unused.isEmpty {
                 WrapHStack(spacing: 8, lineSpacing: 8) {
                     ForEach(unused, id: \.self) { sug in
                         SelectChip(label: sug, selected: false) {
                             add(sug)
                         }
+                        .transition(chipMotion)
                     }
                     if remaining > 0 {
                         Button {
-                            reload(shuffle: true)
+                            Theme.selection()
+                            fetch(into: .pool, shuffle: true)
                         } label: {
                             Label("More", systemImage: "arrow.clockwise")
                                 .font(.subheadline)
@@ -1808,47 +1827,134 @@ struct TagEditor: View {
                 }
             }
         }
-        .task(id: "\(field ?? "")|\(text)") { reload() }
+        // Keyed on the field, not on `text`. Keying on the text refetched the
+        // whole catalog on every tap *and* on every keystroke in the custom
+        // field, which is what put a row-wide reshuffle behind ordinary typing.
+        .task(id: field ?? "") { start() }
         .onDisappear { refill?.cancel() }
     }
 
-    /// Server batch once we have one; the bundled list until then.
-    private var offered: [String] { pool.isEmpty ? suggestions : pool }
+    /// On-screen suggestions, minus anything already picked.
+    private var unused: [String] {
+        pool.filter { sug in
+            !tags.contains { $0.caseInsensitiveCompare(sug) == .orderedSame }
+        }
+    }
+
+    private var motion: Animation? { reduceMotion ? nil : Theme.springChip }
+
+    /// Chips grow in and shrink out from slightly under full size, so a swap
+    /// reads as one leaving and one arriving rather than a hard cut.
+    private var chipMotion: AnyTransition {
+        guard !reduceMotion else { return .opacity }
+        return .asymmetric(
+            insertion: .scale(scale: 0.82).combined(with: .opacity),
+            removal: .scale(scale: 0.82).combined(with: .opacity)
+        )
+    }
+
+    /// Bundled chips immediately, the ranked batch when it lands.
+    private func start() {
+        if pool.isEmpty { pool = suggestions }
+        fetch(into: .pool)
+    }
 
     private func add(_ raw: String) {
         let pieces = QuizList.split(raw)
         guard !pieces.isEmpty else { return }
-        text = QuizList.join(tags + pieces)
-        draft = ""
         Theme.selection()
+        withAnimation(motion) {
+            promote(pieces)
+            text = QuizList.join(tags + pieces)
+            draft = ""
+        }
+        topUp()
     }
 
+    /// Swap each accepted chip out of the visible row for one held in reserve,
+    /// in place. Assigning at the same index is the whole trick: every
+    /// neighbour keeps its position, so nothing reflows except the hole being
+    /// filled. With the reserve empty the chip simply leaves and the row
+    /// closes up, which is still one movement rather than two.
+    private func promote(_ picked: [String]) {
+        for pick in picked {
+            guard let i = pool.firstIndex(where: {
+                $0.caseInsensitiveCompare(pick) == .orderedSame
+            }) else { continue }
+            if reserve.isEmpty {
+                pool.remove(at: i)
+            } else {
+                pool[i] = reserve.removeFirst()
+            }
+        }
+    }
+
+    /// Untap: the chip goes back to the front of the row it came from.
+    ///
+    /// It used to come back on its own, because every edit refetched the whole
+    /// batch. Now that nothing refetches on removal, putting it back by hand is
+    /// what keeps a mis-tap undoable with a second tap instead of the keyboard.
     private func remove(_ tag: String) {
-        text = QuizList.join(tags.filter { $0.caseInsensitiveCompare(tag) != .orderedSame })
         Theme.selection()
+        withAnimation(motion) {
+            text = QuizList.join(
+                tags.filter { $0.caseInsensitiveCompare(tag) != .orderedSame })
+            if !pool.contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) {
+                pool.insert(tag, at: 0)
+                // Keep the row the same length; the chip it displaces waits in
+                // reserve rather than being thrown away.
+                if pool.count > Self.shown {
+                    reserve.insert(pool.removeLast(), at: 0)
+                }
+            }
+        }
     }
 
-    /// Fetch the next batch. `shuffle` is the More button: it asks past the
-    /// batch we're already showing so the row actually changes, rather than
-    /// re-fetching the same top twelve.
-    private func reload(shuffle: Bool = false) {
+    /// Refill the reserve once it runs low, so the *next* tap still has a chip
+    /// in hand. This is the only fetch a tap triggers, and it never touches
+    /// what is on screen.
+    private func topUp() {
+        guard !spent, reserve.count <= 3 else { return }
+        fetch(into: .reserve)
+    }
+
+    private enum Destination { case pool, reserve }
+
+    /// Fetch the next batch. `.pool` replaces the visible row — first paint and
+    /// the More button, where changing the row *is* the point. `.reserve` is
+    /// the quiet top-up behind a tap.
+    ///
+    /// `shuffle` is the More button: it asks past the batch already showing so
+    /// the row actually changes rather than re-fetching the same top twelve.
+    private func fetch(into destination: Destination, shuffle: Bool = false) {
         guard let field, !field.isEmpty else { return }
-        let skip = shuffle ? offered : []
-        let chosen = tags + skip
+        let skip = shuffle ? pool : []
+        let chosen = tags + skip + reserve
         refill?.cancel()
         refill = Task { @MainActor in
             guard let batch = try? await APIClient(config: Config.shared)
-                .suggestions(field: field, chosen: chosen) else { return }
+                .suggestions(field: field, chosen: chosen, limit: Self.shown * 2)
+            else { return }
             guard !Task.isCancelled, batch.known != false else { return }
-            let next = batch.suggestions ?? []
+            let fresh = (batch.suggestions ?? []).filter { sug in
+                !tags.contains { $0.caseInsensitiveCompare(sug) == .orderedSame }
+            }
             // An empty batch means the catalog is spent. Keep what's on screen
             // rather than blanking the row back to the bundled list.
-            guard !next.isEmpty else {
+            guard !fresh.isEmpty else {
                 remaining = 0
+                spent = true
                 return
             }
-            pool = next
             remaining = batch.remaining ?? 0
+            switch destination {
+            case .pool:
+                withAnimation(motion) { pool = Array(fresh.prefix(Self.shown)) }
+                reserve = Array(fresh.dropFirst(Self.shown))
+            case .reserve:
+                let known = Set((pool + reserve).map { $0.lowercased() })
+                reserve += fresh.filter { !known.contains($0.lowercased()) }
+            }
         }
     }
 }

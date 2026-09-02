@@ -34,6 +34,35 @@ enum QuizDemo {
         id.discipline = "Computer Science"
         id.gpa = "3.8"
         id.gradYear = "2026"
+        // Two of them, deliberately. The school page is one card per degree,
+        // and a preview with a single degree would not show the thing the page
+        // exists to do — nor that a master's in progress and a finished
+        // bachelor's keep their own school, GPA and dates.
+        id.education = [
+            {
+                var e = EducationEntry()
+                e.school = "University of Chicago"
+                e.degree = "M.S."
+                e.discipline = "Computer Science"
+                e.start_year = "2025"
+                e.grad_month = "June"
+                e.grad_year = "2027"
+                e.status = "in_progress"
+                return e
+            }(),
+            {
+                var e = EducationEntry()
+                e.school = "University of Illinois"
+                e.degree = "B.S."
+                e.discipline = "Computer Engineering"
+                e.gpa = "3.8"
+                e.start_year = "2021"
+                e.grad_month = "May"
+                e.grad_year = "2025"
+                e.status = "completed"
+                return e
+            }(),
+        ]
         id.currentCompany = "Campus lab"
         id.currentTitle = "Software intern"
         id.years = "1"
