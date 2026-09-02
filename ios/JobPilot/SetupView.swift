@@ -27,6 +27,14 @@ struct SetupView: View {
     @State private var keywords = ""
     @State private var seniority = ""
     @State private var identity = IdentityDraft()
+    /// Whether the server actually told us this profile's degrees.
+    ///
+    /// Sending `education` is destructive — `applicant.set_identity` treats an
+    /// empty list as "clear every degree". Until a real list has been loaded we
+    /// do not know what we would be clearing, so the school step falls back to
+    /// the flat fields rather than risk wiping a profile the response could not
+    /// describe.
+    @State private var educationLoaded = false
     @State private var project = ""
     @State private var achievement = ""
     @State private var strength = ""
@@ -509,38 +517,63 @@ struct SetupView: View {
         }
     }
 
+    /// One card per degree.
+    ///
+    /// This page used to be a single school, a single GPA, a single graduation
+    /// date, and a *multi-select* degree row — so someone with a B.S. and an
+    /// M.S. tapped both and got one school and one GPA to describe them with.
+    /// The two degrees were not separable afterwards, and an application asking
+    /// for a bachelor's institution could be handed a master's. A degree is a
+    /// record, not a checkbox: each one carries its own school, major, GPA and
+    /// dates, which is the shape the server has always stored
+    /// (`applicant.EDUCATION_FIELDS`) and the shape Knowledge already edited.
     private var schoolFields: some View {
         VStack(alignment: .leading, spacing: Theme.spaceM) {
-            card {
-                labeled("School") { TextField("University", text: $identity.school) }
-                Divider().background(Theme.accent.opacity(0.08))
-                labeled("Major / field of study") {
-                    TagEditor(
-                        text: $identity.discipline,
-                        suggestions: ["Computer Science", "Data Science",
-                                      "Software Engineering", "Electrical Engineering"],
-                        placeholder: "Add a major",
-                        field: "disciplines"
+            ForEach($identity.education) { $entry in
+                QuizEducationCard(
+                    entry: $entry,
+                    ordinal: (identity.education.firstIndex { $0.id == entry.id } ?? 0) + 1,
+                    // Never leave the page with nothing to fill in.
+                    canRemove: identity.education.count > 1,
+                    onRemove: { removeDegree(entry.id) }
+                )
+            }
+            Button {
+                Theme.selection()
+                withAnimation(Theme.springChip) {
+                    identity.education.append(EducationEntry())
+                }
+            } label: {
+                Label("Add another degree", systemImage: "plus.circle.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(Theme.cloud, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
                     )
-                }
-                Divider().background(Theme.accent.opacity(0.08))
-                labeled("GPA") {
-                    TextField("optional", text: $identity.gpa).keyboardType(.decimalPad)
-                }
             }
-            labeled("Degree") {
-                chipRow(["B.S.", "B.A.", "M.S.", "M.Eng.", "MBA", "Ph.D."],
-                        selected: $identity.degree, multi: true)
-            }
-            labeled("Graduation year") {
-                chipRow(Self.gradYearOptions, selected: $identity.gradYear)
-            }
-            // Greenhouse and Workable split the education end date into a month
-            // select and a year select. Without the month, half of every
-            // education block stays blank.
-            labeled("Graduation month") {
-                chipRow(Self.monthOptions, selected: $identity.gradMonth)
-            }
+            .buttonStyle(PressableButtonStyle())
+            Text("One card per degree. Add a second if you have one — forms that "
+                 + "ask for your full history get all of them, and forms that ask "
+                 + "for one get the one you are reading for now.")
+                .font(.caption)
+                .foregroundStyle(Theme.soft)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        // A page whose only control is "Add another degree" reads as broken.
+        // `prefill` seeds a card, but it cannot run if setup never loaded.
+        .onAppear {
+            if identity.education.isEmpty { identity.education = [EducationEntry()] }
+        }
+    }
+
+    private func removeDegree(_ id: UUID) {
+        Theme.selection()
+        withAnimation(Theme.springChip) {
+            identity.education.removeAll { $0.id == id }
+            if identity.education.isEmpty { identity.education = [EducationEntry()] }
         }
     }
 
@@ -985,6 +1018,15 @@ struct SetupView: View {
         if keywords.isEmpty { keywords = s.profile["keywords"] ?? "" }
         if seniority.isEmpty { seniority = s.profile["seniority"] ?? "" }
         identity.load(from: s.identity)
+        if let degrees = s.education {
+            educationLoaded = true
+            if identity.education.isEmpty {
+                // Always leave one card on screen: an empty page gives someone
+                // with no degree yet nothing to tap, and someone with one
+                // nothing to type into.
+                identity.education = degrees.isEmpty ? [EducationEntry()] : degrees
+            }
+        }
         Task { await loadDraft(polish: false) }
     }
 
@@ -1216,9 +1258,7 @@ struct SetupView: View {
         case .links:
             try await saveIdentity(["linkedin", "github", "portfolio"])
         case .school:
-            try await saveIdentity([
-                "school", "degree", "discipline", "gpa", "grad_year", "grad_month",
-            ])
+            try await saveEducation()
         case .work:
             try await saveIdentity([
                 "years_experience", "current_company", "current_title",
@@ -1276,6 +1316,23 @@ struct SetupView: View {
         if !fields.isEmpty {
             try await api.saveIdentity(fields: fields)
         }
+    }
+
+    /// The school step writes the whole list, not the flat fields.
+    ///
+    /// `set_identity` derives `school`/`degree`/`gpa`/… back out of the list,
+    /// so sending both would have the flat values — which describe only the
+    /// first degree — quietly outrank the record they came from.
+    private func saveEducation() async throws {
+        guard educationLoaded else {
+            // Old server, or a status we could not read. Behave exactly as this
+            // step did before rather than sending a list we cannot vouch for.
+            try await saveIdentity([
+                "school", "degree", "discipline", "gpa", "grad_year", "grad_month",
+            ])
+            return
+        }
+        try await api.saveIdentity(fields: ["education": identity.educationPayload])
     }
 
     private func addFact(category: String, text: String) async throws {
@@ -1337,7 +1394,7 @@ private enum QuizStep: Int, CaseIterable, Hashable {
         case .you: return "Legal name and how they reach you."
         case .home: return "City and state unlock most location questions."
         case .links: return "LinkedIn and GitHub show up on almost every SWE form."
-        case .school: return "Degree, major, and when you finish. Tap all degrees that apply."
+        case .school: return "One card per degree — school, major, GPA and dates for each."
         case .work: return "Authorization questions are on nearly every form."
         case .logistics: return "Skip salary if you’d rather not store it."
         case .formDefaults: return "Pick one source. Yes/no questions Autofill can answer for you."
@@ -1367,4 +1424,170 @@ private enum QuizStep: Int, CaseIterable, Hashable {
     SetupView(mode: .demo)
         .environmentObject(Config.shared)
         .environmentObject(SetupGate.shared)
+}
+
+/// One degree, self-contained.
+///
+/// Everything about a single degree lives inside its own card — including the
+/// chip rows, which the rest of the quiz keeps outside the card. With more than
+/// one card on screen a floating "Graduation year" row would not say *which*
+/// degree it graduated, and that ambiguity is the exact failure this page is
+/// being fixed for.
+private struct QuizEducationCard: View {
+    @Binding var entry: EducationEntry
+    let ordinal: Int
+    let canRemove: Bool
+    let onRemove: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// One degree per card, so this is a single choice. The old page offered
+    /// the same list as a multi-select, which is what let two degrees collapse
+    /// into one record.
+    private static let degrees = ["B.S.", "B.A.", "B.Eng.", "M.S.", "M.Eng.",
+                                  "MBA", "Ph.D.", "Associate", "Certificate"]
+
+    private static let months = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    ]
+
+    private static var years: [String] {
+        let year = Calendar.current.component(.year, from: Date())
+        return (0..<9).map { String(year - 2 + $0) }
+    }
+
+    private var inProgress: Bool { entry.status == "in_progress" }
+
+    var body: some View {
+        FocusCard {
+            VStack(alignment: .leading, spacing: 12) {
+                header
+                Divider().background(Theme.accent.opacity(0.08))
+                labeled("School") {
+                    TextField("University", text: $entry.school)
+                }
+                Divider().background(Theme.accent.opacity(0.08))
+                labeled("Degree") {
+                    chips(Self.degrees, selection: $entry.degree)
+                }
+                Divider().background(Theme.accent.opacity(0.08))
+                labeled("Major / field of study") {
+                    TagEditor(
+                        text: $entry.discipline,
+                        suggestions: ["Computer Science", "Data Science",
+                                      "Software Engineering", "Electrical Engineering"],
+                        placeholder: "Add a major",
+                        field: "disciplines"
+                    )
+                }
+                Divider().background(Theme.accent.opacity(0.08))
+                labeled("GPA") {
+                    TextField("optional", text: $entry.gpa)
+                        .keyboardType(.decimalPad)
+                }
+                Divider().background(Theme.accent.opacity(0.08))
+                labeled("Status") {
+                    chips(["In progress", "Completed"], selection: statusBinding)
+                }
+                Divider().background(Theme.accent.opacity(0.08))
+                labeled(inProgress ? "Expected graduation year" : "Graduation year") {
+                    chips(Self.years, selection: $entry.grad_year)
+                }
+                // Greenhouse and Workable split the education end date into a
+                // month select and a year select. Without the month, half of
+                // every education block stays blank.
+                Divider().background(Theme.accent.opacity(0.08))
+                labeled("Graduation month") {
+                    chips(Self.months, selection: $entry.grad_month)
+                }
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text("Degree \(ordinal)")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.horizon)
+                .textCase(.uppercase)
+                .tracking(0.8)
+            Spacer(minLength: 8)
+            if canRemove {
+                Button(action: onRemove) {
+                    Label("Remove", systemImage: "minus.circle")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.note)
+                }
+                .buttonStyle(PressableButtonStyle())
+                .accessibilityLabel("Remove degree \(ordinal)")
+            }
+        }
+    }
+
+    /// The wire wants `in_progress`/`completed`/`""`; the chips say it in
+    /// English. Tapping the live one again clears back to "", which lets the
+    /// server keep inferring status from the dates — right more often than any
+    /// default this screen could pick.
+    private var statusBinding: Binding<String> {
+        Binding(
+            get: {
+                switch entry.status {
+                case "in_progress": return "In progress"
+                case "completed": return "Completed"
+                default: return ""
+                }
+            },
+            set: { entry.status = ["In progress": "in_progress",
+                                   "Completed": "completed"][$0] ?? "" }
+        )
+    }
+
+    private func labeled(_ title: String,
+                         @ViewBuilder field: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.horizon)
+                .textCase(.uppercase)
+                .tracking(0.8)
+            field()
+                .font(.subheadline)
+                .foregroundStyle(Theme.ink)
+        }
+    }
+
+    /// Single-select chips. Exact match, not the quiz's fuzzy `optionIsOn` —
+    /// that one reads a comma-joined string and answers "does it contain
+    /// master's", which is the right question only when one field is holding
+    /// every degree at once. Here each card owns one value.
+    private func chips(_ options: [String],
+                       selection: Binding<String>) -> some View {
+        WrapHStack(spacing: 8, lineSpacing: 8) {
+            ForEach(offered(options, selection.wrappedValue), id: \.self) { option in
+                SelectChip(label: option,
+                           selected: selection.wrappedValue == option) {
+                    Theme.selection()
+                    withAnimation(reduceMotion ? nil : Theme.springChip) {
+                        selection.wrappedValue =
+                            selection.wrappedValue == option ? "" : option
+                    }
+                }
+            }
+        }
+    }
+
+    /// The options, plus whatever is already stored if it is not among them.
+    ///
+    /// A stored value with no matching chip would otherwise render as *nothing
+    /// selected* — the field looks blank while the server still holds a value,
+    /// and the first tap silently overwrites it. Two live cases: a graduation
+    /// year outside the offered window, and the "B.S., M.S." that the old
+    /// multi-select degree row wrote into a single field. Showing it makes it
+    /// visible, and tappable to clear.
+    private func offered(_ options: [String], _ current: String) -> [String] {
+        let value = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, !options.contains(value) else { return options }
+        return [value] + options
+    }
 }
