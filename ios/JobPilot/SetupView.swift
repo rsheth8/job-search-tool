@@ -712,8 +712,20 @@ struct SetupView: View {
 
     private var storyFields: some View {
         VStack(alignment: .leading, spacing: Theme.spaceM) {
-            draftButton(title: "Fill from my profile") {
-                await loadDraft(polish: false)
+            // Horizon, not just a read-back of stored facts.
+            //
+            // This button asked for the *free* draft, which is assembled from
+            // knowledge items — and nothing in the app ever writes knowledge in
+            // the `strength` or `preference` categories, so those two boxes
+            // could not be filled by this button under any circumstances. The
+            // only button that reached Horizon was on the *next* step, which
+            // does not show these fields, so a drafted strength was written and
+            // never seen.
+            //
+            // `overwrite: false` because this one is additive: it fills the
+            // blanks and leaves anything already typed alone.
+            draftButton(title: "Draft these for me") {
+                await loadDraft(polish: true, overwrite: false)
             }
             card {
                 labeled("A project worth citing") {
@@ -1050,16 +1062,23 @@ struct SetupView: View {
         take(&whyRole, draft.why_role)
     }
 
-    private func loadDraft(polish: Bool) async {
+    /// `polish` asks Horizon to write the answers; `overwrite` decides whether
+    /// they land on top of what the person already typed.
+    ///
+    /// These used to be one flag, which forced the Story step to choose between
+    /// asking Horizon at all and preserving typed text. It chose the text, so
+    /// the button there never reached Horizon — see `storyFields`.
+    private func loadDraft(polish: Bool, overwrite: Bool? = nil) async {
+        let replace = overwrite ?? polish
         if isDemo {
-            applyDraft(QuizDemo.draft, overwrite: polish)
+            applyDraft(QuizDemo.draft, overwrite: replace)
             return
         }
         draftBusy = true
         defer { draftBusy = false }
         do {
             let draft = try await api.fetchQuizDraft(polish: polish)
-            applyDraft(draft, overwrite: polish)
+            applyDraft(draft, overwrite: replace)
         } catch {
             if APIClient.isCancellation(error) { return }
             if polish {
