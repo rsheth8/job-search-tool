@@ -223,10 +223,21 @@ extension AuthManager: ASAuthorizationControllerPresentationContextProviding {
     nonisolated func presentationAnchor(
         for controller: ASAuthorizationController
     ) -> ASPresentationAnchor {
-        let scenes = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-        let window = scenes.flatMap(\.windows).first { $0.isKeyWindow }
-            ?? scenes.flatMap(\.windows).first
-        return window ?? ASPresentationAnchor()
+        // The protocol requires `nonisolated`, but every line below is UIKit
+        // and main-actor isolated — six warnings, two of them already "an
+        // error in the Swift 6 language mode".
+        //
+        // AuthenticationServices calls this on the main thread to place the
+        // sign-in sheet, and the method must return an anchor synchronously,
+        // so there is nothing to await our way out of. `assumeIsolated` states
+        // the guarantee the framework already makes instead of quietly
+        // reaching across the actor and hoping.
+        MainActor.assumeIsolated {
+            let scenes = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+            let window = scenes.flatMap(\.windows).first { $0.isKeyWindow }
+                ?? scenes.flatMap(\.windows).first
+            return window ?? ASPresentationAnchor()
+        }
     }
 }
