@@ -50,6 +50,17 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.rahil.jobpilot
         GENERATE_INFOPLIST_FILE: NO
+        # iPhone only, and it has to be set here rather than under the
+        # project's `settings.base` — XcodeGen writes its own
+        # TARGETED_DEVICE_FAMILY = "1,2" onto the target, and a target-level
+        # value beats a project-level one, so setting it above is inert.
+        #
+        # An iPad app must support every orientation unless it requires full
+        # screen, which is where "All interface orientations must be
+        # supported" came from. This is a portrait phone app; shipping it
+        # iPad-compatible also listed it for a device it was never laid out
+        # or tested on.
+        TARGETED_DEVICE_FAMILY: "1"
       configs:
         Debug:
           CODE_SIGN_ENTITLEMENTS: JobPilot/JobPilot.entitlements
