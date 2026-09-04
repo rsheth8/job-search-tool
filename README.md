@@ -1,22 +1,34 @@
-# JobPilot
-
 <p align="center">
-  <img src="docs/brand/logo.png" width="168" alt="JobPilot">
+  <img src="docs/brand/logo.png" width="128" alt="JobPilot">
 </p>
 
+<h1 align="center">JobPilot</h1>
 
-A personal, conversational job-application engine. **Invite-only iOS beta:** Sign in
-with Apple *or an email and password*, discover and rank roles, prepare answers and a tailored resume, and
-⚡ Autofill Greenhouse / Lever / Ashby forms in the in-app browser — **you always
-click Submit**. Built as a high-speed personal execution engine.
+<p align="center">
+  A conversational intern hunt. It fills the form. You still click Submit.
+</p>
 
-The brain (`engine.handle_sms`) is transport-agnostic. **In-app chat** (iOS Chat
-tab) is the product channel. The same engine also runs in a local CLI.
+<p align="center">
+  <a href="https://github.com/rsheth8/job-search-tool">Source</a>&nbsp;·&nbsp;<a href="CONTRIBUTING.md">Run locally</a>
+</p>
 
-> For engineering status, see [`handoff.md`](handoff.md).
-> For TestFlight + allowlist, see [`deploy/BETA.md`](deploy/BETA.md).
-> For the production-hardening sequence, see
-> [`docs/ENGINEERING_ROADMAP.md`](docs/ENGINEERING_ROADMAP.md).
+<p align="center">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.12%20%7C%203.13-3776AB?style=flat-square&logo=python&logoColor=white">
+  <img alt="iOS" src="https://img.shields.io/badge/iOS-invite%20beta-000000?style=flat-square">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-~1050%20offline-2ea44f?style=flat-square">
+</p>
+
+<p align="center"><sub>No Anthropic key required — the heuristic router runs fully offline.</sub></p>
+
+<p align="center"><sub>
+  <a href="handoff.md">Status</a>
+  &nbsp;·&nbsp;
+  <a href="deploy/BETA.md">TestFlight</a>
+  &nbsp;·&nbsp;
+  <a href="docs/ENGINEERING_ROADMAP.md">Roadmap</a>
+</sub></p>
+
+---
 
 ## Quick start (no API keys required)
 
