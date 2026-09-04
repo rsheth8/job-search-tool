@@ -1,5 +1,10 @@
 # JobPilot
 
+<p align="center">
+  <img src="docs/brand/logo.png" width="168" alt="JobPilot">
+</p>
+
+
 A personal, conversational job-application engine. **Invite-only iOS beta:** Sign in
 with Apple *or an email and password*, discover and rank roles, prepare answers and a tailored resume, and
 ⚡ Autofill Greenhouse / Lever / Ashby forms in the in-app browser — **you always
@@ -10,6 +15,8 @@ tab) is the product channel. The same engine also runs in a local CLI.
 
 > For engineering status, see [`handoff.md`](handoff.md).
 > For TestFlight + allowlist, see [`deploy/BETA.md`](deploy/BETA.md).
+> For the production-hardening sequence, see
+> [`docs/ENGINEERING_ROADMAP.md`](docs/ENGINEERING_ROADMAP.md).
 
 ## Quick start (no API keys required)
 
@@ -133,6 +140,8 @@ for this classification/extraction task. Built for low token spend:
 | `GET /apply/resume` | Tailored resume PDF |
 | `GET /apply/cover` | Optional one-page cover letter PDF |
 | `GET /health` | Router, LLM usage, scheduler, auth flags, discovery |
+| `GET /live` | Minimal process liveness probe |
+| `GET /ready` | Minimal dependency readiness probe |
 
 ## Reminders & scheduling
 
@@ -282,3 +291,10 @@ hit live APIs.**
 See [`deploy/README.md`](deploy/README.md) for a Fly.io runbook (Dockerfile +
 persistent SQLite volume + a warm instance for the scheduler). TestFlight beta:
 [`deploy/BETA.md`](deploy/BETA.md).
+
+## Contributing
+
+PRs and issues welcome. How to run tests, env vars, and the expected layout: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Don't commit `.env`, API keys, or personal recordings.
+
